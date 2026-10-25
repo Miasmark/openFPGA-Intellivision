@@ -1,9 +1,10 @@
 Mattel Intellivision for Analogue Pocket
 A clean-room core, written from Mattel's and General Instrument's
 documents, with save states designed in. Work in progress: this build
-runs the EXEC and cartridges and shows their background picture (cards,
-Color Stack, Colored Squares, Foreground/Background); no moving objects,
-no sound and no controls yet.
+runs the EXEC and cartridges and shows their picture: the background
+(cards, Color Stack, Colored Squares, Foreground/Background) and the
+eight moving objects (MOBs) with their collisions. No sound and no
+controls yet.
 
 System ROMs (yours to supply, in /Assets/intv/common/):
   exec.bin     EXEC ROM, 8,192 bytes (required)

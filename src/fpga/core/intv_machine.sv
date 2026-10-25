@@ -1,6 +1,7 @@
-// Intellivision core: the machine as build step 4 has it (DESIGN.md 9):
+// Intellivision core: the machine as build step 5 has it (DESIGN.md 9):
 // the CP1610, the bus fabric, scratchpad, System RAM and GRAM, the STIC
-// (backgrounds, BUSRQ, the picture) and the PSG register stub, around the
+// (backgrounds, MOBs and collisions, BUSRQ, the picture) and the PSG
+// register stub, around the
 // cartridge port and the system ROMs of intv_media. No sound yet: the EXEC
 // and the games run, and the bus and the picture match tools/intv_system.py
 // cycle by cycle (sim/tb/tb_system.sv).
@@ -10,7 +11,8 @@
 //                   the bus-copy window from the frame position, the reset
 //                   hold that starts the CPU on a frame, the cartridge port
 //   intv_stic       STIC: registers and handshake, row fetches from System
-//                   RAM (BUSRQ), cards from GROM / GRAM, the picture
+//                   RAM (BUSRQ), cards and MOBs from GROM / GRAM,
+//                   collisions, the picture
 //   intv_psg_regs   PSG registers and hand controllers (stub)
 //   intv_ram x 3    scratchpad 256 x 8 ($0100-$01EF), System RAM 352 x 16
 //                   ($0200-$035F), GRAM 512 x 8 ($3800-$3FFF)
@@ -29,13 +31,13 @@
 // at once); it must drop two clocks before the machine runs again.
 //   SS_CPU  ($02)        cp1610, 8 words
 //   SS_BUS  ($03)        intv_bus, 2 words
-//   SS_STIC ($04)        intv_stic, 55 words
+//   SS_STIC ($04)        intv_stic, 67 words
 //   SS_PSG  ($05)        intv_psg_regs, 14 words
 //   SS_SCR  ($06)        scratchpad, 256 words
 //   SS_SYS  ($07, $08)   System RAM, 352 words
 //   SS_GRAM ($09, $0A)   GRAM, 512 words
 //   SS_ROW  ($0C)        the STIC's row buffer, 20 words
-//   SS_LINE ($0D)        the STIC's line buffer, 64 words
+//   SS_LINE ($0D)        the STIC's line buffer, 64 words (18 bits)
 // The timing ($01) and the cartridge ($0B) have their own modules.
 //
 // SPDX-License-Identifier: MIT

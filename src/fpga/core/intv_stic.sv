@@ -1,6 +1,5 @@
-// Intellivision core: the STIC (AY-3-8900-1), backgrounds (build step 4;
-// DESIGN.md 2.4, 3 module 6, 9). MOBs and collisions are step 5: their
-// registers are stored and read back here, nothing more.
+// Intellivision core: the STIC (AY-3-8900-1): backgrounds (build step 4),
+// MOBs and collisions (build step 5; DESIGN.md 2.4, 3 module 6, 9).
 //
 // Written from DESIGN.md, docs/STIC_NOTES.md and our Python model
 // (tools/stic.py, modes "stic" and "none"), which sim/tb/tb_system.sv
@@ -75,12 +74,48 @@
 // when the display is enabled, and the CPU may change the border colour
 // at any time when it is not.
 //
+// MOBs (build step 5; STIC_NOTES 5, the hardware rules of modes "stic" and
+// "none": M1-M5). Registers X $00-$07 (X 0-7, INTR 8, VISB 9, XSIZE 10),
+// Y $08-$0F (Y 0-6, YRES 7, YSIZ2 8, YSIZ4 9, XFLIP 10, YFLIP 11), A
+// $10-$17 (colour 0-2 + 12, card 3-10, GRAM 11, PRIO 13), collisions C
+// $18-$1F. In picture lines (raster line - PF_LINE + 24) MOB m's top is
+// 2 (Y + 4 + VDR); its pixel clock X + HDR + PF_X0 - 8; X = 0: no MOB.
+// Pattern row = (line - top) >> (2 YSIZ4 + YSIZ2), 8 rows (16 with YRES:
+// cards 2k and 2k + 1, bit 0 of the card ignored, M1), YFLIP reverses
+// them; card bits 6-7 count only for a GROM card in Color Stack mode
+// (M2); a pattern byte gives 8 pixels, 16 with XSIZE, XFLIP mirrors them.
+// The MOB registers, GRAM and the mode are closed to the CPU from the end
+// of the VBlank window (win_end) to the frame's end when the display is
+// enabled (the only frames with MOBs), so every MOB read below sees what
+// the model's draw() sees at the frame's end. Three users share the
+// GROM / GRAM ports, by the raster position:
+//   - the card engine, pixel clocks E0 .. E0 + 19 (as step 4);
+//   - the line's MOBs, pixel clocks MF .. MF + 7 of line L (after the
+//     playfield's last pixel): MOB m's pattern byte for line L + 1, made
+//     into a 16-pixel mask (rm[m]) for the pixels of line L + 1;
+//   - the collision sweep, every other clock: from win_end, for every
+//     picture line 8 .. 403 that any MOB can cover (off the raster too),
+//     the 8 masks of the MOBs with INTR (gm[m]), then 28 pairs of them:
+//     MOB-MOB collisions anywhere in the object field (M7) and border
+//     collisions (a pixel outside the collision area: picture lines
+//     24 + 16 CBR[1] .. 215, pixel clocks PF_X0 + 8 CBR[0] .. PF_X0 + 158;
+//     M8). It finishes about 7 lines after win_end.
+// The pixel (one pixel ahead, as step 4): each MOB's bit from rm; the
+// lowest-numbered MOB with VISB and a pixel there wins, and shows unless
+// its PRIO is set and the background pixel is "on" (M3): a card's
+// foreground pixel, a Colored Squares quadrant of colour 0-6 (M5); under
+// the delay strips nothing is "on" (M4). Shown only where the playfield
+// is. In the collision area an "on" pixel under a MOB with INTR sets its
+// background bit. The bits gather in coll_p and are ORed into $18-$1F at
+// the frame's end, as the model does (a MOB never sets its own bit).
+//
 // Clock enables: ce (the CPU cycle), ce_pix (the STIC's pixel clock; both
 // only while the machine is live), live (every clk_sys the machine runs).
 // Every block-RAM read port is read every clock from an address that is a
 // function of the state and the position, and its word is used only when
 // that address has been stable for a clock, so freezes, saves and restores
-// may fall anywhere (intv_ram.sv).
+// may fall anywhere (intv_ram.sv). The sweep takes a GROM / GRAM word only
+// at pixel clocks whose previous pixel clock was its own (g_ok).
 //
 // Save state (DESIGN.md 4.3; ss_rdata 0 unless addressed; write only while
 // the machine is frozen):
@@ -88,10 +123,17 @@
 //           [1] handshake; $34 [0] en_l, [3:1] vdr_l; $35 [8:0] FIFO address counter, [9] fetch armed,
 //           [10] copy running, [15:11] copy word, [16] copy phase;
 //           $36 [1:0] colour-stack position, [3:2] its value at the card
-//           row's start, [7:4] the colour of the next pixel
+//           row's start, [7:4] the colour of the next pixel;
+//           $37 the sweep: [8:0] picture line, [11:9] MOB (pairs: the
+//           first), [14:12] the pair's second MOB, [15] fetching (else
+//           pairs), [16] word phase, [17] running;
+//           $38-$3B sweep masks {gm[2i + 1], gm[2i]}; $3C-$3F line masks
+//           {rm[2i + 1], rm[2i]}; $40-$42 collision bits gathered this
+//           frame, 10 a MOB: {coll_p[2], [1], [0]}, {[5], [4], [3]}, {[7], [6]}
 //   SS_ROW  row buffer, 20 words (14 bits)
-//   SS_LINE line buffer, 64 words ({bank, card}: [15:8] pattern byte,
-//           [7:4] foreground, [3:0] background)
+//   SS_LINE line buffer, 64 words ({bank, card}: [17:16] "on" for a 1 / 0
+//           pattern bit, [15:8] pattern byte, [7:4] foreground, [3:0]
+//           background)
 // The row and column positions are the machine's raster position (intv_timing).
 //
 // SPDX-License-Identifier: MIT
@@ -107,6 +149,7 @@ module intv_stic #(
     parameter int         REQ_LINE  = 68,     // row 0 BUSRQ line with VDR = 0
     parameter int         FRAME_RQ  = 42,     // frame BUSRQ cycles (MAME stic.h:49)
     parameter int         E0        = 8,      // pixel clock of the first card built
+    parameter int         MF        = 196,    // pixel clock of the first MOB's line fetch
     parameter logic [7:0] SS_ID     = 8'h04,
     parameter logic [7:0] SS_ROW    = 8'h0C,
     parameter logic [7:0] SS_LINE   = 8'h0D
@@ -254,8 +297,7 @@ module intv_stic #(
 
     logic [13:0] w;                           // the card's BACKTAB word (row buffer port B)
     wire logic squares = csmode && w[12] && !w[11];
-    assign grom_addr = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};
-    assign gram_addr = {w[8:3], py};
+    wire logic [10:0] c_grom = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};
     wire logic [7:0] pat = w[11] ? gram_q : grom_q;
 
     function automatic logic [3:0] sqc(input logic [2:0] c, input logic [3:0] top);
@@ -265,8 +307,10 @@ module intv_stic #(
     logic [1:0] cs_new;
     logic [7:0] e_bits;
     logic [3:0] e_fg, e_bg;
+    logic [1:0] e_on;                         // "on" for a pattern bit 1 / 0 (MOB priority, collisions)
     always_comb begin
         cs_new = cs_use;
+        e_on   = 2'b10;
         if (!csmode) begin
             e_bits = pat;
             e_fg   = {1'b0, w[2:0]};
@@ -275,6 +319,9 @@ module intv_stic #(
             e_bits = 8'hF0;
             e_fg   = sqc(py[2] ? w[8:6] : w[2:0], csr[cs_use]);
             e_bg   = sqc(py[2] ? {w[13], w[10:9]} : w[5:3], csr[cs_use]);
+            // colour 7 (the stack's colour) is never "on" (S9 stic.txt:433-434; M5)
+            e_on   = {py[2] ? w[8:6] != 3'd7 : w[2:0] != 3'd7,
+                      py[2] ? {w[13], w[10:9]} != 3'd7 : w[5:3] != 3'd7};
         end else begin
             cs_new = cs_use + {1'b0, w[13]};
             e_bits = pat;
@@ -294,16 +341,118 @@ module intv_stic #(
                       && !(cbr[1] && vcnt < 9'(PF_LINE + 16));
     wire logic pf_x = xp >= $signed({8'd0, cbr[0] ? 4'd8 : {1'b0, hd}}) && xp < 12'sd159;
     wire logic [11:0] xx = xp - 12'(hd);
-    logic [15:0] lb_q;
+    logic [17:0] lb_q;
     logic [3:0]  pix = 4'd0;
-    wire logic [3:0] pf_c = lb_q[4'd15 - {1'b0, xx[2:0]}] ? lb_q[7:4] : lb_q[3:0];
+    wire logic   pf_b = lb_q[5'd15 - {2'b0, xx[2:0]}];
+    wire logic [3:0] pf_c = pf_b ? lb_q[7:4] : lb_q[3:0];
     assign colour = pix;
+
+    // ------------------------------------------------------------- MOBs
+    // the MOB unit: MOB um's pattern row for picture line uln, its GROM /
+    // GRAM address and (a clock later) its 16-pixel mask
+    localparam int PIC0 = PF_LINE - 24;       // raster line of picture line 0
+    wire logic       rf_win = hcnt >= 9'(MF) && hcnt < 9'(MF + 8);
+    wire logic       cd_win = hcnt >= 9'(E0) && hcnt < 9'(E0 + 20);
+    wire logic       g_ok   = !(hcnt >= 9'(E0) && hcnt <= 9'(E0 + 20)) && !(hcnt >= 9'(MF) && hcnt <= 9'(MF + 8));
+    wire logic [8:0] hm     = hcnt - 9'(MF);
+    logic [2:0]  g_m = 3'd0, g_j = 3'd0;       // sweep: MOB (pairs: first, second)
+    logic [8:0]  g_ly = 9'd0;                  // sweep: picture line
+    logic        g_on = 1'b0, g_f = 1'b0, g_ph = 1'b0;
+    logic [15:0] gm [8];                       // sweep masks (MOBs with INTR)
+    logic [15:0] rm [8];                       // line masks
+    logic [9:0]  coll_p [8];                   // collision bits gathered this frame
+    initial for (int i = 0; i < 8; i++) begin
+        gm[i] = 16'd0; rm[i] = 16'd0; coll_p[i] = 10'd0;
+    end
+
+    wire logic [2:0]  um  = rf_win ? hm[2:0] : g_m;
+    wire logic signed [11:0] uln = rf_win ? 12'(vcnt) + 12'sd1 - 12'(PIC0) : 12'(g_ly);
+    wire logic [13:0] u_x = r[{3'b000, um}];
+    wire logic [13:0] u_y = r[{3'b001, um}];
+    wire logic [13:0] u_a = r[{3'b010, um}];
+    wire logic [7:0]  u_top = 8'(u_y[6:0]) + 8'd4 + 8'(vdr_l);          // in card pixel rows
+    wire logic signed [11:0] u_dy = uln - 12'({u_top, 1'b0});
+    wire logic [1:0]  u_s  = {u_y[9], u_y[8]};                          // YSIZ4, YSIZ2
+    wire logic [10:0] u_rw = u_dy[10:0] >> u_s;
+    wire logic        u_in = !u_dy[11] && u_rw < (u_y[7] ? 11'd16 : 11'd8);
+    wire logic [3:0]  u_row = u_rw[3:0] ^ (u_y[11] ? {u_y[7], 3'b111} : 4'd0);
+    logic [7:0] u_card;
+    always_comb begin
+        u_card = u_a[10:3];
+        if (u_a[11] || !csmode)
+            u_card[7:6] = 2'b00;                // M2; GRAM cards 0-63
+        if (u_y[7])
+            u_card[0] = 1'b0;                   // YRES: cards 2k, 2k + 1 (M1)
+    end
+    wire logic [10:0] u_addr = {u_card, 3'b000} + 11'(u_row);
+    assign grom_addr = cd_win ? c_grom : u_addr;
+    assign gram_addr = cd_win ? {w[8:3], py} : u_addr[8:0];
+    wire logic [7:0]  u_pat = u_a[11] ? gram_q : grom_q;
+
+    // pattern byte -> pixel k of the MOB (bit k), XSIZE xs, XFLIP xf
+    function automatic logic [15:0] expand(input logic [7:0] p, input logic xs, input logic xf);
+        for (int k = 0; k < 16; k++)
+            if (xs)
+                expand[k] = xf ? p[k / 2] : p[7 - k / 2];
+            else
+                expand[k] = k < 8 && (xf ? p[k % 8] : p[7 - k % 8]);
+    endfunction
+    wire logic [15:0] u_mask = u_x[7:0] != 8'd0 && u_in ? expand(u_pat, u_x[10], u_y[10]) : 16'd0;
+
+    // the sweep's border test for MOB um on line g_ly: pixels outside the
+    // collision area
+    wire logic [9:0] u_xs = 10'(u_x[7:0]) + 10'(hd) + 10'(PF_X0 - 8);  // pixel clock of pixel 0
+    wire logic [9:0] cx0  = 10'(PF_X0) + (cbr[0] ? 10'd8 : 10'd0);
+    logic [15:0] u_inx;
+    always_comb
+        for (int k = 0; k < 16; k++)
+            u_inx[k] = u_xs + 10'(k) >= cx0 && u_xs + 10'(k) <= 10'(PF_X0 + 158);
+    wire logic g_rowin = g_ly >= (cbr[1] ? 9'd40 : 9'd24) && g_ly <= 9'd215;
+    wire logic g_bord  = u_mask != 16'd0 && (!g_rowin || (u_mask & ~u_inx) != 16'd0);
+    wire logic g_last  = g_ly == 9'd403;        // 2 (127 + 4 + 7) + 128 - 1
+
+    // the sweep's pair test: MOBs g_m and g_j overlap on this line
+    wire logic [15:0] p_mi = gm[g_m], p_mj = gm[g_j];
+    wire logic [8:0]  p_d  = 9'(r[{3'b000, g_j}][7:0]) - 9'(r[{3'b000, g_m}][7:0]);
+    wire logic [8:0]  p_ad = p_d[8] ? -p_d : p_d;
+    wire logic [15:0] p_sh = (p_d[8] ? p_mi : p_mj) << p_ad[3:0];
+    wire logic        p_hit = p_ad < 9'd16 && (p_sh & (p_d[8] ? p_mj : p_mi)) != 16'd0;
+
+    // the pixel: MOB lanes
+    logic [7:0] l_b;
+    always_comb
+        for (int i = 0; i < 8; i++) begin
+            logic [10:0] k;
+            k = 11'(nx) - 11'(r[i][7:0]) - 11'(hd) - 11'(PF_X0 - 8);
+            l_b[i] = k < 11'd16 && rm[i][k[3:0]];
+        end
+    logic [7:0] l_vis, l_intr;
+    always_comb
+        for (int i = 0; i < 8; i++) begin
+            l_vis[i]  = r[i][9];
+            l_intr[i] = r[i][8];
+        end
+    wire logic [7:0] l_hit = l_b & l_vis;
+    logic [2:0] l_w;                          // the lowest-numbered MOB shown here
+    always_comb begin
+        l_w = 3'd0;
+        for (int i = 7; i >= 0; i--)
+            if (l_hit[i]) l_w = 3'(i);
+    end
+    wire logic [13:0] l_a  = r[{3'b010, l_w}];
+    // the background pixel is "on": a card pixel (not under the delays)
+    wire logic fg_on = yy_l >= 0 && xp >= $signed({9'd0, hd}) && (pf_b ? lb_q[17] : lb_q[16]);
+    wire logic mob_show = l_hit != 8'd0 && !(l_a[13] && fg_on);
+    wire logic coll_area = en_l && vcnt >= (cbr[1] ? 9'(PF_LINE + 16) : 9'(PF_LINE))
+                        && vcnt <= 9'(PF_LINE + 191)
+                        && xp >= $signed({8'd0, cbr[0] ? 4'd8 : 4'd0}) && xp <= 12'sd158;
+    wire logic [7:0] l_bg = coll_area && fg_on ? l_b & l_intr : 8'd0;
 
     // ---------------------------------------------------------- the RAMs
     logic [31:0] ssr_row, ssr_line;
     /* verilator lint_off UNUSEDSIGNAL */
     logic [13:0] rb_qa;                       // port A reads: the state port's only
-    logic [15:0] lb_qa;
+    logic [17:0] lb_qa;
     /* verilator lint_on UNUSEDSIGNAL */
 
     intv_ram #(.AW(5), .DW(14), .WORDS(20), .SS_ID(SS_ROW)) rowbuf (
@@ -311,8 +460,8 @@ module intv_stic #(
         .addr_b(ec[4:0]), .q_b(w),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_row));
 
-    intv_ram #(.AW(6), .DW(16), .WORDS(64), .SS_ID(SS_LINE)) linebuf (
-        .clk, .addr({tl[0], ec[4:0]}), .we(lb_we), .d({e_bits, e_fg, e_bg}), .q(lb_qa),
+    intv_ram #(.AW(6), .DW(18), .WORDS(64), .SS_ID(SS_LINE)) linebuf (
+        .clk, .addr({tl[0], ec[4:0]}), .we(lb_we), .d({e_on, e_bits, e_fg, e_bg}), .q(lb_qa),
         .addr_b({vcnt[0], xx[7:3]}), .q_b(lb_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_line));
 
@@ -329,6 +478,10 @@ module intv_stic #(
             {cp_arm, cp_on, cp_ph} <= 3'd0;
             {cs, cs_row} <= 4'd0;
             pix <= 4'd0;
+            {g_on, g_f, g_ph, g_m, g_j, g_ly} <= '0;
+            for (int i = 0; i < 8; i++) begin
+                gm[i] <= 16'd0; rm[i] <= 16'd0; coll_p[i] <= 10'd0;
+            end
         end else if (ss_we && ss_hit) begin
             if (ss_w < 8'(NREG))
                 r[ss_w[5:0]] <= ss_wdata[13:0] & keep(ss_w[5:0]);
@@ -337,6 +490,12 @@ module intv_stic #(
                 8'h34: {vdr_l, en_l} <= ss_wdata[3:0];
                 8'h35: {cp_ph, cp_j, cp_on, cp_arm, cnt} <= ss_wdata[16:0];
                 8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];
+                8'h37: {g_on, g_ph, g_f, g_j, g_m, g_ly} <= ss_wdata[17:0];
+                8'h38, 8'h39, 8'h3A, 8'h3B: {gm[{ss_w[1:0], 1'b1}], gm[{ss_w[1:0], 1'b0}]} <= ss_wdata;
+                8'h3C, 8'h3D, 8'h3E, 8'h3F: {rm[{ss_w[1:0], 1'b1}], rm[{ss_w[1:0], 1'b0}]} <= ss_wdata;
+                8'h40: {coll_p[2], coll_p[1], coll_p[0]} <= ss_wdata[29:0];
+                8'h41: {coll_p[5], coll_p[4], coll_p[3]} <= ss_wdata[29:0];
+                8'h42: {coll_p[7], coll_p[6]} <= ss_wdata[19:0];
                 default: ;
             endcase
         end else begin
@@ -397,7 +556,63 @@ module intv_stic #(
 
             // pixels
             if (ce_pix)
-                pix <= pf_line && pf_x ? pf_c : bcr;
+                pix <= pf_line && pf_x ? (mob_show ? {l_a[12], l_a[2:0]} : pf_c) : bcr;
+
+            // MOBs: the next line's masks
+            if (ce_pix && rf_win)
+                rm[hm[2:0]] <= u_mask;
+            // background collisions
+            if (ce_pix)
+                for (int i = 0; i < 8; i++)
+                    if (l_bg[i]) coll_p[i][8] <= 1'b1;
+            // the collision sweep
+            if (win_end && hs_eff) begin
+                {g_on, g_f, g_ph} <= 3'b110;
+                g_m  <= 3'd0;
+                g_ly <= 9'd8;
+            end else if (live && g_on) begin
+                if (g_f) begin
+                    if (!g_ph)
+                        g_ph <= 1'b1;
+                    else if (g_ok) begin
+                        g_ph <= 1'b0;
+                        gm[g_m] <= u_x[8] ? u_mask : 16'd0;
+                        if (u_x[8] && g_bord)
+                            coll_p[g_m][9] <= 1'b1;
+                        if (g_m == 3'd7) begin
+                            g_f <= 1'b0;
+                            g_m <= 3'd0;
+                            g_j <= 3'd1;
+                        end else
+                            g_m <= g_m + 3'd1;
+                    end
+                end else begin
+                    if (p_hit) begin
+                        coll_p[g_m][{1'b0, g_j}] <= 1'b1;
+                        coll_p[g_j][{1'b0, g_m}] <= 1'b1;
+                    end
+                    if (g_j != 3'd7)
+                        g_j <= g_j + 3'd1;
+                    else if (g_m != 3'd6) begin
+                        g_m <= g_m + 3'd1;
+                        g_j <= g_m + 3'd2;
+                    end else begin
+                        g_f <= 1'b1;
+                        g_m <= 3'd0;
+                        g_ly <= g_ly + 9'd1;
+                        if (g_last)
+                            g_on <= 1'b0;
+                    end
+                end
+            end
+            // the frame's end: the gathered bits into $18-$1F (sticky)
+            if (frame_end) begin
+                for (int i = 0; i < 8; i++) begin
+                    r[6'h18 + 6'(i)] <= r[6'h18 + 6'(i)] | (14'(coll_p[i]) & keep(6'h18 + 6'(i)));
+                    coll_p[i] <= 10'd0;
+                end
+                g_on <= 1'b0;
+            end
         end
     end
 
@@ -411,17 +626,25 @@ module intv_stic #(
                 8'h34: ss_rdata = {28'd0, vdr_l, en_l};
                 8'h35: ss_rdata = {15'd0, cp_ph, cp_j, cp_on, cp_arm, cnt};
                 8'h36: ss_rdata = {24'd0, pix, cs_row, cs};
+                8'h37: ss_rdata = {14'd0, g_on, g_ph, g_f, g_j, g_m, g_ly};
+                8'h38, 8'h39, 8'h3A, 8'h3B: ss_rdata = {gm[{ss_w[1:0], 1'b1}], gm[{ss_w[1:0], 1'b0}]};
+                8'h3C, 8'h3D, 8'h3E, 8'h3F: ss_rdata = {rm[{ss_w[1:0], 1'b1}], rm[{ss_w[1:0], 1'b0}]};
+                8'h40: ss_rdata = {2'd0, coll_p[2], coll_p[1], coll_p[0]};
+                8'h41: ss_rdata = {2'd0, coll_p[5], coll_p[4], coll_p[3]};
+                8'h42: ss_rdata = {12'd0, coll_p[7], coll_p[6]};
                 default: ;
             endcase
         end
     end
 
     /* verilator lint_off UNUSEDSIGNAL */
-    wire logic [7:0] unused = {xx[11:8], ec[8:5]};
+    wire logic [33:0] unused = {xx[11:8], ec[8:5], hm[8:3], u_x[13:11], u_x[9], u_y[13:12],
+                                u_a[13:12], u_a[2:0], l_a[11:3]};
     /* verilator lint_on UNUSEDSIGNAL */
 
     initial begin
-        if (H_TOTAL % 4 != 0 || PF_X0 < 14 || PF_X0 + 160 > H_TOTAL || E0 + 20 > H_TOTAL)
+        if (H_TOTAL % 4 != 0 || PF_X0 < 14 || PF_X0 + 160 > H_TOTAL || E0 + 20 > H_TOTAL
+            || MF < PF_X0 + 159 || MF + 9 > H_TOTAL || E0 < 1 || PF_LINE + 192 != V_TOTAL)
             $error("intv_stic: parameter out of range");
     end
 

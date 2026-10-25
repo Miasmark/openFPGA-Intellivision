@@ -3,7 +3,7 @@
 What the STIC model (`tools/stic.py`, driven by `tools/intv_system.py`) does,
 where each fact comes from, and every place where the sources disagree.
 Sections 1-4 are the backgrounds (build step 4); section 5 is the MOBs and
-their collisions (build step 5, model).
+their collisions (build step 5, model), section 6 their RTL.
 
 Sources (DESIGN.md section 12 for the full list):
 
@@ -331,7 +331,7 @@ scanline (twice per card pixel row), from GROM's second port or GRAM's
 port B; the bench logs the card rows at their first line, as the model's
 card log gives them.
 
-**State.** STIC id $04, 55 words: the registers, {handshake, mode}, the
+**State.** STIC id $04, 55 words (67 from step 5, section 6): the registers, {handshake, mode}, the
 frame latches (enable, VDR), the fetch
 state (FIFO counter, armed, copy running, word, phase), the colour-stack
 position and its value at the card row's start, the next pixel's colour;
@@ -531,3 +531,90 @@ The owner's console (no flash cartridge) can settle little here:
 
 M1-M8 otherwise need our own STIC test ROM on hardware (a flash cartridge),
 as D6, D8 and T1-T10 do.
+
+
+## 6 MOBs and collisions in the RTL (build step 5)
+
+`intv_stic.sv` follows the model's hardware rules (modes `stic` and
+`none`; 5.1, M1-M5) pixel for pixel and bit for bit. How it is built:
+
+**When the registers are read.** MOBs and collisions exist only in frames
+whose display is enabled at the end of the VBlank window. From then
+(cycle 3,790) to the frame's end the MOB registers, HDR / VDR / CBR, the
+mode and GRAM are closed to the CPU, so whatever the RTL reads in that time
+is what the model's `draw()` reads at the frame's end. Picture lines 8-23
+(raster 54-69) and the lines below the raster can hold MOB pixels too, but
+none of them is shown, so they matter only for collisions (below).
+
+**Three users of the graphics bus** (GROM's second port, GRAM's port B),
+by raster position:
+
+- the card engine, pixel clocks 8-27 (as step 4);
+- the line's MOBs, pixel clocks 196-203 of line L (after the playfield's
+  last pixel, 195): MOB m's pattern byte for line L + 1, turned at once
+  into a 16-pixel mask (`rm[m]`, XSIZE and XFLIP applied). Line L + 1's
+  pixels take bit `nx - (X + HDR + 29)` of each mask;
+- the collision sweep, at every other pixel clock (`g_ok`: neither this
+  pixel clock nor the one before belongs to the other two). It starts at
+  the end of the VBlank window and walks picture lines 8-403, the lines
+  any MOB can cover (top 2 (Y + 4 + VDR) >= 8, bottom at most 2 (127 + 4 +
+  7) + 128 - 1), on and off the raster: for each line the 8 masks of the
+  MOBs with INTR (two clocks a MOB: address, then the word), each MOB's
+  border test, then the 28 pairs one a clock (`(mask_j << d) & mask_i`,
+  d = X_j - X_i, |d| < 16). About 45 clk_sys a line plus the waits: it ends
+  some 7 lines after it starts, long before the frame's end.
+
+So MOB-MOB collisions are taken over each MOB's whole box, also over the
+border, under the delay strips and below or right of the raster (M7), and
+border collisions over every pixel outside the collision area (picture
+columns 13-171, lines 24-215, the left / top edge 8 columns / 16 lines in
+with CBR; M8), with no raster time needed for lines that the raster never
+draws.
+
+**The pixel.** One pixel ahead, as in step 4: each MOB's bit for this
+pixel; the lowest-numbered MOB with VISB and a bit set wins (M3) and shows
+its colour (bits 0-2 and 12) unless its PRIO is set and the background
+pixel is "on". "On" is the card's foreground pixel or, in a Colored
+Squares card, a quadrant whose colour code is not 7 (M5: the line buffer
+carries two more bits per card, "on" for a pattern bit 1 and for a 0);
+nothing is "on" in the strips the delays uncover (M4). The MOB shows only
+inside the playfield, as the cards do. Inside the collision area a MOB
+with INTR on an "on" pixel sets its background bit.
+
+**Collision bits.** Gathered in `coll_p` (10 bits a MOB) during the frame,
+ORed into $18-$1F (without the MOB's own bit) and cleared at the frame's
+end, exactly when the model ORs them in (5.1: the registers are closed
+until then, so the CPU sees the same either way; a dump in the middle of a
+frame shows the same registers as the model's too).
+
+**Pattern addresses.** Card bits 3-10; bits 6-7 count only for a GROM card
+in Color Stack mode (M2); with YRES bit 0 is dropped and rows 8-15 come
+from the odd card (M1); the row is (line - top) >> (2 YSIZ4 + YSIZ2), XOR 7
+(or 15 with YRES) with YFLIP. Under these rules no address passes the end
+of GROM or GRAM (M10 does not arise).
+
+**State.** Id $04 grows by 12 words to 67: $37 the sweep (line, MOB or pair,
+fetch / pair phase, word phase, running), $38-$3B its 8 masks, $3C-$3F the
+8 line masks, $40-$42 the gathered bits. The line buffer ($0D) is 18 bits
+wide (the two "on" bits). The sweep takes a GROM / GRAM word only when the
+port's address has been its own for a clock, so a freeze, save or restore
+may fall in any clk_sys, inside the sweep or inside a line's MOB fetch
+(the bench's rt6, rt7 and rt8).
+
+**Our STIC test ROM** (`sim/testroms/sticmob.asm`, image `sticmob`): 18
+scenes, one a frame, each with the collision words S9's rules give for
+it, checked by the program itself in the next VBlank (the fail count in
+System RAM $0303, the border green or red). It covers every size and
+flip, X = 0, invisible MOBs, the order with PRIO (M3, on screen), YRES
+with an odd card (M1), GROM cards 64-255 in both modes (M2, on screen),
+the delay strip (M4), squares colour 7 (M5, CSR0 written with bit 4 set),
+each border edge one pixel / line inside and outside (also with delays and
+border extension), MOBs below and right of the raster, and the bits'
+stickiness. The model in hardware rules passes it (0 fails, 2 passes in 40
+frames); with MAME's rules (`Stic.mob_rules = "mame"`, diagnostic) it
+counts 5 fails: M1 (2), M4 (1), M5 (2). So the ROM, run on a console (with
+a flash cartridge), answers M1, M4 and M5 by the border colour, and M2 and
+M3 on screen (S13 and S1). It runs in the EXEC slot on the bench; as a
+cartridge it would need a different start (not built).
+
+**Gates** (lane `mob-rtl`; results in its NOTES.md): see `sim/tb/README.md`.

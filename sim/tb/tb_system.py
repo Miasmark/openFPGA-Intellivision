@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Miasmark and contributors
-"""Steps 3-4 bench driver (DESIGN.md 9): the machine RTL against the system model.
+"""Steps 3-5 bench driver (DESIGN.md 9): the machine RTL against the system model.
 
 "EXEC runs with no cartridge; bus log matches the Python model in lockstep",
 plus the save/restore round trip of DESIGN 8.4; from step 4 also the STIC:
 its pictures pixel by pixel, its row fetches (cycle, loaded or missed,
 address counter, the 20 words) and its card reads (the card row's GROM /
 GRAM card or squares), against tools/stic.py in mode "stic" (BUSRQ on, as
-the core runs) or "none" (BUSRQ off; image astro_nobusrq). For each image (no
+the core runs) or "none" (BUSRQ off; image astro_nobusrq); from step 5 the
+MOBs in those pictures and every frame's collision bits (the K lines). For
+each image (no
 cartridge; Astrosmash from the owner's library; our sim/testroms/systest.asm
 in the EXEC slot; our sim/testroms/carttest.asm with two synthetic
 cartridges from tools/synth_image.py, whose CRCs are forced to table
@@ -27,16 +29,20 @@ entries with cart RAM and with paged ROM) it
      over a state 20,000 cycles later, which rewinds the run; restore into
      a reset machine outside VBlank; with the display on, restore into a
      reset machine in the middle of a row copy and over a later state from
-     inside a BUSRQ, during the card engine's work; before each restore
-     every state word, and the cart RAM, is overwritten with junk);
+     inside a BUSRQ, during the card engine's work; with MOBs (step 5),
+     restore into a reset machine inside the collision sweep and over a
+     later state inside a line's MOB fetch; before each restore every state
+     word, and the cart RAM, is overwritten with junk);
   3. compares every run with the model: every bus phase other than NACT
      with its cycle, address and data; R0-R7, S Z O C, I and D at every step
      start; every change of the handshake and the mode latch with its
      cycle; at the dumps, scratchpad, System RAM, GRAM, the STIC and PSG
      registers, the handshake and mode latches, the page selects, the
-     STIC's row buffer and FIFO counter; every picture, row fetch and card
-     row. All runs must also leave every state word identical at both
-     dumps.
+     STIC's row buffer and FIFO counter; every picture, row fetch, card
+     row and frame's collision bits. All runs must also leave every state
+     word identical at both dumps. sticmob (sim/testroms/sticmob.asm, the
+     step-5 STIC test) checks itself: the model's run must end with its
+     fail count 0 after at least one pass (STICMOB_SELFCHECK).
   4. with --mame (or INTV_TRACE_ROOT set): the model against MAME's trace
      of the same image (tools/intv_system.py mame: every read and write and
      every interrupt point equal), so the stubs answer as MAME does.
@@ -45,12 +51,14 @@ entries with cart RAM and with paged ROM) it
                                            the planted faults (each must fail)
   python3 -I sim/tb/tb_system.py [--only nocart] [--no-build]
   python3 -I sim/tb/tb_system.py --screens [--only astrosmash,...]
-        the step-4 frame gate (DESIGN 9 step 4): the EXEC without a
-        cartridge and with Astrosmash (its title screen) and five games
-        (SCREENS), each run as far as the MAME snapshots the model was
-        checked against (docs/STIC_NOTES.md 3); every picture, row fetch
-        and card row of the RTL equal to the model's (mode "stic"), and
-        the CPU bus and registers equal frame by frame (a hash per frame)
+        the frame gate (DESIGN 9 steps 4 and 5): the EXEC without a
+        cartridge and with Astrosmash (its title screen), five games and
+        the ten MOB games of step 5 (SCREENS), each run as far as the MAME
+        snapshots the model was checked against (docs/STIC_NOTES.md 3,
+        5.4); every picture, row fetch, card row and frame's collision bits
+        of the RTL equal to the model's (mode "stic"), and the CPU bus and
+        registers equal frame by frame (a hash per frame: every read of a
+        collision register is in it)
 
 Environment: VERILATOR (default verilator), WORK (default sim/work/tb_system),
 INTV_LIBRARY (default ~/ROMLibrary/Intellivision), INTV_BIOS_DIR (default
@@ -85,9 +93,10 @@ RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg_regs.sv', 'intv_ram
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
 FRAME = isys.FRAME
-# The step-4 RTL draws no MOBs and sets no collision bits: the model runs with
-# its MOBs off (tools/stic.py Stic.mobs) until the step-5 RTL turns this on.
-STIC_MOBS = False
+# MOBs and collisions (build step 5): on in the model as in the RTL.
+# False runs the model with backgrounds only (tools/stic.py Stic.mobs), as
+# the step-4 RTL drew.
+STIC_MOBS = True
 NCYC = 10 * FRAME
 DUMP1 = 5 * FRAME + 8000
 # (name, cartridge: a file in the library or ('forced', CRC, bytes) from
@@ -102,6 +111,8 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('systest', None, 'systest.asm', 22, (0x5A, 0xC3), 'none'),
           # step 4: our STIC test (sim/testroms/sticbus.asm), BUSRQ on
           ('sticbus', None, 'sticbus.asm', 24, (0xFF, 0xFF), 'stic'),
+          # step 5: our MOB test (sim/testroms/sticmob.asm), BUSRQ on
+          ('sticmob', None, 'sticmob.asm', 40, (0xFF, 0xFF), 'stic'),
           ('cartram', ('forced', 0xCE8FC699, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic'),
           ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic')]
 # the step-4 frame gate: (name, library file or None, pictures)
@@ -111,7 +122,18 @@ SCREENS = [('nocart', None, 600),
            ('diner', 'Diner (USA).zip', 300),
            ('digdug', 'Dig Dug (USA).zip', 700),
            ('sewersam', 'Sewer Sam (USA).zip', 300),
-           ('solarsailer', 'TRON Solar Sailer (USA, Europe).zip', 700)]
+           ('solarsailer', 'TRON Solar Sailer (USA, Europe).zip', 700),
+           # step 5: the ten MOB games (docs/STIC_NOTES.md 5.4), as far as their MAME snapshots
+           ('atlantis', 'Atlantis (USA, Europe).zip', 700),
+           ('demonattack', 'Demon Attack (USA, Europe).zip', 700),
+           ('mte201', 'MTE201 Intellivision Test Cartridge (USA).zip', 900),
+           ('buzzbombers', 'Buzz Bombers (USA, Europe).zip', 700),
+           ('centipede', 'Centipede (USA).zip', 700),
+           ('defender', 'Defender (USA).zip', 700),
+           ('dracula', 'Dracula (USA, Europe).zip', 700),
+           ('dragonfire', 'Dragonfire (USA, Europe).zip', 700),
+           ('icetrek', 'Ice Trek (USA, Europe).zip', 700),
+           ('tropicaltrouble', 'Tropical Trouble (USA, Europe).zip', 700)]
 PIC_W, PIC_H = 189, 240
 PIC_BYTES = 4 + PIC_W * PIC_H // 2
 KIND = {'GROM': 0, 'GRAM': 1, 'squares': 2}
@@ -134,17 +156,19 @@ class Exp:
         self.blog, self.steps, self.snaps, self.bus = blog, steps, snaps, bus
         self.mlog, self.ncyc = mlog, ncyc
         self.pics, self.sinfo, self.mode = pics or {}, sinfo or {}, mode
+        self.name = None
 
 
 def stic_expect(info):
-    """What the RTL's G / GW and C lines should say for one frame: row
-    fetches [(r, ok, counter, words or None)] and cards [(row, col, kind,
-    base)] (tools/stic.py on_frame info)."""
+    """What the RTL's G / GW, C and K lines should say for one frame: row
+    fetches [(r, ok, counter, words or None)], cards [(row, col, kind,
+    base)] and the 8 collision words the frame gathers (tools/stic.py
+    on_frame info)."""
     rows = info['rows']
     g = sorted((r, int(ok), addr, tuple(rows[r]) if ok else None)
                for r, rel, ok, addr in info['fetches'])
     c = [(row, col, KIND[k], base or 0) for row, col, k, base in info['cards']]
-    return g, c
+    return g, c, tuple(info['coll'])
 
 
 def capture(bus):
@@ -154,12 +178,14 @@ def capture(bus):
     def on_frame(n, pic, info):
         pics[n] = bytes(pic)
         sinfo[n] = stic_expect(info)
+        bus.moblog[n] = list(info['mobs'])
         # BUSAK against the row's fetch cycle R + 57 (sticbus's deadline cases)
         for r, rel, ok, _ in info['fetches']:
             if rel is not None and r < 13:
                 fc = stic.ROW0_REQ + 2 * stic.LINE * info['vdr'] + stic.ROW_PERIOD * r + stic.LINE
                 bus.deadline.append((n, r, rel - fc, ok))
     bus.deadline = []
+    bus.moblog = {}
     bus.vid.keep_frames = set()
     bus.vid.on_frame = on_frame
     return pics, sinfo
@@ -336,8 +362,8 @@ class Got(tuple):
 
 def parse_log(path, pic_path=None):
     blog, steps, dumps, notes, fails, mlog = [], [], {}, [], [], []
-    gl, gw, cl, hl = [], {}, [], {}
-    mark = (0, 0)
+    gl, gw, cl, hl, kl = [], {}, [], {}, []
+    mark = (0, 0, 0)
     for ln in open(path):
         t = ln.split()
         if not t:
@@ -348,6 +374,8 @@ def parse_log(path, pic_path=None):
             gw[int(t[1])] = tuple(int(x, 16) for x in t[2:22])
         elif t[0] == 'C':
             cl.append((int(t[1]), int(t[2]), int(t[3]), int(t[4]), int(t[5])))
+        elif t[0] == 'K':
+            kl.append((int(t[1]), tuple(int(x, 16) for x in t[2:10])))
         elif t[0] == 'H':
             hl[int(t[1])] = (int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5]))
         elif t[0] == 'B':
@@ -360,7 +388,7 @@ def parse_log(path, pic_path=None):
         elif t[0] == 'W':
             dumps.setdefault(int(t[1]), {})[(int(t[2], 16), int(t[3]))] = int(t[4], 16)
         elif t[0] == 'R' and t[1] == 'mark':
-            mark = (len(gl), len(cl))
+            mark = (len(gl), len(cl), len(kl))
             notes.append(ln.strip())
         elif t[0] == 'R' and t[1] == 'rewind':
             c = int(t[2])
@@ -370,7 +398,7 @@ def parse_log(path, pic_path=None):
             mlog = [x for x in mlog if x[0] < c]
             # the STIC's lines are cut at the save (a freeze inside a cycle
             # may come after some of that cycle's lines)
-            gl, cl = gl[:mark[0]], cl[:mark[1]]
+            gl, cl, kl = gl[:mark[0]], cl[:mark[1]], kl[:mark[2]]
             gw = {k: v for k, v in gw.items() if k < c or k in [g[0] for g in gl]}
         elif t[0] in ('R', 'L'):
             notes.append(ln.strip())
@@ -387,6 +415,7 @@ def parse_log(path, pic_path=None):
         got.fetches.setdefault(c // FRAME, []).append((r, ok, a, gw.get(c) if ok else None))
     for c, r, col, k, base in cl:
         got.cards.setdefault(c // FRAME, []).append((r, col, k, base))
+    got.colls = {c // FRAME: b for c, b in kl}
     got.hashes = hl
     got.pics = read_pics(pic_path) if pic_path else {}
     return got
@@ -433,8 +462,13 @@ def compare_stic(got, exp, frames, check_hash=False):
         if len(set(e[24 * PIC_W:216 * PIC_W])) > 1:
             shown += 1
     for k in frames:
-        ef, ec = exp.sinfo.get(k + 1, ([], []))
+        ef, ec, ek = exp.sinfo.get(k + 1, ([], [], None))
         gf, gc = got.fetches.get(k, []), got.cards.get(k, [])
+        if ek is not None and got.colls.get(k) != ek:
+            probs.append('frame %d collisions (MOBs 0-7): RTL %s, model %s' % (
+                k, ' '.join('%03X' % b for b in got.colls[k]) if k in got.colls else None,
+                ' '.join('%03X' % b for b in ek)))
+            break
         if gf != ef:
             i = next((j for j in range(max(len(gf), len(ef)))
                       if (gf[j] if j < len(gf) else None) != (ef[j] if j < len(ef) else None)), 0)
@@ -553,7 +587,7 @@ def rt_runs(exp):
     # with the display on: the fetch cycles of loaded rows in frames 3 on
     # (row r of frame k at k FRAME + 3933 + 114 VDR + 912 r)
     fl = []
-    for n, (g, _) in sorted(exp.sinfo.items()):
+    for n, (g, *_) in sorted(exp.sinfo.items()):
         k = n - 1
         st = [s for s in exp.bus.vid.stats if s['n'] == n]
         if k >= 3 and st and st[0]['enabled'] and (k + 2) * FRAME < exp.ncyc:
@@ -566,7 +600,63 @@ def rt_runs(exp):
         # the CPU in BUSAK, the card engine building the row's first line
         runs += [('rt4', ['+rt=1', '+rtcyc=%d' % rt4, '+rtsub=17']),
                  ('rt5', ['+rt=2', '+rtcyc=%d' % (rt5 + 3), '+rtsub=30', '+rton=20000'])]
+    # with MOBs (build step 5), frames 3 on with the display on and a MOB
+    # drawn or interacting: rt6 = reset restore inside the collision sweep
+    # (it runs from the end of the VBlank window, cycle 3,790, for about 7
+    # lines: here 3 lines and 20 cycles in, plus 17 clk_sys); rt7 = rewind
+    # restore inside a line's MOB fetch (pixel clocks 196-203 = cycles 49
+    # and 50 of the line; here 1 + 5 clk_sys into cycle 50) on a line
+    # inside a MOB, so the masks it builds are used on the next line
+    mk = []
+    for n, ml in sorted(exp.bus.moblog.items()):
+        k = n - 1
+        st = [x for x in exp.bus.vid.stats if x['n'] == n]
+        if k >= 3 and ml and st and st[0]['enabled'] and (k + 2) * FRAME < exp.ncyc:
+            mk.append((k, ml))
+    if mk:
+        k = mk[0][0]
+        runs.append(('rt6', ['+rt=1', '+rtcyc=%d' % (k * FRAME + stic.VBLANK + 3 * stic.LINE + 20),
+                             '+rtsub=17']))
+        for k, ml in reversed(mk):
+            tops = [e[5] + stic.PIC_LINE0 for e in ml if 70 <= e[5] + stic.PIC_LINE0 <= 254]
+            if tops:
+                runs.append(('rt7', ['+rt=2', '+rtcyc=%d' % (k * FRAME + stic.LINE * (tops[0] + 1) + 50),
+                                     '+rtsub=5', '+rton=20000']))
+                break
+    # sticmob: rt8 = reset restore at the start of the sweep's pairs for
+    # picture line 169 of frame 30 (scene S11, second pass), the one line
+    # where MOBs 4 and 5 overlap: the sweep's masks of that line must
+    # come back
+    if exp.name == 'sticmob':
+        t = 30 * FRAME * 48 + sweep_clock(169)
+        runs.append(('rt8', ['+rt=1', '+rtcyc=%d' % (t // 48), '+rtsub=%d' % (t % 48)]))
     return runs
+
+
+def sweep_clock(line, e0=8, mf=196):
+    """clk_sys from the frame start (12 a pixel clock, 48 a CPU cycle) at
+    which intv_stic.sv's collision sweep starts the pairs of picture line
+    `line`: it starts the clock after the ce that ends the VBlank window,
+    takes two clocks a MOB (the second only where g_ok), then one a pair."""
+    c = stic.VBLANK * 48
+    ly, m, ph, pairs = 8, 0, 0, 0
+    while True:
+        h = (c // 12) % (4 * stic.LINE)
+        ok = not (e0 <= h <= e0 + 20) and not (mf <= h <= mf + 8)
+        if pairs:
+            if ly == line:
+                return c
+            pairs -= 1
+            if pairs == 0:
+                ly += 1
+        elif ph == 0:
+            ph = 1
+        elif ok:
+            ph = 0
+            m += 1
+            if m == 8:
+                m, pairs = 0, 28
+        c += 1
 
 
 def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, verbose=True,
@@ -764,8 +854,8 @@ PLANTS = [
     ('pattern_select_swapped', 'intv_stic.sv', [("wire logic [7:0] pat = w[11] ? gram_q : grom_q;",
                                                  "wire logic [7:0] pat = w[11] ? grom_q : gram_q;")],
      ('screen', 'towerofdoom', 15), None),
-    ('fgbg_grom_256', 'intv_stic.sv', [("assign grom_addr = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
-                                        "assign grom_addr = {w[10:3], py};")], ('screen', 'towerofdoom', 15), None),
+    ('fgbg_grom_256', 'intv_stic.sv', [("wire logic [10:0] c_grom = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
+                                        "wire logic [10:0] c_grom = {w[10:3], py};")], ('screen', 'towerofdoom', 15), None),
     ('squares_off', 'intv_stic.sv', [("wire logic squares = csmode && w[12] && !w[11];",
                                       "wire logic squares = 1'b0;")], ('screen', 'sewersam', 15), None),
     ('fifo_no_intak_clear', 'intv_stic.sv', [("            if (intak)\n                cnt <= 9'd0;\n", "")],
@@ -782,7 +872,8 @@ PLANTS = [
                                              "    wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);\n"
                                              "    logic [3:0] bcr_fl = 4'd0;\n"
                                              "    always_ff @(posedge clk) if (win_end) bcr_fl <= r[6'h2C][3:0];"),
-                                            ("pix <= pf_line && pf_x ? pf_c : bcr;", "pix <= pf_line && pf_x ? pf_c : bcr_fl;")],
+                                            ("pix <= pf_line && pf_x ? (mob_show ? {l_a[12], l_a[2:0]} : pf_c) : bcr;",
+                                             "pix <= pf_line && pf_x ? (mob_show ? {l_a[12], l_a[2:0]} : pf_c) : bcr_fl;")],
      'astrosmash', None),
     ('missed_row_loads', 'intv_stic.sv', [("if (!busrq_en || busak) begin", "if (1'b1) begin")], 'sticbus', None),
     ('counter_no_stop', 'intv_stic.sv', [("if (cnt < 9'(SYSW))", "if (1'b1)")], 'sticbus', None),
@@ -818,15 +909,15 @@ PLANTS = [
                                           "e_bg   = sqc(py[2] ? {1'b0, w[10:9]} : w[5:3], csr[cs_use]);")], 'sticbus', None),
     ('column_160_shown', 'intv_stic.sv', [("&& xp < 12'sd159;", "&& xp < 12'sd160;")], 'sticbus', None),
     ('left_ext_off', 'intv_stic.sv', [("cbr[0] ? 4'd8 : {1'b0, hd}", "{1'b0, hd}")], 'sticbus', None),
-    ('pixel_order_reversed', 'intv_stic.sv', [("lb_q[4'd15 - {1'b0, xx[2:0]}]", "lb_q[4'd8 + {1'b0, xx[2:0]}]")],
+    ('pixel_order_reversed', 'intv_stic.sv', [("lb_q[5'd15 - {2'b0, xx[2:0]}]", "lb_q[5'd8 + {2'b0, xx[2:0]}]")],
      'sticbus', None),
     ('frame_busrq_always', 'intv_stic.sv', [("&& (slot_n == 16'(VB_CYCLES) ? hs_eff : en_l);", ";")], 'nocart', None),
     ('row13_dropped', 'intv_stic.sv', [("wire logic row_rq   = en_l && d >= 0 && d[3:1] == 3'd0;",
                                         "wire logic row_rq   = en_l && d >= 0 && d < 11'sd192 && d[3:1] == 3'd0;"),
                                        ("wire logic fetch_n  = en_l && d >= 0 &&",
                                         "wire logic fetch_n  = en_l && d >= 0 && d < 11'sd192 &&")], 'astrosmash', None),
-    ('cs_grom_64', 'intv_stic.sv', [("assign grom_addr = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
-                                     "assign grom_addr = {2'b00, w[8:3], py};")], 'astrosmash', None),
+    ('cs_grom_64', 'intv_stic.sv', [("wire logic [10:0] c_grom = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
+                                     "wire logic [10:0] c_grom = {2'b00, w[8:3], py};")], 'astrosmash', None),
     ('squares_advance', 'intv_stic.sv', [("            e_bits = 8'hF0;\n",
                                           "            e_bits = 8'hF0;\n            cs_new = cs_use + {1'b0, w[13]};\n")],
      'sticbus', None),
@@ -848,6 +939,91 @@ PLANTS = [
     ('ss_cs_row_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];",
                                          "8'h36: {pix, cs} <= {ss_wdata[7:4], ss_wdata[1:0]};")],
      'sticbus', ['rt4', 'rt5']),
+    # MOBs and collisions (build step 5): sizes, flips, priority, the
+    # hardware rules M1-M5, collision pairs, border, background, sweep, and
+    # the bits' life (gathered, ORed in at the frame's end, cleared)
+    ('mob_xflip_off', 'intv_stic.sv', [("expand(u_pat, u_x[10], u_y[10])", "expand(u_pat, u_x[10], 1'b0)")],
+     'sticmob', None),
+    ('mob_yflip_off', 'intv_stic.sv', [("u_rw[3:0] ^ (u_y[11] ? {u_y[7], 3'b111} : 4'd0)", "u_rw[3:0]")],
+     'sticmob', None),
+    ('mob_xsize_off', 'intv_stic.sv', [("expand(u_pat, u_x[10], u_y[10])", "expand(u_pat, 1'b0, u_y[10])")],
+     'sticmob', None),
+    ('mob_ysiz2_off', 'intv_stic.sv', [("wire logic [1:0]  u_s  = {u_y[9], u_y[8]};",
+                                        "wire logic [1:0]  u_s  = {u_y[9], 1'b0};")], 'sticmob', None),
+    ('mob_ysiz4_off', 'intv_stic.sv', [("wire logic [1:0]  u_s  = {u_y[9], u_y[8]};",
+                                        "wire logic [1:0]  u_s  = {1'b0, u_y[8]};")], 'sticmob', None),
+    ('mob_yres_off', 'intv_stic.sv', [("u_rw < (u_y[7] ? 11'd16 : 11'd8)", "u_rw < 11'd8")], 'sticmob', None),
+    ('mob_y_line_late', 'intv_stic.sv', [("wire logic signed [11:0] u_dy = uln - 12'({u_top, 1'b0});",
+                                          "wire logic signed [11:0] u_dy = uln - 12'({u_top, 1'b1});")],
+     'sticmob', None),
+    ('mob_x_pixel_late', 'intv_stic.sv', [("k = 11'(nx) - 11'(r[i][7:0]) - 11'(hd) - 11'(PF_X0 - 8);",
+                                           "k = 11'(nx) - 11'(r[i][7:0]) - 11'(hd) - 11'(PF_X0 - 7);")],
+     'sticmob', None),
+    ('mob_x0_drawn', 'intv_stic.sv', [("u_x[7:0] != 8'd0 && u_in ?", "u_in ?")], 'sticmob', None),
+    ('mob_order_reversed', 'intv_stic.sv', [("for (int i = 7; i >= 0; i--)\n            if (l_hit[i]) l_w = 3'(i);",
+                                             "for (int i = 0; i < 8; i++)\n            if (l_hit[i]) l_w = 3'(i);")],
+     'sticmob', None),
+    ('mob_prio_ignored', 'intv_stic.sv', [("wire logic mob_show = l_hit != 8'd0 && !(l_a[13] && fg_on);",
+                                           "wire logic mob_show = l_hit != 8'd0;")], 'sticmob', None),
+    ('mob_pastel_dropped', 'intv_stic.sv', [("(mob_show ? {l_a[12], l_a[2:0]} : pf_c)",
+                                             "(mob_show ? {1'b0, l_a[2:0]} : pf_c)")], 'sticmob', None),
+    ('mob_invisible_drawn', 'intv_stic.sv', [("wire logic [7:0] l_hit = l_b & l_vis;",
+                                              "wire logic [7:0] l_hit = l_b;")], 'sticmob', None),
+    ('mob_m1_card_bit0', 'intv_stic.sv', [("        if (u_y[7])\n            u_card[0] = 1'b0;", "")],
+     'sticmob', None),
+    ('mob_m2_fgbg_grom_256', 'intv_stic.sv', [("if (u_a[11] || !csmode)", "if (u_a[11])")], 'sticmob', None),
+    ('mob_gram_card_7bit', 'intv_stic.sv', [("if (u_a[11] || !csmode)\n            u_card[7:6] = 2'b00;",
+                                             "if (u_a[11] || !csmode)\n            u_card[7] = 1'b0;")],
+     'sticmob', None),
+    # M4 broken as MAME has it: the strip a delay uncovers takes the card
+    # under it as if there were no delay
+    ('coll_m4_strip_on', 'intv_stic.sv', [("wire logic fg_on = yy_l >= 0 && xp >= $signed({9'd0, hd}) &&",
+                                           "wire logic fg_on = yy_l >= 0 &&"),
+                                          (".addr_b({vcnt[0], xx[7:3]}), .q_b(lb_q),",
+                                           ".addr_b({vcnt[0], xp < $signed({9'd0, hd}) ? xp[7:3] : xx[7:3]}), .q_b(lb_q),")],
+     'sticmob', None),
+    ('coll_bg_no_intr', 'intv_stic.sv', [("wire logic [7:0] l_bg = coll_area && fg_on ? l_b & l_intr : 8'd0;",
+                                          "wire logic [7:0] l_bg = coll_area && fg_on ? l_b : 8'd0;")], 'sticmob', None),
+    ('coll_m5_squares_c7_on', 'intv_stic.sv', [("            e_on   = {py[2] ? w[8:6] != 3'd7 : w[2:0] != 3'd7,\n"
+                                                "                      py[2] ? {w[13], w[10:9]} != 3'd7 : w[5:3] != 3'd7};\n",
+                                                "            e_on   = 2'b11;\n")], 'sticmob', None),
+    ('coll_bg_off', 'intv_stic.sv', [("if (l_bg[i]) coll_p[i][8] <= 1'b1;", "if (1'b0) coll_p[i][8] <= l_bg[i];")],
+     'sticmob', None),
+    ('coll_bg_needs_visb', 'intv_stic.sv', [("wire logic [7:0] l_bg = coll_area && fg_on ? l_b & l_intr : 8'd0;",
+                                             "wire logic [7:0] l_bg = coll_area && fg_on ? l_b & l_intr & l_vis : 8'd0;")],
+     'sticmob', None),
+    ('coll_pair_one_way', 'intv_stic.sv', [("                        coll_p[g_j][{1'b0, g_m}] <= 1'b1;\n", "")],
+     'sticmob', None),
+    ('coll_pair_shift_swapped', 'intv_stic.sv', [("wire logic [15:0] p_sh = (p_d[8] ? p_mi : p_mj) << p_ad[3:0];",
+                                                  "wire logic [15:0] p_sh = (p_d[8] ? p_mj : p_mi) << p_ad[3:0];")],
+     'sticmob', None),
+    ('coll_pair_15', 'intv_stic.sv', [("p_ad < 9'd16 &&", "p_ad < 9'd15 &&")], 'sticmob', None),
+    ('coll_sweep_raster_only', 'intv_stic.sv', [("wire logic g_last  = g_ly == 9'd403;",
+                                                 "wire logic g_last  = g_ly == 9'd215;")], 'sticmob', None),
+    ('coll_border_bottom_p1', 'intv_stic.sv', [("&& g_ly <= 9'd215;", "&& g_ly <= 9'd216;")], 'sticmob', None),
+    ('coll_border_top_m1', 'intv_stic.sv', [("g_ly >= (cbr[1] ? 9'd40 : 9'd24)", "g_ly >= (cbr[1] ? 9'd40 : 9'd23)")],
+     'sticmob', None),
+    ('coll_border_col160_inside', 'intv_stic.sv', [("u_xs + 10'(k) <= 10'(PF_X0 + 158);",
+                                                    "u_xs + 10'(k) <= 10'(PF_X0 + 159);")], 'sticmob', None),
+    ('coll_border_left_ext_off', 'intv_stic.sv', [("(cbr[0] ? 10'd8 : 10'd0)", "10'd0")], 'sticmob', None),
+    ('coll_border_needs_intr_off', 'intv_stic.sv', [("if (u_x[8] && g_bord)", "if (g_bord)")], 'sticmob', None),
+    ('coll_no_clear', 'intv_stic.sv', [("                    coll_p[i] <= 10'd0;\n", "")], 'sticmob', None),
+    ('coll_not_sticky', 'intv_stic.sv', [("r[6'h18 + 6'(i)] <= r[6'h18 + 6'(i)] | (14'(coll_p[i]) & keep(6'h18 + 6'(i)));",
+                                          "r[6'h18 + 6'(i)] <= 14'(coll_p[i]) & keep(6'h18 + 6'(i));")],
+     'sticmob', None),
+    ('coll_cpu_write_kept', 'intv_stic.sv', [("            if (we && open) begin\n                if (n < 6'(NREG))\n",
+                                              "            if (we && open) begin\n                if (n < 6'(NREG) && !(n >= 6'h18 && n < 6'h20 && wdata[9:0] == 10'd0))\n")],
+     'sticmob', None),
+    # state port: the new words (the sweep, its masks, the line masks, the
+    # gathered bits) left out of the restore
+    ('ss_sweep_lost', 'intv_stic.sv', [("8'h37: {g_on, g_ph, g_f, g_j, g_m, g_ly} <= ss_wdata[17:0];", "8'h37: ;")],
+     'sticmob', ['rt6', 'rt8']),
+    ('ss_sweep_masks_lost', 'intv_stic.sv', [("8'h38, 8'h39, 8'h3A, 8'h3B: {gm[{ss_w[1:0], 1'b1}], gm[{ss_w[1:0], 1'b0}]} <= ss_wdata;",
+                                              "8'h38, 8'h39, 8'h3A, 8'h3B: ;")], 'sticmob', ['rt8']),
+    ('ss_line_masks_lost', 'intv_stic.sv', [("8'h3C, 8'h3D, 8'h3E, 8'h3F: {rm[{ss_w[1:0], 1'b1}], rm[{ss_w[1:0], 1'b0}]} <= ss_wdata;",
+                                             "8'h3C, 8'h3D, 8'h3E, 8'h3F: ;")], 'sticmob', ['rt7']),
+    ('ss_coll_lost', 'intv_stic.sv', [("8'h40: {coll_p[2], coll_p[1], coll_p[0]} <= ss_wdata[29:0];", "8'h40: ;")],
+     'sticmob', ['rt6', 'rt7']),
 ]
 
 
@@ -913,13 +1089,14 @@ def main():
                     f.write(img)
             execs[name] = ex
             exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode)
+            exps[name].name = name
             e = exps[name]
             print('model %s (STIC mode %s): %d bus phases, %d step starts, %d latch changes in %d cycles; '
                   '%d pictures with the display on, %d rows loaded, %d missed' % (
                       name, smode, len(e.blog), len(e.steps), len(e.mlog), e.ncyc,
                       sum(1 for x in e.bus.vid.stats if x['enabled']),
-                      sum(1 for g, _ in e.sinfo.values() for f in g if f[1]),
-                      sum(1 for g, _ in e.sinfo.values() for f in g if not f[1])))
+                      sum(1 for g, *_ in e.sinfo.values() for f in g if f[1]),
+                      sum(1 for g, *_ in e.sinfo.values() for f in g if not f[1])))
             if prog == 'sticbus.asm':
                 # the row-load deadline: BUSAK exactly at R + 57 loads, at R + 58 misses
                 dl = [(d, ok) for _, _, d, ok in e.bus.deadline]
@@ -929,6 +1106,14 @@ def main():
                     '' if not miss else ' FAIL: missing %s' % miss))
                 if miss or any((d <= 0) != ok for d, ok in dl):
                     fails.append('STICBUS_DEADLINE')
+            if prog == 'sticmob.asm':
+                # the STIC test checks itself (sysram $0303 fails, $0306 passes)
+                ram = e.snaps[e.ncyc]['sysram']
+                ok = ram[0x103] == 0 and ram[0x106] >= 1
+                print('  sticmob self-check: %d passes, %d fails%s' % (
+                    ram[0x106], ram[0x103], '' if ok else ' (last in frame %d) FAIL' % ram[0x105]))
+                if not ok:
+                    fails.append('STICMOB_SELFCHECK')
             if prog == 'systest.asm':
                 p7 = check_sect7(e, pr.symbols)
                 print('  systest section 7: %s' % ('every probe in its slot' if not p7 else '; '.join(p7)))

@@ -20,6 +20,23 @@ to `sim/work*` and are not committed.
   synthetic cartridges (`tools/synth_image.py`: a word pattern whose CRC32
   is forced to a table entry, layout 25 with 8-bit RAM at $8800 and layout
   26 with paged ROM at $F000) as "cartram" and "cartpaged".
+- `sticbus.asm`: step 4, the STIC test for backgrounds and BUSRQ (EXEC
+  slot): every card kind, delays and border extension per frame, late
+  display enables, a frame without INTAK, missed row fetches and the
+  row-load deadline (see its header). `tb_system.py` runs it as
+  "sticbus" (STICBUS_DEADLINE).
+- `sticmob.asm`: step 5, the STIC test for MOBs and collisions (EXEC
+  slot, ROMW 10). 18 scenes, one a frame, set up in VBlank from a table
+  (flags, the 24 MOB registers, the 8 expected collision words): every
+  size and flip, YRES with an odd card (M1), GROM cards 64-255 in both
+  modes (M2), MOB order with PRIO (M3), the delay strip (M4), squares
+  colour 7 (M5), X = 0, invisible MOBs, each border edge just inside and
+  just outside (with delays and border extension), MOBs off the raster,
+  sticky bits. The next frame's ISR reads $18-$1F, counts differences
+  from the expected words (System RAM $0303), and shows green or red in
+  the border. Under MAME's rules (tools/stic.py `mob_rules`) it counts 5
+  fails (M1, M4, M5). `tb_system.py` runs it as "sticmob"
+  (STICMOB_SELFCHECK).
 - With ROMW 10 the EXEC ROM keeps 10 bits, so an address above $3FF must
   go through a pointer register; `tb_system.py` refuses a program with a
   word over 10 bits.

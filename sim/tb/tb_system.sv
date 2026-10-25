@@ -1,4 +1,4 @@
-// Step 3-4 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
+// Step 3-5 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
 // fabric, RAMs, the STIC, the PSG register stub) with the real timing
 // (intv_timing) and cartridge side (intv_media and our SRAM model), running
 // the EXEC with or without a cartridge. The bench writes what the bus does,
@@ -49,6 +49,9 @@
 //   GW c w0 .. w19      the row just loaded (BACKTAB words)
 //   C c r col k base    the card engine at the first line of card row r:
 //                       k 0 GROM, 1 GRAM (base = card address), 2 squares
+//   K c b0 .. b7        the frame's end (cycle c): the collision bits the
+//                       frame gathered for MOBs 0-7 (hex; ORed into
+//                       $18-$1F now)
 //   H k hb nb hs ns     +bushash: frame k's B lines (hb, count nb) and S
 //                       lines (hs, ns), FNV-1a over 32-bit words: B c ph a
 //                       d, S c r0 .. r7 f; S lines of cycle 0 are left out
@@ -245,6 +248,10 @@ module tb_system;
                 for (int i = 0; i < 19; i++) $fwrite(fd, " %04x", dut.stic.rowbuf.mem[i]);
                 $fwrite(fd, " %04x\n", dut.stic.cp_w);
             end
+            if (dut.stic.frame_end)
+                $fdisplay(fd, "K %0d %03x %03x %03x %03x %03x %03x %03x %03x", cyc,
+                          dut.stic.coll_p[0], dut.stic.coll_p[1], dut.stic.coll_p[2], dut.stic.coll_p[3],
+                          dut.stic.coll_p[4], dut.stic.coll_p[5], dut.stic.coll_p[6], dut.stic.coll_p[7]);
             if (ce_stic && dut.stic.eng_card && dut.stic.rstart)
                 $fdisplay(fd, "C %0d %0d %0d %0d %0d", cyc, dut.stic.yy_t[8:4], dut.stic.ec[4:0],
                           dut.stic.squares ? 2 : dut.stic.w[11] ? 1 : 0,
@@ -309,7 +316,7 @@ module tb_system;
     // module id, word count (the order is the write order)
     localparam int NMOD = 13;
     int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 55, 14, 256, 256, 96, 256, 256, 21, 20, 64};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 14, 256, 256, 96, 256, 256, 21, 20, 64};
     logic [31:0] saved [NMOD][256];
     logic [3:0]  pbuf_saved [2][45360];
 
@@ -434,7 +441,7 @@ module tb_system;
         for (int i = 0; i < 32; i++)
             dut.stic.rowbuf.mem[i] = 14'(~(i < 20 ? saved[11][i] : 0) ^ 32'(i * 911));
         for (int i = 0; i < 64; i++)
-            dut.stic.linebuf.mem[i] = 16'(~saved[12][i] ^ 32'(i * 40503));
+            dut.stic.linebuf.mem[i] = 18'(~saved[12][i] ^ 32'(i * 40503));
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_write(mod_id[m], w, ~saved[m][w] ^ (32'h9E3779B9 * (w + 1)));
@@ -515,6 +522,11 @@ module tb_system;
                           timing.mpos);
                 $fdisplay(fd, "R stic: row copy %0d word %0d, CPU in BUSAK %0d, hcnt %0d, card engine %0d",
                           dut.stic.cp_on, dut.stic.cp_j, dut.stic.busak, hcnt, dut.stic.eng_card);
+                $fdisplay(fd, "R mobs: sweep %0d line %0d %s %0d/%0d phase %0d, masks of the next line %0d",
+                          dut.stic.g_on, dut.stic.g_ly, dut.stic.g_f ? "fetch" : "pair", dut.stic.g_m,
+                          dut.stic.g_j, dut.stic.g_ph,
+                          (dut.stic.rm[0] | dut.stic.rm[1] | dut.stic.rm[2] | dut.stic.rm[3] |
+                           dut.stic.rm[4] | dut.stic.rm[5] | dut.stic.rm[6] | dut.stic.rm[7]) != 16'd0);
                 save_all();
                 $fdisplay(fd, "R mark");
                 restore_all(rt);

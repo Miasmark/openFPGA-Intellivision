@@ -26,7 +26,10 @@ simulator and comes first. Python 3, standard library only.
   any extra lump of cycles at an interrupt (`--max-lump`, default 0).
   Needs the user's BIOS, game images and traces, which stay outside the
   repo.
-- `mapper/`: cartridge mapper model and the CRC map table generator (to come).
+- `mapper/`: cartridge mapper model and the CRC map table generator.
+  Entry points: `gen_crc_table.py` (builds `data/cart_table.csv`, `data/layouts.json`
+  and `src/fpga/core/tables/cart_*.mif|hex`) and `intv_mapper.py` (the model and
+  the library check). See `mapper/README.md`.
 - `refs/`: scripts that build and drive MAME and jzIntv as black-box
   references (traces, snapshots). Their outputs are never committed.
 

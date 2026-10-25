@@ -95,6 +95,9 @@ The first fit of step 1 (seed 1): 656 ALMs of 18,480, 3 M10K, 1 DSP;
 worst setup +3.537 ns (`clk_74a`), `clk_sys` +12.999 ns, `clk_vid`
 +15.690 ns (the `clk_sys` -> `clk_vid` crossing), worst hold +0.139 ns
 (`clk_74a`, fast 0 C model).
+With the free-running raster (seed 1): 705 ALMs, 3 M10K, 1 DSP; worst
+setup +2.840 ns (`clk_74a`), `clk_sys` +13.264 ns, `clk_vid` +15.011 ns,
+worst hold +0.120 ns (`clk_74a`, fast 0 C model).
 
 ## Simulation
 
@@ -105,13 +108,21 @@ VERILATOR=/opt/verilator-5.040/bin/verilator ~/daria_work/bin/simslot sim/tb/run
 `tb_timing` (step 1) runs `intv_timing`, `test_pattern` and `pocket_video`
 with `clk_sys` and `clk_vid` as the PLL makes them. It checks, per frame:
 228 x 262 pixel clocks, 14,934 CPU and 29,868 PSG enables at fixed pixel
-phases, 59.92275 Hz between the Pocket's VS pulses, 262 HS pulses, the
+phases, 59.92275 Hz between the Pocket's VS pulses, 262 HS pulses, HS to HS
+always 228 pixel clocks and DE always at the same distance after HS, the
 active window of each scaler mode (160 x 192, 167 x 210), the slot index
-after each line, the test pattern's pixels, and the state port: frozen
-counters, a restore into a second instance that then runs in lockstep for a
-frame. `--all` runs both scaler modes at three `clk_vid` phases and then
-three planted faults (263 lines, a wrong palette entry, a state word that
-loses a counter), each of which must fail.
+after each line, the test pattern's pixels, and the state port. The machine
+is frozen 40 lines from mid-frame and 300 lines from VBlank, restored to
+another position, and a saved word is restored into a second instance whose
+raster is at another phase: the raster (and so HS / VS / DE) runs on
+unchanged throughout, the picture is black while the machine is frozen,
+the machine resumes on exactly its saved clk_sys and loses whole frames
+only, and the restored copy replays the same machine enables for a frame.
+`--all` runs both scaler modes at three `clk_vid` phases and then six
+planted faults (263 lines, a wrong palette entry, a state word that loses
+a counter, the raster stopped by the freeze, the machine resuming at once
+instead of at its position, no blanking while frozen), each of which must
+fail.
 
 ## Checks
 

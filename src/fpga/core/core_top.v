@@ -659,7 +659,7 @@ end
 // Timing, picture and video
 ////////////////////////////////////////////////////////////////////////////////
 
-    wire            ce_pix, ce_psg, ce_cpu;
+    wire            ce_pix, live, ce_stic, ce_psg, ce_cpu;
     wire    [8:0]   hcnt, vcnt, vline;
     wire    [31:0]  ss_rdata_timing;
 
@@ -668,11 +668,13 @@ intv_timing timing (
     .reset      ( timing_reset ),
     .run        ( 1'b1 ),
     .ce_pix     ( ce_pix ),
-    .ce_psg     ( ce_psg ),
-    .ce_cpu     ( ce_cpu ),
     .hcnt       ( hcnt ),
     .vcnt       ( vcnt ),
     .vline      ( vline ),
+    .live       ( live ),
+    .ce_stic    ( ce_stic ),
+    .ce_psg     ( ce_psg ),
+    .ce_cpu     ( ce_cpu ),
     .ss_addr    ( 16'd0 ),
     .ss_we      ( 1'b0 ),
     .ss_wdata   ( 32'd0 ),
@@ -699,6 +701,7 @@ pocket_video video (
     .hcnt       ( hcnt ),
     .vline      ( vline ),
     .border_on  ( border_s[1] ),
+    .blank      ( !live ),
     .in_pf      ( in_pf ),
     .pf_x       ( pf_x ),
     .pf_y       ( pf_y ),

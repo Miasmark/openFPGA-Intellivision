@@ -3,8 +3,9 @@
 // Everything in the machine runs on clk_sys = 12 x the master clock
 // (DESIGN.md 2.3: NTSC 42.954545 MHz = 12 x 3.579545 MHz) with clock
 // enables made here:
-//   ce_pix  every 12 clk_sys   one STIC pixel = one master clock
-//                              (279.4 ns; Mattel service manual p.60)
+//   ce_pix  every 12 clk_sys   one pixel clock of the raster = one master
+//                              clock (279.4 ns; Mattel service manual p.60)
+//   ce_stic                    the same, for the machine (the STIC advance)
 //   ce_psg  every 24 clk_sys   PSG clock, master / 2 (MAME intv.cpp:470)
 //   ce_cpu  every 48 clk_sys   one CP1610 microcycle, master / 4
 //                              (MAME intv.cpp:445)
@@ -19,14 +20,35 @@
 // frame, where the CPU's interrupt begins: jzIntv interrupts.txt, MAME
 // stic.h:50). The Pocket's frame starts at line V_VS instead, so vline is
 // vcnt moved by V_VS, wrapping at the frame end: the video windows in
-// pocket_video_timing are counted in vline and need no wrap of their own.
+// pocket_video are counted in vline and need no wrap of their own.
 // Every line/frame figure is a parameter, because PAL differs (DESIGN.md
 // 2.4: probably 256 pixel clocks x 312 lines; not built until step 12).
 //
-// Save state (DESIGN.md 4.3): one state word holds every counter. While
-// run is low nothing advances (the freeze of DESIGN.md 4.2), and a state
-// write loads the counters. ss_rdata is 0 unless this module is addressed,
-// so ports can be OR-combined.
+// Raster and machine. The raster (sub, hcnt, vcnt and ce_pix) never stops:
+// it drives the Pocket's video port, whose HS / VS / DE must stay periodic
+// whatever the machine does, or the scaler loses sync. The machine has its
+// own position, mpos, the raster position at which it takes its next
+// clk_sys. While the machine runs it is aligned (mpos follows the raster
+// and equals it on every clk_sys), live is 1 and ce_stic / ce_psg / ce_cpu
+// fire with the raster. run = 0 freezes the machine (DESIGN.md 4.2): mpos
+// holds, the machine enables stop, live is 0 and pocket_video blanks the
+// picture, while the raster runs on. When run is 1 again, the machine waits
+// until the raster comes round to mpos and then resumes on exactly that
+// clk_sys, so it loses whole frames only and the raster never jumps. The
+// freeze lands in VBlank (DESIGN.md 4.2), so the wait is at most one frame
+// and resumes in VBlank too. While live, the raster's hcnt / vcnt are the
+// machine's position, so the STIC and the CPU may use them under their
+// enables; while not live they must not act on them.
+//
+// Save state (DESIGN.md 4.3): one state word, the machine's position mpos.
+// A state write loads mpos only, never the raster: the machine is then out
+// of line with the raster (live = 0) and resumes, as after a freeze, when
+// the raster reaches the loaded position, so a restore keeps the video
+// sync continuous too. ss_rdata is 0 unless this module is addressed, so
+// ports can be OR-combined. The caller (ss_ctl, step 7) writes only while
+// the machine is frozen, and only positions inside the frame: one outside
+// it (hcnt >= H_TOTAL, ...) is never reached and the machine would not
+// resume.
 //   word 0: [3:0] sub (clk_sys within the pixel), [12:4] hcnt, [21:13] vcnt
 //
 // SPDX-License-Identifier: MIT
@@ -41,15 +63,20 @@ module intv_timing #(
     parameter logic [7:0] SS_ID     = 8'h01   // save-state module id
 ) (
     input  wire logic        clk,             // clk_sys
-    input  wire logic        reset,           // synchronous, counters to 0
-    input  wire logic        run,             // 0 = frozen
+    input  wire logic        reset,           // synchronous, raster and machine to 0
+    input  wire logic        run,             // 0 = machine frozen
 
+    // the raster, free-running
     output logic             ce_pix,
-    output logic             ce_psg,
-    output logic             ce_cpu,
     output logic [8:0]       hcnt,            // 0 .. H_TOTAL-1
     output logic [8:0]       vcnt,            // 0 .. V_TOTAL-1, 0 = vblank start
     output logic [8:0]       vline,           // (vcnt - V_VS) mod V_TOTAL
+
+    // the machine
+    output logic             live,            // running and aligned to the raster
+    output logic             ce_stic,
+    output logic             ce_psg,
+    output logic             ce_cpu,
 
     // state port
     input  wire logic [15:0] ss_addr,         // [15:8] module id, [7:0] word
@@ -60,7 +87,8 @@ module intv_timing #(
     output logic [31:0]      ss_rdata
 );
 
-    logic [3:0] sub = 4'd0;
+    logic [3:0]  sub = 4'd0;
+    logic [21:0] mpos = 22'd0;                // {vcnt, hcnt, sub} of the machine
 
     initial begin
         hcnt = 9'd0;
@@ -71,32 +99,42 @@ module intv_timing #(
     wire logic line_end = hcnt == 9'(H_TOTAL - 1);
     wire logic ss_hit   = ss_addr[15:8] == SS_ID && ss_addr[7:0] == 8'd0;
 
-    assign ce_pix = run && sub_end;
-    assign ce_psg = ce_pix && hcnt[0];
-    assign ce_cpu = ce_pix && hcnt[1:0] == 2'd3;
+    // the raster's next position
+    wire logic [3:0] sub_n  = sub_end ? 4'd0 : sub + 4'd1;
+    wire logic [8:0] hcnt_n = !sub_end ? hcnt : line_end ? 9'd0 : hcnt + 9'd1;
+    wire logic [8:0] vcnt_n = !(sub_end && line_end) ? vcnt
+                            : vcnt == 9'(V_TOTAL - 1) ? 9'd0 : vcnt + 9'd1;
+
+    assign live    = run && {vcnt, hcnt, sub} == mpos;
+    assign ce_pix  = sub_end;
+    assign ce_stic = live && sub_end;
+    assign ce_psg  = ce_stic && hcnt[0];
+    assign ce_cpu  = ce_stic && hcnt[1:0] == 2'd3;
 
     always_ff @(posedge clk) begin
         if (reset) begin
             sub  <= 4'd0;
             hcnt <= 9'd0;
             vcnt <= 9'd0;
-        end else if (ss_we && ss_hit) begin
-            sub  <= ss_wdata[3:0];
-            hcnt <= ss_wdata[12:4];
-            vcnt <= ss_wdata[21:13];
-        end else if (run) begin
-            sub <= sub_end ? 4'd0 : sub + 4'd1;
-            if (sub_end) begin
-                hcnt <= line_end ? 9'd0 : hcnt + 9'd1;
-                if (line_end)
-                    vcnt <= vcnt == 9'(V_TOTAL - 1) ? 9'd0 : vcnt + 9'd1;
-            end
+        end else begin          // the raster never stops
+            sub  <= sub_n;
+            hcnt <= hcnt_n;
+            vcnt <= vcnt_n;
         end
+    end
+
+    always_ff @(posedge clk) begin
+        if (reset)
+            mpos <= 22'd0;
+        else if (ss_we && ss_hit)
+            mpos <= ss_wdata[21:0];
+        else if (live)
+            mpos <= {vcnt_n, hcnt_n, sub_n};
     end
 
     assign vline = vcnt >= 9'(V_VS) ? vcnt - 9'(V_VS) : vcnt + 9'(V_TOTAL - V_VS);
 
-    assign ss_rdata = ss_hit ? {10'd0, vcnt, hcnt, sub} : 32'd0;
+    assign ss_rdata = ss_hit ? {10'd0, mpos} : 32'd0;
 
     // The CPU and PSG enables assume whole CPU cycles per line.
     initial begin

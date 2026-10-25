@@ -23,6 +23,10 @@
 // the active pixels, and the first pixel after a line's active pixels
 // carries the scaler slot in rgb[23:13].
 //
+// While the machine is frozen (blank = 1, intv_timing's live = 0) the
+// active pixels are black: the windows, the slot word and HS / VS / DE run
+// on unchanged with the free-running raster, so the scaler keeps its sync.
+//
 // Clocks: the pixel stream is built on clk_sys at ce_pix and holds for
 // the 12 clk_sys of a pixel. clk_vid (= clk_sys / 12, the same PLL VCO,
 // rising edges on clk_sys's) samples it once per pixel into the output
@@ -48,6 +52,7 @@ module pocket_video #(
     input  wire logic [8:0]  hcnt,
     input  wire logic [8:0]  vline,
     input  wire logic        border_on,   // 1: border window (slot 1), 0: playfield (slot 0)
+    input  wire logic        blank,       // 1: active pixels black (machine frozen)
 
     // to the picture source, for the current pixel
     output logic             in_pf,
@@ -95,7 +100,7 @@ module pocket_video #(
             p_hs  <= hcnt == 9'(HS_X);
             p_vs  <= hcnt == 9'd0 && vline == 9'd0;
             if (de_now)
-                p_rgb <= pal_rgb;
+                p_rgb <= blank ? 24'd0 : pal_rgb;
             else if (p_de)
                 p_rgb <= {8'd0, 2'd0, border_on, 13'd0};   // scaler slot 0 or 1
             else

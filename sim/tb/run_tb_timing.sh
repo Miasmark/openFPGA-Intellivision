@@ -3,7 +3,7 @@
 #   sim/tb/run_tb_timing.sh [plusargs...]   one run, e.g. +border=0 +vidph=5
 #   sim/tb/run_tb_timing.sh --all            the step-1 gate: border 0 and 1 at
 #                                            clk_vid phases 0, 5 and 11, then
-#                                            three planted faults the bench
+#                                            six planted faults the bench
 #                                            must catch
 # VERILATOR (default: verilator on PATH) picks the binary; WORK (default
 # sim/work/tb_timing) the build directory. On the owner's VM, run it in a
@@ -64,7 +64,13 @@ plant() {
 }
 plant lines263 intv_timing.sv "parameter int         V_TOTAL   = 262" "parameter int         V_TOTAL   = 263"
 plant blue intv_palette.sv "24'h002DFF" "24'h002DFE"
-plant ss_sub intv_timing.sv "            sub  <= ss_wdata[3:0];" "            sub  <= 4'd0;"
+plant ss_sub intv_timing.sv "            mpos <= ss_wdata[21:0];" "            mpos <= {ss_wdata[21:4], 4'd0};"
+# the raster gated by run (the step-1 commit's behaviour): sync stops in a freeze
+plant raster_run intv_timing.sv "        end else begin          // the raster never stops" "        end else if (run) begin"
+# the machine resumes at once instead of at its saved position
+plant nophase intv_timing.sv "    assign live    = run && {vcnt, hcnt, sub} == mpos;" "    assign live    = run;"
+# the picture not blanked while frozen
+plant noblank pocket_video.sv "p_rgb <= blank ? 24'd0 : pal_rgb;" "p_rgb <= pal_rgb;"
 
 echo "TB_TIMING_ALL $([ $rc = 0 ] && echo pass || echo FAIL)"
 exit $rc

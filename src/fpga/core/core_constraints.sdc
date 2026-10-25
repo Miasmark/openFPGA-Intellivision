@@ -11,8 +11,9 @@
 # clk_vid (core/pocket_video.sv) with one clk_sys period of setup, the
 # tightest edge pair. Everything else is asynchronous to them.
 #
-# The PLL is not reconfigurable, so derive_pll_clocks names its outputs
-# general[n].gpll~PLL_OUTPUT_COUNTER|divclk; the wildcard takes all four.
+# derive_pll_clocks names the outputs
+# ic|pll|altera_pll_i|cyclonev_pll|counter[n].output_counter|divclk
+# (the fit's STA report); the wildcard takes all four.
 
 set core_clks {ic|pll|altera_pll_i|*|divclk}
 

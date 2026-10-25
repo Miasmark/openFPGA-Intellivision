@@ -8,7 +8,7 @@ to `sim/work*`.
 | `tb_timing.sv` | 1: timing, video port, timing state port | `sim/tb/run_tb_timing.sh --all` |
 | `tb_loader.sv` | 2: loader, CRC table, page table, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` |
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
-| `tb_system.sv` | 3-4: the machine (CPU, bus fabric, RAMs, STIC, PSG stub) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; step 4's frame gate `--screens` |
+| `tb_system.sv` | 3-5: the machine (CPU, bus fabric, RAMs, STIC, PSG stub) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-5) `--screens` |
 
 `tb_loader.py` builds `tb_loader.sv` with the real `core_bridge_cmd.v`,
 agg23's `data_loader.sv`, `apf_datatable.sv` and `intv_media.sv`, plus our
@@ -66,7 +66,9 @@ every step start, every change of the STIC handshake and mode latch with
 its cycle, and the RAMs, STIC and PSG registers, latches and page selects
 at two dumps (cycle 82,670 and the end); every run must match all of it.
 For systest it also checks that the section-7 probes land in their frame
-slots (3788-3791 and INTRM's last sample). Four runs per image: straight,
+slots (3788-3791, INTRM's last sample and, from step 5, a write to $18 in
+a display-off frame's last slot, 14,933, where the STIC ORs in the frame's
+collision bits). Four runs per image: straight,
 and three save/restore round trips (DESIGN 8.4): into a reset machine at
 the last cartridge read (or in VBlank), over the state 20,000 cycles later
 (the run rewinds), and into a reset machine outside VBlank; before every
@@ -125,7 +127,7 @@ frame's latches, the next pixel, the colour-stack position or its row
 start lost), some of them on the frame gate's games (`('screen', name,
 pictures)`).
 
-`--screens` is step 4's frame gate (DESIGN 9 step 4; SCREENS): the EXEC
+`--screens` is the frame gate (DESIGN 9 steps 4 and 5; SCREENS): the EXEC
 without a cartridge (600 pictures) and with Astrosmash (its title screen,
 700), Tower of Doom (700), Diner (300), Dig Dug (700), Sewer Sam (300)
 and TRON Solar Sailer (700), as far as the MAME snapshots the model was
@@ -133,3 +135,33 @@ checked against (docs/STIC_NOTES.md 3). The bench runs with `+bushash=1`
 (one hash a frame of its B and S lines instead of the lines) while the
 model runs beside it; every picture, row fetch, card row and per-frame
 bus hash must be equal.
+
+Step 5 (MOBs and collisions, `intv_stic.sv`; docs/STIC_NOTES.md 6). The
+model runs with its MOBs on (`STIC_MOBS = True`; `False` gives step 4's
+backgrounds only). Pictures now include the MOBs, and the bench writes a K
+line at every frame's end with the collision bits the frame gathered
+(ORed into $18-$1F then), compared with the model's per frame; the CPU's
+reads of $18-$1F are in the bus lines (or the per-frame hash). Two more
+round trips on every image with MOBs: rt6 restores into a reset machine
+inside the collision sweep (3 lines after the VBlank window), rt7 rewinds
+to a state taken inside a line's MOB fetch (pixel clocks 196-203) on a
+line covered by a MOB; for sticmob, rt8 restores into a reset machine at
+the start of the sweep's pairs for the one line where two of its MOBs
+overlap (`sweep_clock` gives the clk_sys); the R lines say where they
+landed. Image
+`sticmob` runs `sim/testroms/sticmob.asm` (46 frames: 22 scenes, two
+passes), which checks its own collision reads against the hardware rules
+(STICMOB_SELFCHECK: the model's run must end with 0 fails). `--all` adds
+37 MOB plants (flips, sizes, YRES, position, X = 0, order, PRIO, pastel,
+invisible drawn, M1, M2, M4, M5, background, INTR, border edges, pairs, the
+sweep's range, the bits' clear and stickiness, the CPU's clear; state
+port: sweep, sweep masks, line masks, gathered bits), and from the step-5
+review 17 more: the background-collision area's edges (bottom line, right
+column, left and top edges with border extension), YFLIP with YRES, the
+sweep's first line and last row, pairs needing VISB or ignoring INTR, the
+sweep ignoring its port turn, XFLIP with XSIZE, VDR or HDR ignored for
+MOBs, the border test moved or not moved by HDR, MAME's PRIO-first order,
+and the frame's end dropping a CPU write to $18-$1F (systest p11): 128
+plants in all. `--screens` adds
+the ten MOB games of docs/STIC_NOTES.md 5.4 (700 pictures each, MTE201
+900).

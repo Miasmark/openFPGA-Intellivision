@@ -1,7 +1,8 @@
 #!/bin/bash
 # build_jzintv.sh SRC_ZIP WORK_DIR
-# Build the jzIntv emulator binary from its official source zip, to run as
-# a black-box reference only. Its sources are GPL-2 and are never read or
+# Build the jzIntv emulator binary and its movie expander imvtoppm (used by
+# jzintv_frames.py) from the official source zip, to run as a black-box
+# reference only. Its sources are GPL-2 and are never read or
 # copied for this project (clean room, DESIGN.md section 1); only its
 # Makefile flags were looked at to build it.
 # Official download: http://spatula-city.org/~im14u2c/intv/dl/jzintv-20200712-src.zip
@@ -16,5 +17,5 @@ work=$(cd "$work" && pwd)
 printf '/* build shim: glibc dropped termio.h */\n#include <termios.h>\n#include <sys/ioctl.h>\n' > "$work/shim/termio.h"
 cd "$work/src-tree/jzintv-20200712-src/src"
 nice -n 10 make -f Makefile.linux_sdl2 -j4 GNU_READLINE=0 \
-  CC="gcc -std=gnu99 -I$work/shim" CXX="g++ -std=c++14 -I$work/shim" ../bin/jzintv
-ls -l ../bin/jzintv
+  CC="gcc -std=gnu99 -I$work/shim" CXX="g++ -std=c++14 -I$work/shim" ../bin/jzintv ../bin/imvtoppm
+ls -l ../bin/jzintv ../bin/imvtoppm

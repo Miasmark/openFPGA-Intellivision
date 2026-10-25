@@ -12,14 +12,18 @@ outside this repository and is never committed (DESIGN.md section 1).
 | `mame_trace.sh SYS IMAGE FRAMES OUT` | per-instruction CPU trace with every bus read and write and the interrupts, from reset; IMAGE `none` for an empty cartridge slot |
 | `trace_summary.py TRACE...` | parses a trace; prints counts and a sha256 only |
 | `mame_snap.sh SYS IMAGE FRAME OUT` | one PNG snapshot at the end of a frame |
+| `mame_exec_prog.sh PROG FRAMES OUT [WORDS]` | one of our test programs (EXEC-slot image, e.g. sticmob) in place of the EXEC, no cartridge; logs chosen System RAM words every frame |
+| `mame_cart_prog.sh CART FRAMES OUT [WORDS] [SNAPS]` | one of our test programs built as a cartridge (e.g. `sim/testroms/sticmob_cart.py`'s image) with the real EXEC; logs chosen System RAM words and the ISR vector every frame, every CPU read of $18-$1F with sticmob's scene, and snapshots at chosen frames |
 | `build_jzintv.sh ZIP DIR` | jzIntv from its official source zip (run only; GPL-2 source never read) |
 | `jzintv_run.sh IMAGE N OUT [flags]` | jzIntv headless for N instructions, then one screenshot |
+| `jzintv_frames.py capture/compare/stolen` | jzIntv's every frame from reset (movie, expanded with its `imvtoppm`) against the model's modes `stic` and `mame`; BUSRQ cycles lost per frame and instruction cycle counts from its debugger step log against mode `stic` (STIC_NOTES section 7); counts only |
 
 ## Environment
 
 ```
 MAME=<build>/mame  MAME_ROMPATH=<rompath>  MAME_HASHPATH=<build>/hash
 JZINTV=<jzintv tree>/bin/jzintv  INTV_BIOS=<folder with exec.bin, grom.bin, ECS.bin>
+JZINTV_BIN=<jzintv tree>/bin   (jzintv_frames.py: jzintv and imvtoppm)
 ```
 
 Both run headless with `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` (the

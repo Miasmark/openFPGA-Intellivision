@@ -38,11 +38,14 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   NEGR carry and its memory map (no GRAM alias above $3BFF, unmapped
   ranges read 0), and with `--timing computed` MAME's 59.92 Hz frames
   computed rather than read from the trace.
-- `stic.py`: the STIC model (build step 4, backgrounds): registers, Color
+- `stic.py`: the STIC model (build steps 4 and 5): registers, Color
   Stack / Colored Squares / Foreground-Background cards from GROM and
   GRAM, border colour, delays and border extension, the display enable,
-  the row FIFO fetches and BUSRQ, one 189 x 240 palette-index picture per
-  frame plus a log of its graphics-bus reads. Modes `none` (step 3,
+  the row FIFO fetches and BUSRQ, the 8 MOBs (sizes, flips, priority,
+  GROM/GRAM cards) and their collision bits, one 189 x 240 palette-index
+  picture per frame plus a log of its graphics-bus reads. MOB rules: MAME's
+  in mode `mame`, the hardware's (S9) in `stic` and `none`; `Stic.mobs =
+  False` draws backgrounds only (the step-4 RTL bench). Modes `none` (step 3,
   default), `stic` (the hardware, BUSRQ on) and `mame` (MAME as it runs).
   In modes `stic` and `none` a picture is what the RTL (`intv_stic.sv`)
   draws: display enable from the end of the VBlank window, border pixels
@@ -51,8 +54,9 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   disagreements: `docs/STIC_NOTES.md`.
 - `stic_frames.py`: the model's pictures against MAME's snapshots:
   `import` (MAME PNG to palette-index PGM, the palette read from MAME's
-  own source; needs Pillow), `run` (pictures, MOB masks, bus logs) and
-  `compare` (snapshot N against picture N - 1, MOB boxes masked).
+  own source; needs Pillow), `run` (pictures, bus logs with MOB lines and
+  collision bits) and `compare` (snapshot N against picture N - 1, every
+  pixel).
 - `cpu_buslog.py`: exports the model's bus-phase log, step ends and
   final registers for the RTL lockstep bench (`sim/tb/tb_cpu.sv`, build
   step 3): every program in `sim/tests/cpu`, a sweep over all 1024

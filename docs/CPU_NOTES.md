@@ -282,8 +282,16 @@ bus phase per `ce` (one CPU cycle). No tristate: a 3-bit phase code
 - **State port** (DESIGN.md 4.3): eight 32-bit words, the 32 bytes of
   DESIGN.md 4.4: R0-R7, the sequence's address and data, opcode, SDBD
   low byte, cycle state and idle counter, the jump/SDBD/halt/branch
-  latches, S Z O C I D, the interruptible latch, both edge latches with
-  their last samples, halt pending and halted. Layout in the file header.
+  latches, S Z O C I D, both edge latches with their last samples, halt
+  pending and halted. Layout in the file header. (Step 3b removed the
+  "last instruction was interruptible" flip-flop that word 6 bit 6 held:
+  every decision uses the value computed in the instruction's last cycle,
+  so the register only fed itself and the state port; bit 6 is reserved
+  and reads 0.)
+- **SIN is interruptible** (row of the disagreement table): an INTRM
+  edge pending with I set is taken right after a SIN;
+  `sim/tests/cpu/irq_sin.asm` checks it in the model and, through
+  `tb_cpu`, in the RTL (plant `sin_noint`).
   Every flip-flop that changes at run time is in it, so a save in any
   cycle restores exactly; `ss_ctl` (step 7) still saves only at a
   quiet point (DESIGN.md 4.2), and the `fetch` output marks an

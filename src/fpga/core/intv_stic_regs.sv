@@ -10,7 +10,10 @@
 //     start of each frame clears it (frame_end, the ce that ends a frame);
 //   - open = vb || !handshake: STIC registers and GRAM (intv_bus) are open
 //     to the CPU; when closed a read gives the address offset, a write is
-//     dropped;
+//     dropped. That includes a write of $20 while closed: closed means the
+//     handshake is already set, so whether such a write sets it again
+//     (MAME's order) cannot show; sim/testroms/systest.asm makes one, but
+//     no bench can tell the two apart;
 //   - a register keeps only the bits it reads back; the others read fixed
 //     (DESIGN 13.7): MXR $3800 | 11 bits, MYR $3000 | 12, MAR 14 bits, MCR
 //     $3C00 | 10 bits (a MOB's own collision bit is never stored), CSR0-3

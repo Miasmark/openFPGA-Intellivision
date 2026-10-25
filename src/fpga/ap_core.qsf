@@ -395,6 +395,8 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to sram_a[9]
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to sram_a[12]
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to sram_a[14]
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to sram_a[16]
+# SRAM read data captured in the I/O input registers (core/core_constraints.sdc)
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to sram_dq[*]
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to port_tran_so_dir
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to clk_74a
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to cart_tran_bank3_dir

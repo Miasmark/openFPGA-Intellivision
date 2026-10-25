@@ -75,8 +75,9 @@
 //          [24:23] cnt (idle cycles left - 1), [25] jpt (jump word 3),
 //          [26] dbd (this instruction follows SDBD), [27] hnow (halt after
 //          this instruction), [28] taken (branch)
-//   word 6 [3:0] S Z O C, [4] I, [5] D, [6] intok (last instruction was
-//          interruptible), [7] intrm request, [8] intrm line last sample,
+//   word 6 [3:0] S Z O C, [4] I, [5] D, [6] reserved (reads 0; whether
+//          the instruction ending may be interrupted is decided in its
+//          last cycle and needs no flip-flop), [7] intrm request, [8] intrm line last sample,
 //          [9] intr request, [10] intr line last sample, [11] halt
 //          pending, [12] halted
 //   word 7 reads 0 (reserved)
@@ -136,7 +137,7 @@ module cp1610 #(
     // ---------------------------------------------------------------- state
     logic [15:0] r [0:7];
     logic        fS, fZ, fO, fC, fI, fD;
-    logic        intok, intrm_req, intrm_prev, intr_req, intr_prev;
+    logic        intrm_req, intrm_prev, intr_req, intr_prev;
     logic        hpend, hlt;
     st_t         st;
     logic [1:0]  cnt;
@@ -148,7 +149,8 @@ module cp1610 #(
     // next values
     logic [15:0] r_n [0:7];
     logic        fS_n, fZ_n, fO_n, fC_n, fI_n, fD_n;
-    logic        intok_n, intrm_req_n, intrm_prev_n, intr_req_n, intr_prev_n;
+    logic        intok_n;                // the instruction ending is interruptible
+    logic        intrm_req_n, intrm_prev_n, intr_req_n, intr_prev_n;
     logic        hpend_n, hlt_n;
     st_t         st_n;
     logic [1:0]  cnt_n;
@@ -332,7 +334,7 @@ module cp1610 #(
 
         for (int k = 0; k < 8; k++) r_n[k] = r[k];
         fS_n = fS; fZ_n = fZ; fO_n = fO; fC_n = fC; fI_n = fI; fD_n = fD;
-        intok_n = intok;
+        intok_n = 1'b0;
         intrm_req_n = intrm_req; intrm_prev_n = intrm_prev;
         intr_req_n = intr_req; intr_prev_n = intr_prev;
         hpend_n = hpend; hlt_n = hlt;
@@ -475,7 +477,7 @@ module cp1610 #(
             end
             S_INACT3: begin
                 if (cnt != 2'd0) cnt_n = cnt - 2'd1;
-                else begin intok_n = 1'b0; st_n = S_FBAR; end
+                else st_n = S_FBAR;
             end
 
             S_BUSAK: begin
@@ -548,7 +550,7 @@ module cp1610 #(
             // cleared here, as in the model.
             for (int k = 0; k < 8; k++) r[k] <= 16'd0;
             {fS, fZ, fO, fC, fI, fD} <= 6'd0;
-            {intok, intrm_req, intrm_prev, intr_req, intr_prev} <= 5'd0;
+            {intrm_req, intrm_prev, intr_req, intr_prev} <= 4'd0;
             hpend <= 1'b0; hlt <= 1'b0;
             st <= S_RST; cnt <= 2'd0; ir <= 10'd0; lo <= 8'd0;
             ea <= 16'd0; tmp <= 16'd0;
@@ -568,7 +570,7 @@ module cp1610 #(
                 8'd6: begin
                     {fS, fZ, fO, fC} <= ss_wdata[3:0];
                     {fD, fI} <= ss_wdata[5:4];
-                    {intr_prev, intr_req, intrm_prev, intrm_req, intok} <= ss_wdata[10:6];
+                    {intr_prev, intr_req, intrm_prev, intrm_req} <= ss_wdata[10:7];
                     {hlt, hpend} <= ss_wdata[12:11];
                 end
                 default: ;
@@ -576,8 +578,8 @@ module cp1610 #(
         end else if (ce) begin
             for (int k = 0; k < 8; k++) r[k] <= r_n[k];
             {fS, fZ, fO, fC, fI, fD} <= {fS_n, fZ_n, fO_n, fC_n, fI_n, fD_n};
-            {intok, intrm_req, intrm_prev, intr_req, intr_prev}
-                <= {intok_n, intrm_req_n, intrm_prev_n, intr_req_n, intr_prev_n};
+            {intrm_req, intrm_prev, intr_req, intr_prev}
+                <= {intrm_req_n, intrm_prev_n, intr_req_n, intr_prev_n};
             hpend <= hpend_n; hlt <= hlt_n;
             st <= st_n; cnt <= cnt_n; ir <= ir_n; lo <= lo_n;
             ea <= ea_n; tmp <= tmp_n;
@@ -596,7 +598,7 @@ module cp1610 #(
                 8'd4: ss_rdata = {tmp, ea};
                 8'd5: ss_rdata = {3'd0, taken, hnow, dbd, jpt, cnt, 5'(st), lo, ir};
                 8'd6: ss_rdata = {19'd0, hlt, hpend, intr_prev, intr_req,
-                                  intrm_prev, intrm_req, intok, fD, fI, fS, fZ, fO, fC};
+                                  intrm_prev, intrm_req, 1'b0, fD, fI, fS, fZ, fO, fC};
                 default: ss_rdata = 32'd0;
             endcase
         end

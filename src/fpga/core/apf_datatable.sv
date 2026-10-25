@@ -11,8 +11,24 @@
 //     bytes, which the loader needs (tools/mapper/README.md "The loader's
 //     CRC and length"). cart_len is set one clk_74a before len_valid and
 //     then held, so a clk_sys synchroniser on len_valid alone is enough.
-//     A table without the slot gives length 0 (the loader: no cartridge).
 //     len_valid falls with dataslot_allcomplete (a new slot request).
+//   - latches the size the host gives with "data slot request write"
+//     (0x0082, core_bridge_cmd's dataslot_requestwrite_size) for the
+//     cartridge slot, and checks the table's length against it. No core in
+//     the research corpus reads a file size back from the data table, so
+//     until a Pocket shows both agree (step-1/2 hardware checklist: the
+//     length after the first load and after a user reload of a cartridge of
+//     another size), the core keeps both and says which it used (len_chk,
+//     shown on the test pattern):
+//       0  the table's length; no 0x0082 for the slot was seen
+//       1  the table's length; the 0x0082 size agrees
+//       2  the table's length; the 0x0082 size disagrees (the loader sets
+//          err[4] and the test pattern shows it)
+//       3  the table has no entry for the slot: the 0x0082 size is used
+//     A table without the slot and no 0x0082 for it gives length 0 (the
+//     loader: no cartridge). The 0x0082 size is kept until the next one for
+//     the slot, so a session that does not reload the cartridge checks
+//     against the last load's size.
 //
 // SPDX-License-Identifier: MIT
 
@@ -25,6 +41,9 @@ module apf_datatable #(
 ) (
     input  wire logic        clk,             // clk_74a
     input  wire logic        allcomplete,
+    input  wire logic        wr_req,          // dataslot_requestwrite (0x0082)
+    input  wire logic [15:0] wr_id,
+    input  wire logic [31:0] wr_size,
 
     output logic [9:0]       dt_addr,
     output logic             dt_wren,
@@ -32,6 +51,7 @@ module apf_datatable #(
     input  wire logic [31:0] dt_q,
 
     output logic [31:0]      cart_len,
+    output logic [1:0]       len_chk,         // see above; set with cart_len
     output logic             len_valid
 );
 
@@ -40,15 +60,21 @@ module apf_datatable #(
     logic        ac_d = 1'b0;
     logic [4:0]  i = 5'd0;
     logic [1:0]  w = 2'd0;
+    logic        req_seen = 1'b0;
+    logic [31:0] req_len = 32'd0;
 
     initial begin
         dt_addr = 10'(2 * JLP_IDX + 1); dt_wren = 1'b0; dt_data = 32'd0;
-        cart_len = 32'd0; len_valid = 1'b0;
+        cart_len = 32'd0; len_chk = 2'd0; len_valid = 1'b0;
     end
 
     always_ff @(posedge clk) begin
         ac_d <= allcomplete;
         dt_wren <= 1'b0;
+        if (wr_req && wr_id == SLOT_ID[15:0]) begin
+            req_seen <= 1'b1;
+            req_len  <= wr_size;
+        end
         if (!allcomplete)
             len_valid <= 1'b0;
         case (st)
@@ -73,7 +99,9 @@ module apf_datatable #(
                        w  <= 2'd3;
                        st <= D_SIZEW;
                    end else if (i == 5'(ENTRIES - 1)) begin
-                       cart_len <= 32'd0;            // no cartridge slot in the table
+                       // no cartridge slot in the table: the 0x0082 size, if any
+                       cart_len <= req_seen ? req_len : 32'd0;
+                       len_chk  <= req_seen ? 2'd3 : 2'd0;
                        st <= D_SET;
                    end else begin
                        i  <= i + 5'd1;
@@ -82,6 +110,7 @@ module apf_datatable #(
             D_SIZEW: if (w != 2'd0) w <= w - 2'd1;
                      else begin
                          cart_len <= dt_q;
+                         len_chk  <= !req_seen ? 2'd0 : dt_q == req_len ? 2'd1 : 2'd2;
                          st <= D_SET;
                      end
             D_SET: begin

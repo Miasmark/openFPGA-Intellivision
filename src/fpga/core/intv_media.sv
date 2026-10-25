@@ -39,6 +39,7 @@ module intv_media #(
     input  wire logic [7:0]  ld_data,
     input  wire logic        len_valid,       // clk_74a (apf_datatable)
     input  wire logic [31:0] cart_len,        // held while len_valid is high
+    input  wire logic [1:0]  len_chk,         // apf_datatable, held like cart_len
 
     // CPU bus: cartridge
     input  wire logic        bus_req,
@@ -71,7 +72,8 @@ module intv_media #(
     // status
     output logic             ready,
     output logic             busy,
-    output logic [3:0]       err,
+    output logic [4:0]       err,
+    output logic [1:0]       len_st,          // len_chk of the last load (test pattern)
     output logic [11:0]      slot_st,
     output logic [31:0]      crc,
     output logic [16:0]      words,
@@ -98,8 +100,8 @@ module intv_media #(
 
     localparam logic [16:0] RAM_BASE = 17'h18000;
 
-    // len_valid crosses from clk_74a; cart_len is held from one clk_74a
-    // before it rises (apf_datatable), so it is stable when seen here
+    // len_valid crosses from clk_74a; cart_len and len_chk are held from one
+    // clk_74a before it rises (apf_datatable), so they are stable when seen here
     logic [2:0] lv_s = 3'd0;
     always_ff @(posedge clk) lv_s <= {lv_s[1:0], len_valid};
 
@@ -125,13 +127,13 @@ module intv_media #(
     ) loader (
         .clk(clk), .reset(reset),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data),
-        .len_valid(lv_s[2]), .cart_len(cart_len),
+        .len_valid(lv_s[2]), .cart_len(cart_len), .len_chk(len_chk),
         .m_req(l_req), .m_addr(l_addr), .m_wdata(l_wdata), .m_be(l_be), .m_ack(l_ack),
         .rom_we(rom_we), .rom_wsel(rom_wsel), .rom_waddr(rom_waddr), .rom_wdata(rom_wdata),
         .pt_we(pt_we), .pt_idx(pt_idx), .pt_data(pt_data),
         .res_we(res_we), .res_crc(res_crc), .res_words(res_words),
         .res_layout(res_layout), .res_flags(res_flags), .res_hit(res_hit),
-        .busy(busy), .ready(ready), .err(err), .slot_st(slot_st)
+        .busy(busy), .ready(ready), .err(err), .len_st(len_st), .slot_st(slot_st)
     );
 
     // ---------------------------------------------------------- cartridge

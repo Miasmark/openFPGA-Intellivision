@@ -9,6 +9,8 @@
 //                       byte port as the data slots 2 and 3 would)
 //   +cart=F             a cartridge image (slot 0); without it, no cartridge
 //   +cycles=N           run N CPU cycles from the first fetch (model cycle 0)
+//   +pads=RRLL          the hand controllers' bytes at $01FE (right) and
+//                       $01FF (left), hex (default FFFF: nothing pressed)
 //   +log=F              the output (below)
 //   +dump=C             also freeze after cycle C-1 and dump every state
 //                       word (then run on)
@@ -17,12 +19,18 @@
 //                       C-1 and K more clk_sys, freeze the machine (timing
 //                       run = 0) and read every state word of every module.
 //                       M=1: reset the machine; M=2: run on for R more
-//                       cycles, freeze again and write junk to every word.
-//                       Then write the saved words back, read them back
+//                       cycles, freeze again. Either way then write junk
+//                       straight into the RAM arrays and through the state
+//                       port into every word (a reset keeps RAM contents, so
+//                       without it a RAM that loses its restore writes would
+//                       not show). Then write the saved words back, read them back
 //                       (must be equal) and run on; with M=2 the run goes
 //                       back to cycle C ("R rewind C"). The raster runs
 //                       through it all: the machine resumes when the raster
-//                       comes round to its saved position.
+//                       comes round to its saved position. With a
+//                       cartridge, the 16K cart RAM cells in the SRAM go
+//                       the same way through intv_media's aux port (what
+//                       ss_ctl does at step 7, DESIGN 4.3).
 //
 // Log lines (cycles are model cycles: 0 = the first fetch, after the reset
 // IAB; the bench counts CPU ce's)
@@ -31,6 +39,9 @@
 //                       latched address, d = dout; IAB d = din
 //   S c r0 .. r7 f      a step starts (opcode fetch or INTAK): registers and
 //                       {S,Z,O,C,I,D} in that cycle
+//   M c hs cs           the STIC's handshake or mode latch (csmode) changed:
+//                       their values during cycle c (also once after a
+//                       restore; the reader drops repeats)
 //   L ...               load results;  R ...  round-trip notes
 //   W k id w value      every state word at a dump (k = 1: +dump, 2: the
 //                       end, frozen after cycle N-1)
@@ -58,6 +69,10 @@ module tb_system;
     logic        len_valid = 1'b0;
     logic [31:0] cart_len = 32'd0;
     logic        ss_en = 1'b0;
+    logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
+    logic        aux_req = 1'b0, aux_we = 1'b0;
+    logic [16:0] aux_addr = 17'd0;
+    logic [15:0] aux_wdata = 16'd0;
     logic [15:0] ss_addr = 16'd0;
     logic        ss_we = 1'b0;
     logic [31:0] ss_wdata = 32'd0;
@@ -71,7 +86,7 @@ module tb_system;
         .ce_psg, .ce_cpu, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_t));
 
     wire logic        ready, busy, hit;
-    wire logic [3:0]  err;
+    wire logic [4:0]  err;
     wire logic [11:0] slot_st;
     wire logic [31:0] crc;
     wire logic [16:0] words;
@@ -92,14 +107,14 @@ module tb_system;
 
     intv_media #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) media (
         .clk, .reset, .mreset,
-        .ld_wr, .ld_addr, .ld_data, .len_valid, .cart_len,
+        .ld_wr, .ld_addr, .ld_data, .len_valid, .cart_len, .len_chk(2'd0),
         .bus_req(c_req), .bus_we(c_we), .bus_addr(c_addr), .bus_wdata(c_wdata),
         .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_kind(c_kind),
         .bus_paged(c_paged),
-        .aux_req(1'b0), .aux_we(1'b0), .aux_addr(17'd0), .aux_wdata(16'd0), .aux_be(2'b11),
+        .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .ivoice_addr(11'd0), .ivoice_q,
-        .ready, .busy, .err, .slot_st, .crc, .words, .layout, .flags, .hit,
+        .ready, .busy, .err, .len_st(), .slot_st, .crc, .words, .layout, .flags, .hit,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_c),
         .sram_a, .sram_dq_out, .sram_dq_oe, .sram_dq_in, .sram_oe_n, .sram_we_n,
         .sram_ub_n, .sram_lb_n);
@@ -114,7 +129,7 @@ module tb_system;
 
     intv_machine dut (
         .clk, .mreset, .ce(ce_cpu), .hcnt, .vcnt,
-        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .pad_r(8'hFF), .pad_l(8'hFF),
+        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .pad_r, .pad_l,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .exec_addr, .exec_q, .grom_addr, .grom_q,
@@ -139,10 +154,17 @@ module tb_system;
 
     logic   rw_req = 1'b0;
     longint rw_val = 0;
+    logic [1:0] ml = 2'b00;               // last logged {hs, csmode}
+    logic   ml_force = 1'b0;
     always @(posedge clk) begin
         if (rw_req)
             cyc <= rw_val;
         else if (ce_cpu && !hold) begin
+            if (cyc >= 0 && ({dut.stic.hs, dut.stic.csmode} != ml || ml_force)) begin
+                $fdisplay(fd, "M %0d %0d %0d", cyc, dut.stic.hs, dut.stic.csmode);
+                ml <= {dut.stic.hs, dut.stic.csmode};
+                ml_force <= 1'b0;
+            end
             if (cyc >= 0 && phase != PH_NACT)
                 $fdisplay(fd, "B %0d %0d %04x %04x", cyc, phase,
                           (phase == 3'd4 || phase == PH_INTAK) ? dout : (phase == 3'd2 ? 16'd0 : addr),
@@ -201,6 +223,42 @@ module tb_system;
         ss_we = 1'b0;
     endtask
 
+    // cart RAM (16K cells at $18000 in the SRAM) through the aux port
+    localparam int CRAM = 16384;
+    logic [15:0] cram_saved [CRAM];
+    bit          has_cart = 1'b0;
+
+    task automatic aux_op(input logic we, input logic [16:0] a, input logic [15:0] d,
+                          output logic [15:0] q);
+        int n;
+        @(negedge clk);
+        aux_req = 1'b1; aux_we = we; aux_addr = a; aux_wdata = d;
+        n = 0;
+        do begin @(negedge clk); n++; end while (!aux_ack && n < 100);
+        aux_req = 1'b0; aux_we = 1'b0;
+        q = aux_rdata;
+        if (n >= 100) fail($sformatf("aux port answers at %05x", a));
+    endtask
+
+    task automatic cram_all(input int what);  // 0 save, 1 junk, 2 restore and check
+        logic [15:0] q;
+        for (int i = 0; i < CRAM; i++) begin
+            if (what == 0)
+                aux_op(1'b0, 17'h18000 + 17'(i), 16'd0, cram_saved[i]);
+            else if (what == 1)
+                aux_op(1'b1, 17'h18000 + 17'(i), ~cram_saved[i] ^ 16'(i * 32'h9E37), q);
+            else
+                aux_op(1'b1, 17'h18000 + 17'(i), cram_saved[i], q);
+        end
+        if (what == 2)
+            for (int i = 0; i < CRAM; i++) begin
+                aux_op(1'b0, 17'h18000 + 17'(i), 16'd0, q);
+                if (q !== cram_saved[i])
+                    fail($sformatf("restore: cart RAM cell %0d reads %04x, saved %04x", i, q,
+                                   cram_saved[i]));
+            end
+    endtask
+
     task automatic freeze();
         @(negedge clk);
         run = 1'b0;
@@ -213,6 +271,7 @@ module tb_system;
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
+        if (has_cart) cram_all(0);
     endtask
 
     task automatic dump_all(input int k);
@@ -249,15 +308,26 @@ module tb_system;
             mres_tb = 1'b0;
             repeat (4) @(negedge clk);
             ss_en = 1'b1;
-        end else begin                            // a later state, then junk
+        end else begin                            // a later state
             resume();
             wait_cycle(rtcyc + rton);
             freeze();
             $fdisplay(fd, "R frozen again at cycle %0d", cyc);
-            for (int m = 0; m < NMOD; m++)
-                for (int w = 0; w < mod_n[m]; w++)
-                    ss_write(mod_id[m], w, ~saved[m][w] ^ (32'h9E3779B9 * (w + 1)));
         end
+        // junk, so that nothing left from before can pass: straight into
+        // the three RAM arrays (what another game would have left there; a
+        // RAM that dropped every state-port write would otherwise keep the
+        // right contents through the reset), then through the state port
+        // into every word, and into the cart RAM
+        for (int i = 0; i < 256; i++) dut.scratch.mem[i] = 8'(~saved[5][i] ^ 32'(i * 37));
+        for (int i = 0; i < 512; i++)
+            dut.sysram.mem[i] = 16'(~(i < 256 ? saved[6][i] : saved[7][i - 256]) ^ 32'(i * 4097));
+        for (int i = 0; i < 512; i++)
+            dut.gram.mem[i] = 8'(~(i < 256 ? saved[8][i] : saved[9][i - 256]) ^ 32'(i * 41));
+        for (int m = 0; m < NMOD; m++)
+            for (int w = 0; w < mod_n[m]; w++)
+                ss_write(mod_id[m], w, ~saved[m][w] ^ (32'h9E3779B9 * (w + 1)));
+        if (has_cart) cram_all(1);
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_write(mod_id[m], w, saved[m][w]);
@@ -268,6 +338,8 @@ module tb_system;
                     fail($sformatf("restore: word %02x.%0d reads %08x, saved %08x",
                                    mod_id[m], w, v, saved[m][w]));
             end
+        if (has_cart) cram_all(2);
+        ml_force = 1'b1;
     endtask
 
     // ------------------------------------------------------------ the run
@@ -282,6 +354,10 @@ module tb_system;
         void'($value$plusargs("rtsub=%d", rtsub));
         void'($value$plusargs("rton=%d", rton));
         void'($value$plusargs("dump=%d", dumpc));
+        begin
+            logic [15:0] pads;
+            if ($value$plusargs("pads=%h", pads)) {pad_r, pad_l} = pads;
+        end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
         repeat (8) @(negedge clk);
@@ -293,8 +369,10 @@ module tb_system;
         load_file(grom_f, 4'd3, n);
         $fdisplay(fd, "L grom %0d", n);
         n = 0;
-        if ($value$plusargs("cart=%s", cart_f))
+        if ($value$plusargs("cart=%s", cart_f)) begin
             load_file(cart_f, 4'd0, n);
+            has_cart = 1'b1;
+        end
         $fdisplay(fd, "L cart %0d", n);
         @(negedge clk);
         cart_len = n; len_valid = 1'b1;

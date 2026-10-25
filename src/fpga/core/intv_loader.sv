@@ -26,10 +26,19 @@
 // rewrites the low byte of the last word with 0 (pad bytes beyond the last
 // word are never read: the cart answers only below words).
 //
-// When the length arrives (len_valid rises):
+// When the length arrives (len_valid rises) after a cartridge stream that
+// has not been finished yet (pending: set by power-on reset and by the
+// cartridge's byte 0, cleared when the finish ends). The host clears "all
+// complete" on any data slot request, read (0x0080) or write (0x0082), and
+// sends it again afterwards; a read alone (for example of the JLP flash
+// slot at step 11) must not rerun the finish while the machine runs, which
+// would take the SRAM, clear the cartridge RAM and reset the page selects.
 //   1. check: a cartridge streamed, in order, length 1 .. 64K words, and the
 //      strobes cover exactly the length plus 0-3 pad bytes; else no
-//      cartridge (layout 0: nothing answers) and err says why
+//      cartridge (layout 0: nothing answers) and err says why. err[4] says
+//      that the data table's length and the host's 0x0082 size disagree
+//      (apf_datatable len_chk 2; the load goes on with the table's length);
+//      len_st keeps len_chk for the test pattern
 //   2. CRC table (cart_crc.hex, 256 x 64, sorted end to end): binary search,
 //      8 probes; a hit needs the CRC and a layout other than 0, and the size
 //      field (256-word units, 0 = any) to agree, else the default map
@@ -65,6 +74,7 @@ module intv_loader #(
     // the cartridge's file length from the data table (clk_sys, held)
     input  wire logic        len_valid,
     input  wire logic [31:0] cart_len,
+    input  wire logic [1:0]  len_chk,         // apf_datatable, held with cart_len
 
     // SRAM master (writes only)
     output logic             m_req,
@@ -92,9 +102,11 @@ module intv_loader #(
 
     output logic             busy,            // owns the SRAM
     output logic             ready,           // cartridge mapped (or refused: err)
-    output logic [3:0]       err,             // [0] no cartridge or length mismatch,
+    output logic [4:0]       err,             // [0] no cartridge or length mismatch,
                                               // [1] bytes out of order, [2] over 64K
-                                              // words, [3] SRAM write overrun
+                                              // words, [3] SRAM write overrun,
+                                              // [4] table length != 0x0082 size
+    output logic [1:0]       len_st,          // len_chk of the last finish
     output logic [11:0]      slot_st          // per slot: 0 empty, 1 wrong, 2 ok
 );
 
@@ -144,6 +156,7 @@ module intv_loader #(
     logic [31:0] crc_at [4];
     logic [24:0] cnt [6];                      // per slot: last offset + 1
     logic        started = 1'b0, seq_err = 1'b0, big = 1'b0, ovr = 1'b0;
+    logic        pending = 1'b1;               // a cartridge stream not finished yet
     wire logic [31:0] crc_in  = off == 24'd0 ? 32'hFFFFFFFF : crc;
     wire logic [31:0] crc_nxt = crc_byte(crc_in, ld_data);
 
@@ -176,7 +189,7 @@ module intv_loader #(
         rom_we = 1'b0; rom_wsel = 2'd0; rom_waddr = 12'd0; rom_wdata = 10'd0;
         pt_we = 1'b0; pt_idx = 5'd0; pt_data = 16'd0;
         res_we = 1'b0; res_crc = 32'd0; res_words = 17'd0; res_layout = 8'd0;
-        res_flags = 8'd0; res_hit = 1'b0; ready = 1'b0; err = 4'd0;
+        res_flags = 8'd0; res_hit = 1'b0; ready = 1'b0; err = 5'd0; len_st = 2'd0;
     end
 
     // streamed words (cartridge, ECS ROM) have priority; the finish steps
@@ -236,6 +249,7 @@ module intv_loader #(
                     crc_at[off[1:0]] <= crc_nxt;
                     if (off == 24'd0) begin
                         started <= 1'b1;
+                        pending <= 1'b1;
                         seq_err <= 1'b0;
                         big     <= 1'b0;
                         ovr     <= 1'b0;
@@ -264,8 +278,9 @@ module intv_loader #(
 
         // ---- finish
         case (st)
-            F_IDLE: if (len_valid && !len_d) begin
+            F_IDLE: if (len_valid && !len_d && pending) begin
                 len <= cart_len;
+                len_st <= len_chk;
                 st  <= F_CHECK;
             end
             F_CHECK: begin
@@ -275,8 +290,8 @@ module intv_loader #(
                 hi <= 9'd256;
                 if (!started || len == 32'd0 || {7'd0, cnt[0]} < len
                     || {7'd0, cnt[0]} - len > 32'd3 || seq_err || big || len > 32'h20000) begin
-                    err  <= {ovr, big || len > 32'h20000, seq_err, !started || len == 32'd0
-                             || {7'd0, cnt[0]} < len || {7'd0, cnt[0]} - len > 32'd3};
+                    err  <= {len_st == 2'd2, ovr, big || len > 32'h20000, seq_err, !started
+                             || len == 32'd0 || {7'd0, cnt[0]} < len || {7'd0, cnt[0]} - len > 32'd3};
                     words <= 17'd0;
                     crc_fin <= 32'd0;
                     lid  <= 8'd0;
@@ -285,7 +300,7 @@ module intv_loader #(
                     p    <= 6'd0;
                     st   <= F_PT;
                 end else begin
-                    err <= 4'd0;
+                    err <= {len_st == 2'd2, 4'd0};
                     st  <= F_FIX;
                 end
             end
@@ -355,6 +370,7 @@ module intv_loader #(
                 res_flags  <= (lid == 8'd1 && (flg & FLAG_ECS) == 8'd0) ? flg | conf : flg;
                 res_hit    <= hitf;
                 ready      <= 1'b1;
+                pending    <= 1'b0;
                 if (ovr) err[3] <= 1'b1;
                 st <= F_IDLE;
             end
@@ -364,8 +380,9 @@ module intv_loader #(
         if (reset) begin
             st <= F_IDLE;
             started <= 1'b0;
+            pending <= 1'b1;
             ready <= 1'b0;
-            err <= 4'd0;
+            err <= 5'd0;
             wq_rd <= 2'd0; wq_wr <= 2'd0; wq_n <= 3'd0;
         end
     end
@@ -380,7 +397,7 @@ module intv_loader #(
             if (cnt[i] == 25'd0)
                 slot_st[2*i +: 2] = 2'd0;
             else if (i == 0)
-                slot_st[1:0] = (ready && err != 4'd0) ? 2'd1 : 2'd2;
+                slot_st[1:0] = (ready && err != 5'd0) ? 2'd1 : 2'd2;
             else if (SIZE[i] == 25'd0 || cnt[i] == SIZE[i])
                 slot_st[2*i +: 2] = 2'd2;
             else

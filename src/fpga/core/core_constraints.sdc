@@ -24,3 +24,27 @@ set_clock_groups -asynchronous \
  -group { clk_74a } \
  -group { clk_74b } \
  -group [get_clocks $core_clks]
+
+# SRAM (AS6C2016-55; core/intv_sram.sv, build steps 2-3). The chip has no
+# clock: the controller drives the address, OE, WE, UB/LB and the write data
+# from clk_sys registers and samples DQ at the edge three clk_sys periods
+# after the one that put the address out (RD_CYC = 3: 69.84 ns). Two checks
+# make the read a timed path:
+#  - every SRAM output reaches its pin at most 10 ns after the clk_sys edge
+#    (output delay 23.28 - 10 = 13.28 ns; the step-3 fit gives about 8.6);
+#  - DQ is valid tAA (55 ns) + 2 ns of board after the address is at the
+#    pins, so at most 10 + 57 = 67 ns after the launching edge; it is
+#    captured three edges later (multicycle setup 3, hold 2), in the I/O
+#    input registers (FAST_INPUT_REGISTER on sram_dq in ap_core.qsf: the
+#    capture register in the core fabric left only about 0.7 ns with a
+#    65 ns bound).
+# Writes have whole clk_sys periods between address/data and the WE edges
+# (intv_sram.sv), so the 10 ns output bound covers them.
+set sram_clk [get_clocks {ic|pll|altera_pll_i|cyclonev_pll|counter\[0\].output_counter|divclk}]
+set sram_out [get_ports {sram_a[*] sram_dq[*] sram_oe_n sram_we_n sram_ub_n sram_lb_n}]
+set_output_delay -clock $sram_clk -max 13.28 $sram_out
+set_output_delay -clock $sram_clk -min 0.0 $sram_out
+set_input_delay -clock $sram_clk -max 67.0 [get_ports {sram_dq[*]}]
+set_input_delay -clock $sram_clk -min 0.0 [get_ports {sram_dq[*]}]
+set_multicycle_path -from [get_ports {sram_dq[*]}] -setup -end 3
+set_multicycle_path -from [get_ports {sram_dq[*]}] -hold -end 2

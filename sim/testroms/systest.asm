@@ -8,20 +8,37 @@
 ;      (upper byte 0), EXEC (10 bits), GROM ($FF00 | byte), STIC, GRAM
 ;   2. every STIC offset $00-$3F but $20 written, all read back (read
 ;      masks, the $33-$3F gap); writes through the $4000, $8000, $C000
-;      aliases; a read of $8021 and a write of $0021 (the mode latch)
+;      aliases; the mode latch: FGBG by writes of $0021, $4021, $8021,
+;      colour stack by reads of $8021, $4021, $C021 in between, so every
+;      access changes it (the bench logs each change of the latch)
 ;   3. GRAM written through all eight 512-word windows ($3800, $3A00,
 ;      $3C00, $3E00, $7800, $B800, $F800, $7A00) and read through two
 ;   4. every PSG register written with $FF and $A5 and read back (masks,
 ;      hand controllers at $01FE / $01FF)
 ;   5. scratchpad and System RAM with 16-bit values; then a write of $20
 ;      (display enable) closes the STIC and GRAM for the rest of frame 0:
-;      a STIC and a GRAM write and read there
+;      a STIC and a GRAM write and read there, closed reads of $0021 and
+;      $C021 (the mode latch stays), a closed write of $20 (the handshake
+;      is already set, so it cannot show), closed GRAM reads through the
+;      $3A00 and $3E00 windows (9 offset bits, MAME intv_m.cpp:484-490)
 ;   6. interrupts on; the ISR counts frames, enables the display (sets the
 ;      STIC handshake) on odd frames only, and writes and reads STIC and
 ;      GRAM in VBlank. The main loop writes and reads STIC registers, GRAM
 ;      and the PSG all through the frame, with a delay that changes every
 ;      pass, so accesses land inside and outside VBlank with the handshake
-;      set and clear.
+;      set and clear. In frame 7 the loop goes to section 7, then back.
+;   7. the end of the bus-copy window (DESIGN.md 2.4: 3,790 cycles), one
+;      probe a frame, each timed from the interrupt to the cycle (the
+;      model and sim/tb/tb_system.py check where each lands): with the
+;      handshake set, a STIC write in slot 3788 (open), GRAM read 3789
+;      (open), STIC read 3790 (closed), GRAM write 3791 (dropped), GRAM
+;      write 3789 (kept), STIC write 3790 (dropped), STIC read 3789 (open),
+;      GRAM read 3790 through $3E00 (closed); then INTRM's end: with an
+;      edge pending and I clear, EIS so that the next instruction ends in
+;      slot 3789, after the line has dropped (the request is lost), and in
+;      another frame in slot 3788 (taken: the INTAK is in slot 3789).
+;      The delays were found with the model (scratch tuner; the comment
+;      '; @dN' marks each delay block).
 ; Results go to System RAM ($0210 on; a ring at $02C0-$02EF in the loop),
 ; so the dumps show them too; the bench compares every bus cycle anyway.
 ; SPDX-License-Identifier: MIT
@@ -32,8 +49,12 @@
         NOP
         NOP
 
-; $1004: interrupt vector. Runs in VBlank (the bus-copy window).
-isr:    PSHR    R0
+; $1004: interrupt vector, through the word at $02FE (isr_main; section 7
+; points it at isr7).
+isr:    MVI     $02FE, R7
+; Runs in VBlank (the bus-copy window).
+isr_main:
+        PSHR    R0
         PSHR    R1
         PSHR    R4
         MVI     $0200, R0       ; frame count
@@ -60,6 +81,8 @@ isr_nohs:
 
 main:   MVII    #$0300, R6      ; stack
         MVII    #$0210, R5      ; results
+        MVII    #isr_main, R0
+        MVO     R0, $02FE       ; the interrupt handler
 
 ; 1. probes
         MVII    #probes, R4
@@ -106,10 +129,19 @@ s_r:    MVI@    R4, R1
         MVO@    R1, R5
         MVI     $0031, R1
         MVO@    R1, R5
+        MVO     R1, $0021       ; FGBG (the reads above left colour stack)
         MVII    #$8021, R4
-        MVI@    R4, R1          ; reaches the mode latch, reads the cartridge
+        MVI@    R4, R1          ; colour stack (alias read; the cartridge answers)
         MVO@    R1, R5
-        MVO     R1, $0021
+        MVII    #$4021, R4      ; (addresses over $3FF: pointer, not operand,
+        MVO@    R1, R4          ; FGBG through the $4000 alias    ROMW 10)
+        MVII    #$4021, R4
+        MVI@    R4, R1          ; colour stack
+        MVII    #$8021, R4
+        MVO@    R1, R4          ; FGBG
+        MVII    #$C021, R4
+        MVI@    R4, R1          ; colour stack
+        MVO     R1, $0021       ; FGBG
 
 ; 3. GRAM through the eight windows: offset k through window k
         MVII    #windows, R4
@@ -182,6 +214,14 @@ q_r2:   MVI@    R4, R1
         MVO@    R0, R4          ; dropped
         MVI@    R4, R1          ; reads $0006 (R4 moved on)
         MVO@    R1, R5
+        MVI     $0021, R1       ; closed: the mode latch stays FGBG
+        MVII    #$C021, R4      ; closed, through the alias: stays
+        MVI@    R4, R1
+        MVO     R0, $0020       ; closed write of $20 (the handshake is set)
+        MVII    #$3BC5, R4      ; closed GRAM read, $3A00 window: $01C5
+        MVI@    R4, R1
+        MVII    #$3FFF, R4      ; closed GRAM read, $3E00 window: $01FF
+        MVI@    R4, R1
 
 ; 6. interrupts on; the loop
         CLRR    R0
@@ -190,6 +230,8 @@ q_r2:   MVI@    R4, R1
         CLRR    R3
         EIS
 loop:   MVI     $0200, R0       ; frame count
+        CMPI    #S7F, R0
+        BEQ     sect7
         ADDR    R3, R0
         MVO     R0, $0029       ; CSR1
         MVI     $0029, R1       ; $0029 itself when closed
@@ -217,6 +259,153 @@ l_ring: INCR    R3
         EIS
 dly:    DECR    R2
         BNEQ    dly
+        B       loop
+
+; 7. the end of the bus-copy window: one probe a frame
+S7F     EQU     7               ; the frame count that starts section 7
+sect7:  DIS
+        MVII    #isr7, R0
+        MVO     R0, $02FE
+        MVII    #p1, R0
+        MVO     R0, $02FD       ; the first probe
+        EIS
+w7:     B       w7              ; wait for the frame's interrupt
+isr7:   DECR    R6              ; drop the return address
+        MVO     R0, $0020       ; handshake: closed after the window
+        MVI     $02FD, R7       ; the probe of this frame
+
+p1:     MVII    #p2, R0
+        MVO     R0, $02FD
+        MVII    #$002B, R4      ; STIC write, slot 3788: open, kept
+        MVII    #$0005, R0
+        MVII    #244, R2     ; @d1
+p1d:   DECR    R2
+        BNEQ    p1d
+        NOP                     ; @d1
+        NOP                     ; @d1
+        NOPP                    ; @d1
+        MVII    #0, R3          ; @d1
+        MVO@    R0, R4
+        B       w7
+p2:     MVII    #p3, R0
+        MVO     R0, $02FD
+        MVII    #$3850, R4      ; GRAM read, slot 3789: open
+        MVII    #244, R2     ; @d2
+p2d:   DECR    R2
+        BNEQ    p2d
+        NOP                     ; @d2
+        NOP                     ; @d2
+        NOP                     ; @d2
+        NOP                     ; @d2
+        MVI@    R4, R1
+        B       w7
+p3:     MVII    #p4, R0
+        MVO     R0, $02FD
+        MVII    #$002A, R4      ; STIC read, slot 3790: closed ($002A)
+        MVII    #244, R2     ; @d3
+p3d:   DECR    R2
+        BNEQ    p3d
+        NOPP                    ; @d3
+        MVII    #0, R3          ; @d3
+        MVII    #0, R3          ; @d3
+        MVII    #0, R3          ; @d3
+        MVI@    R4, R1
+        B       w7
+p4:     MVII    #p5, R0
+        MVO     R0, $02FD
+        MVII    #$3851, R4      ; GRAM write, slot 3791: dropped
+        MVII    #$00A6, R0
+        MVII    #244, R2     ; @d4
+p4d:   DECR    R2
+        BNEQ    p4d
+        NOP                     ; @d4
+        NOP                     ; @d4
+        NOP                     ; @d4
+        MVII    #0, R3          ; @d4
+        MVO@    R0, R4
+        B       w7
+p5:     MVII    #p6, R0
+        MVO     R0, $02FD
+        MVII    #$3852, R4      ; GRAM write, slot 3789: kept
+        MVII    #$005B, R0
+        MVII    #244, R2     ; @d5
+p5d:   DECR    R2
+        BNEQ    p5d
+        NOP                     ; @d5
+        MVII    #0, R3          ; @d5
+        MVII    #0, R3          ; @d5
+        MVO@    R0, R4
+        B       w7
+p6:     MVII    #p7, R0
+        MVO     R0, $02FD
+        MVII    #$0030, R4      ; STIC write, slot 3790: dropped
+        MVII    #$0003, R0
+        MVII    #244, R2     ; @d6
+p6d:   DECR    R2
+        BNEQ    p6d
+        NOPP                    ; @d6
+        MVII    #0, R3          ; @d6
+        MVII    #0, R3          ; @d6
+        MVII    #0, R3          ; @d6
+        MVO@    R0, R4
+        B       w7
+p7:     MVII    #p8, R0
+        MVO     R0, $02FD
+        MVII    #$002B, R4      ; STIC read, slot 3789: open (the value of p1)
+        MVII    #245, R2     ; @d7
+p7d:   DECR    R2
+        BNEQ    p7d
+        NOP                     ; @d7
+        MVII    #0, R3          ; @d7
+        MVII    #0, R3          ; @d7
+        MVI@    R4, R1
+        B       w7
+p8:     MVII    #p9, R0
+        MVO     R0, $02FD
+        MVII    #$3E53, R4      ; GRAM read through $3E00, slot 3790: closed ($0053)
+        MVII    #244, R2     ; @d8
+p8d:   DECR    R2
+        BNEQ    p8d
+        NOP                     ; @d8
+        NOP                     ; @d8
+        NOP                     ; @d8
+        NOPP                    ; @d8
+        MVI@    R4, R1
+        B       w7
+; INTRM's end: I clear across the next frame's start (an edge pending),
+; then EIS, then a NOP that ends after the line has dropped (p9: the
+; request is lost) or in its last slot (p10: taken)
+p9:     DIS
+        MVII    #p10, R0
+        MVO     R0, $02FD
+        MVII    #1240, R2    ; @d9
+p9d:   DECR    R2
+        BNEQ    p9d
+        NOP                     ; @d9
+        NOP                     ; @d9
+        NOPP                    ; @d9
+        MVII    #0, R3          ; @d9
+        EIS
+p9x:    NOP                     ; ends in slot 3789: not taken
+        B       w7
+p10:    DIS
+        MVII    #p_end, R0
+        MVO     R0, $02FD
+        MVII    #1240, R2    ; @d10
+p10d:  DECR    R2
+        BNEQ    p10d
+        NOP                     ; @d10
+        NOP                     ; @d10
+        NOPP                    ; @d10
+        EIS
+p10x:   NOP                     ; ends in slot 3788: taken (INTAK in 3789)
+        B       w7
+p_end:  DIS
+        MVII    #isr_main, R0
+        MVO     R0, $02FE
+        MVII    #S7F + 1, R0
+        MVO     R0, $0200
+        EIS
         B       loop
 
 ; data: two decles each (low byte, high byte), for SDBD reads

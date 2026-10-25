@@ -35,10 +35,19 @@
 // | paged << 3}, data high, data low (data $FFFF when not answered). The
 // Python side computes every line from the model and compares.
 //
+//   hazard   after all that, the host reads a slot (0x0080) and sends "all
+//            complete" (0x008F) again without a cartridge stream: the
+//            loader must not run its finish again (busy stays low, the page
+//            selects stay): "hazard busy B ready R" and the select words
+//
 // +cart= +exec= +grom= +ecs= +ivoice= (files; a missing one is not loaded),
 // +lenadj=N adds N to the cartridge's size in the data table (a refused
-// load: the loader must map nothing and set err), +out= (result file), +gap=N (bridge clocks between writes, default 75,
-// +jitter=N adds 0..N-1), +pad=HH (pad byte), +dtfirst=0/1, +seed=N.
+// load: the loader must map nothing and set err), +reqadj=N adds N to the
+// size the host gives with 0x0082 for the cartridge (the table's length is
+// used, err[4] set), +notable=1 leaves the cartridge out of the data table
+// (the 0x0082 size is used), +out= (result file), +gap=N (bridge clocks
+// between writes, default 75, +jitter=N adds 0..N-1), +pad=HH (pad byte),
+// +dtfirst=0/1, +seed=N.
 //
 // SPDX-License-Identifier: MIT
 
@@ -69,6 +78,9 @@ module tb_loader;
     wire  logic [31:0] cmd_bridge_rd_data;
     wire  logic  reset_n;
     wire  logic  dataslot_allcomplete;
+    wire  logic        dataslot_requestwrite;
+    wire  logic [15:0] dataslot_requestwrite_id;
+    wire  logic [31:0] dataslot_requestwrite_size;
     wire  logic [9:0]  datatable_addr;
     wire  logic        datatable_wren;
     wire  logic [31:0] datatable_data, datatable_q;
@@ -80,7 +92,8 @@ module tb_loader;
         .status_boot_done(1'b1), .status_setup_done(1'b1), .status_running(reset_n),
         .dataslot_requestread(), .dataslot_requestread_id(),
         .dataslot_requestread_ack(1'b1), .dataslot_requestread_ok(1'b1),
-        .dataslot_requestwrite(), .dataslot_requestwrite_id(), .dataslot_requestwrite_size(),
+        .dataslot_requestwrite(dataslot_requestwrite), .dataslot_requestwrite_id(dataslot_requestwrite_id),
+        .dataslot_requestwrite_size(dataslot_requestwrite_size),
         .dataslot_requestwrite_ack(1'b1), .dataslot_requestwrite_ok(1'b1),
         .dataslot_update(), .dataslot_update_id(), .dataslot_update_size(),
         .dataslot_allcomplete(dataslot_allcomplete),
@@ -117,11 +130,14 @@ module tb_loader;
     );
 
     wire logic [31:0] cart_len;
+    wire logic [1:0]  len_chk;
     wire logic        len_valid;
     apf_datatable dtab (
         .clk(clk_74a), .allcomplete(dataslot_allcomplete),
+        .wr_req(dataslot_requestwrite), .wr_id(dataslot_requestwrite_id),
+        .wr_size(dataslot_requestwrite_size),
         .dt_addr(datatable_addr), .dt_wren(datatable_wren), .dt_data(datatable_data),
-        .dt_q(datatable_q), .cart_len(cart_len), .len_valid(len_valid)
+        .dt_q(datatable_q), .cart_len(cart_len), .len_chk(len_chk), .len_valid(len_valid)
     );
 
     // ---------------------------------------------------------------- DUT
@@ -140,7 +156,8 @@ module tb_loader;
     wire  logic [9:0]  exec_q;
     wire  logic [7:0]  grom_q, ivoice_q;
     wire  logic        ready, busy, hit;
-    wire  logic [3:0]  err;
+    wire  logic [4:0]  err;
+    wire  logic [1:0]  len_st;
     wire  logic [11:0] slot_st;
     wire  logic [31:0] crc;
     wire  logic [16:0] words;
@@ -158,7 +175,7 @@ module tb_loader;
     ) dut (
         .clk(clk_sys), .reset(reset), .mreset(mreset),
         .ld_wr(ioctl_wr), .ld_addr(ioctl_addr), .ld_data(ioctl_dout),
-        .len_valid(len_valid), .cart_len(cart_len),
+        .len_valid(len_valid), .cart_len(cart_len), .len_chk(len_chk),
         .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
         .bus_kind(bus_kind), .bus_paged(bus_paged),
@@ -166,7 +183,7 @@ module tb_loader;
         .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
         .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
-        .ready(ready), .busy(busy), .err(err), .slot_st(slot_st),
+        .ready(ready), .busy(busy), .err(err), .len_st(len_st), .slot_st(slot_st),
         .crc(crc), .words(words), .layout(layout), .flags(flags), .hit(hit),
         .ss_addr(ss_addr), .ss_we(ss_we), .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),
         .sram_a(sram_a), .sram_dq_out(sram_dq_out), .sram_dq_oe(sram_dq_oe),
@@ -192,7 +209,7 @@ module tb_loader;
     endfunction
 
     // --------------------------------------------------------- host side
-    int gap = 75, jitter = 0, seed = 1, dtfirst = 0, lenadj = 0;
+    int gap = 75, jitter = 0, seed = 1, dtfirst = 0, lenadj = 0, reqadj = 0, notable = 0;
     logic [7:0] pad = 8'hA5;
 
     task automatic bwrite(input logic [31:0] a, input logic [31:0] d);
@@ -251,7 +268,7 @@ module tb_loader;
         int n;
         logic [31:0] w;
         n = fsize[s];
-        host_cmd(16'h0082, 32'h100 + s, n);
+        host_cmd(16'h0082, 32'h100 + s, n + (s == 0 ? reqadj : 0));
         for (int i = 0; i < n; i += 4) begin
             w = 32'd0;
             for (int k = 0; k < 4; k++)
@@ -262,7 +279,7 @@ module tb_loader;
     task automatic send_table();
         // data.json order: 0x100 .. 0x106; size 0 for a slot not loaded
         for (int s = 0; s < 7; s++) begin
-            bwrite(32'hF800_2000 + 8 * s, 32'h100 + s);
+            bwrite(32'hF800_2000 + 8 * s, (s == 0 && notable != 0) ? 32'h1FF : 32'h100 + s);
             bwrite(32'hF800_2004 + 8 * s, (s < 6 && floaded[s]) ? fsize[s] + (s == 0 ? lenadj : 0) : 0);
         end
     endtask
@@ -340,6 +357,10 @@ module tb_loader;
         end
     endtask
 
+    // busy during the hazard step
+    bit hz_mon = 1'b0, busy_seen = 1'b0;
+    always @(negedge clk_sys) if (hz_mon && busy) busy_seen = 1'b1;
+
     // ------------------------------------------------------------ the run
     logic [31:0] ss1 [21], ssq;
     localparam int YS [4] = '{1, 2, 3, 15};
@@ -354,6 +375,8 @@ module tb_loader;
         void'($value$plusargs("pad=%h", pad));
         void'($value$plusargs("dtfirst=%d", dtfirst));
         void'($value$plusargs("lenadj=%d", lenadj));
+        void'($value$plusargs("reqadj=%d", reqadj));
+        void'($value$plusargs("notable=%d", notable));
         if ($value$plusargs("seed=%d", seed)) void'($urandom(seed));
         outf = $fopen(outn, "w");
         read_file(0, "cart");
@@ -386,8 +409,8 @@ module tb_loader;
         // ---- status
         if ($test$plusargs("debug"))
             for (int s = 0; s < 6; s++) $display("loader cnt %0d = %0d", s, dut.loader.cnt[s]);
-        $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d",
-                  crc, words, layout, flags, hit, err);
+        $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
+                  crc, words, layout, flags, hit, err, len_st);
         $fdisplay(outf, "slots %03X", slot_st);
         c = 32'hFFFFFFFF;
         for (int i = 0; i < int'(words); i++) begin aux_rd(17'(i), v); c = crc_word(c, v); end
@@ -469,6 +492,19 @@ module tb_loader;
         for (int i = 0; i < 21; i++) ss_wr(i, ss1[i]);
         for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ss2 %0d %08X", i, ssq); end
         space("F");
+
+        // ---- hazard: a slot read and "all complete" again, no cartridge
+        begin
+            busy_seen = 1'b0;
+            hz_mon = 1'b1;
+            host_cmd(16'h0080, 32'h106, 32'd0);
+            host_cmd(16'h008F, 32'd0, 32'd0);
+            repeat (2000) @(negedge clk_sys);
+            hz_mon = 1'b0;
+            check(len_valid, "len_valid again after the second all complete");
+            $fdisplay(outf, "hazard busy %0d ready %0d", busy_seen, ready);
+            for (int i = 19; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssh %0d %08X", i, ssq); end
+        end
 
         // ---- bench health
         check(sram.violations == 0, $sformatf("SRAM timing: %0d violations", sram.violations));

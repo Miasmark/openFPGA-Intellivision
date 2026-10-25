@@ -54,7 +54,13 @@
 //
 // Save state (DESIGN.md 4.3; module id SS_ID, 2 words; ss_rdata is 0
 // unless addressed, so ports OR-combine; write only while the machine is
-// frozen, with mreset low):
+// frozen, with mreset low). The cartridge request in flight (cart_req,
+// c_rd and intv_media's SRAM read, about 6 clk_sys after a BAR, ADAR,
+// INTAK or DW ce) is not in the state: ss_ctl (step 7) must freeze only at
+// the quiet point of DESIGN 4.2 (an instruction boundary, where no request
+// is in flight), or wait at least 16 clk_sys after the last ce before it
+// reads the state (sim/tb/tb_system.sv freeze() waits 16). A save read
+// sooner could store a stale cart_q.
 //   0  [15:0] latched address, [16] next IAB is the reset vector,
 //      [17] cart_hit, [18] hold
 //   1  [15:0] cart_q

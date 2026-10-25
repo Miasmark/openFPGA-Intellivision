@@ -3,8 +3,9 @@
 # Copyright (c) 2026 Miasmark and contributors
 """Step 2 bench driver (DESIGN.md 9): the loader RTL against the mapper model.
 
-For each image of sim/regress/step2_set.csv (the owner's library by name, and
-two synthetic odd-length images built with tools/as1610.py), it computes
+For each image of sim/regress/step2_set.csv (the owner's library by name,
+two synthetic odd-length images built with tools/as1610.py, and forced:
+images whose CRC tools/synth_image.py sets to a table CRC), it computes
 every line sim/tb/tb_loader.sv prints from the Python model
 (tools/intv_mapper.py Tables + tools/mapper/intvcart.py CartModel, replaying
 the bench's exact sequence of bus writes, machine resets and state writes),
@@ -12,8 +13,10 @@ runs the Verilator bench through the APF bridge, and compares line by line.
 Library images must also give the CRC, layout, flags and mapped-space CRC
 recorded in sim/regress/mapper_library.csv.
 
-  python3 -I sim/tb/tb_loader.py --all        build, the 25 images, then the
-                                              planted faults (each must fail)
+  python3 -I sim/tb/tb_loader.py --all        build, the 33 images, the
+                                              refused loads and the length
+                                              cases, then the planted faults
+                                              (each must fail)
   python3 -I sim/tb/tb_loader.py [--only CRC,...] [--no-build]
 
 Environment: VERILATOR (default verilator), WORK (default sim/work/tb_loader),
@@ -39,6 +42,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'mapper'))
 import as1610             # noqa: E402
+import synth_image        # noqa: E402
 import intv_mapper        # noqa: E402
 import intvcart as m      # noqa: E402
 
@@ -89,6 +93,11 @@ def load_set(lib):
         for r in csv.DictReader(f):
             if r['image'].startswith('synthetic:'):
                 data = synthetic(int(r['bytes']))
+                src = r['image']
+                if '%08X' % crc32(data) != r['crc32']:
+                    sys.exit('%s: CRC %08X, set file says %s' % (src, crc32(data), r['crc32']))
+            elif r['image'].startswith('forced:'):
+                data = synth_image.forced(int(r['image'][7:], 16), int(r['bytes']))
                 src = r['image']
                 if '%08X' % crc32(data) != r['crc32']:
                     sys.exit('%s: CRC %08X, set file says %s' % (src, crc32(data), r['crc32']))
@@ -170,23 +179,35 @@ def expect(img, tab, bios):
 
     A refused load (img['neg']: no cartridge, or a data table length the
     strobes do not cover) maps nothing: layout 0, no words, CRC 0, err 1.
+    The length check (apf_datatable len_chk, err[4]): the host's 0x0082 size
+    is the file's size plus img['reqadj']; the data table's is plus
+    img['lenadj'], or missing with img['notable'] (then the 0x0082 size is
+    used); no cartridge sends no 0x0082 and a table size of 0.
     """
     data = img['data']
+    if img.get('neg') == 'nocart':
+        lenst = 0
+    elif img.get('notable'):
+        lenst = 3
+    else:
+        lenst = 1 if img.get('lenadj', 0) == img.get('reqadj', 0) else 2
+    e4 = 16 if lenst == 2 else 0
     if img.get('neg'):
         words, crc_v = [], 0
         cart, lid, flags, hit = m.CartModel([], [0] * m.NPAGES), 0, 0, False
-        err, cslot = 1, (0 if img['neg'] == 'nocart' else 1)
+        err, cslot = 1 | e4, (0 if img['neg'] == 'nocart' else 1)
     else:
         crc_v, words = m.load_through_loader(data)
         assert crc_v == crc32(data) and words == m.bytes_to_words(data)
         for meth in ('linear', 'binary'):
             assert tab.lookup(crc_v, len(words), meth) == tab.lookup(crc_v, len(words), 'linear')
         cart, lid, flags, hit = tab.model(words, crc_v)
-        err, cslot = 0, 2
+        err = e4
+        cslot = 1 if err else 2
     crc = '%08X' % crc_v
     L = []
-    L.append('status crc %s words %d layout %d flags %02X hit %d err %d' % (crc, len(words), lid, flags,
-                                                                              int(hit), err))
+    L.append('status crc %s words %d layout %d flags %02X hit %d err %d lenst %d' % (
+        crc, len(words), lid, flags, int(hit), err, lenst))
     L.append('slots %03X' % (cslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
     L.append('image %08X' % crc32(struct.pack('>%dH' % len(words), *words)))
     if bios.get('ecs'):
@@ -254,6 +275,11 @@ def expect(img, tab, bios):
         L.append('ss2 %d %08X' % (i, w))
     for r in range(16):
         L.append('F %d %08X' % (r, mi.block(r)))
+    # the hazard: no finish runs again, the selects stay
+    L.append('hazard busy 0 ready 1')
+    ssf = mi.ss()
+    for i in (19, 20):
+        L.append('ssh %d %08X' % (i, ssf[i]))
     L.append('end')
     return L, dict(crc=crc, layout=lid, flags=flags, hit=hit, mapped='%08X' % mc,
                    model_mapped='%08X' % model_mapped)
@@ -293,8 +319,12 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500):
         args.append('+cart=' + path)
     if img.get('lenadj'):
         args.append('+lenadj=%d' % img['lenadj'])
+    if img.get('reqadj'):
+        args.append('+reqadj=%d' % img['reqadj'])
+    if img.get('notable'):
+        args.append('+notable=1')
     args += [
-            '+pad=%02X' % (0xA5, 0x00, 0xFF, 0x5A)[k % 4], '+dtfirst=%d' % (k % 2),
+            '+pad=%02X' % (0xA5, 0x00, 0xFF, 0x5A)[k % 4], '+dtfirst=%d' % img.get('dtfirst', k % 2),
             '+gap=%d' % (40 + 7 * (k % 5)), '+jitter=%d' % (1 + 13 * (k % 3))]
     for key in ('exec', 'grom', 'ecs', 'ivoice'):
         if bios_paths.get(key):
@@ -362,8 +392,20 @@ PLANTS = [
      'machine reset keeps the page selects'),
     ('ss_no_sel', 'intv_cart.sv', "8'd19: for (int i = 0; i < 8; i++) sel[i] <= ss_wdata[4*i +: 4];",
      "8'd19: ;", 'state restore drops the selects of ranges 0-7'),
+    ('no_size_check', 'intv_loader.sv',
+     "&& (crc_q[15:0] == 16'd0 || {1'b0, crc_q[15:0]} == size256)) begin", ") begin",
+     'a table hit whatever the image size'),
+    ('len_xcheck_off', 'apf_datatable.sv',
+     "len_chk  <= !req_seen ? 2'd0 : dt_q == req_len ? 2'd1 : 2'd2;", "len_chk  <= req_seen ? 2'd1 : 2'd0;",
+     'the 0x0082 size not compared with the table'),
+    ('no_fallback', 'apf_datatable.sv', "cart_len <= req_seen ? req_len : 32'd0;", "cart_len <= 32'd0;",
+     'no cartridge entry in the table: the 0x0082 size not used'),
+    ('req_any_slot', 'apf_datatable.sv', "if (wr_req && wr_id == SLOT_ID[15:0]) begin",
+     "if (wr_req) begin", 'the 0x0082 size of any slot taken'),
+    ('rerun', 'intv_loader.sv', "F_IDLE: if (len_valid && !len_d && pending) begin",
+     "F_IDLE: if (len_valid && !len_d) begin", 'the finish runs again on every all complete'),
 ]
-PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08')
+PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1')
 
 
 def main():
@@ -394,6 +436,14 @@ def main():
         for neg, adj in (('long', 4), ('short', -4), ('nocart', 0)):
             imgs.append(dict(syn[0], name='refused:' + neg, crc='NEG' + neg.upper(), neg=neg, lenadj=adj,
                              layout='0', flags='00'))
+        # the length check, data table before and after the files: the
+        # 0x0082 size 4 bytes too long (loaded with the table's length,
+        # err[4]), and a table without the cartridge (the 0x0082 size used)
+        for dt in (0, 1):
+            imgs.append(dict(syn[0], name='length:0x0082 +4, dtfirst %d' % dt, crc='REQ%d' % dt,
+                             reqadj=4, dtfirst=dt))
+            imgs.append(dict(syn[0], name='length:no table entry, dtfirst %d' % dt, crc='NOTAB%d' % dt,
+                             notable=True, dtfirst=dt))
     if a.only:
         keep = set(a.only.split(','))
         imgs = [i for i in imgs if i['crc'] in keep or i['name'] in keep]
@@ -406,7 +456,8 @@ def main():
     for img in imgs:
         lines, s = expect(img, tab, bios)
         exp[img['crc']] = (lines, s)
-        want = None if img.get('neg') else libcsv.get(img['crc'])
+        # forced: images share a CRC with a library image, not its content
+        want = None if img.get('neg') or img['name'].startswith('forced:') else libcsv.get(img['crc'])
         notes = []
         if s['mapped'] != s['model_mapped'] and not img.get('neg'):
             notes.append('mapped %s != model %s' % (s['mapped'], s['model_mapped']))

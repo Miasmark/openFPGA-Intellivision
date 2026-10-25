@@ -605,6 +605,7 @@ core_bridge_cmd icb (
 // (DESIGN.md 13, item 17). The loader reads the cartridge's size from it,
 // once the host has sent "all complete" (apf_datatable.sv).
     wire    [31:0]  cart_len;
+    wire    [1:0]   cart_len_chk;
     wire            cart_len_valid;
 
 apf_datatable #(
@@ -613,11 +614,15 @@ apf_datatable #(
 ) dtab (
     .clk        ( clk_74a ),
     .allcomplete( dataslot_allcomplete ),
+    .wr_req     ( dataslot_requestwrite ),
+    .wr_id      ( dataslot_requestwrite_id ),
+    .wr_size    ( dataslot_requestwrite_size ),
     .dt_addr    ( datatable_addr ),
     .dt_wren    ( datatable_wren ),
     .dt_data    ( datatable_data ),
     .dt_q       ( datatable_q ),
     .cart_len   ( cart_len ),
+    .len_chk    ( cart_len_chk ),
     .len_valid  ( cart_len_valid )
 );
 
@@ -664,7 +669,8 @@ data_loader #(
 
     wire    [11:0]  slot_st;
     wire            cart_ready, cart_busy, cart_hit;
-    wire    [3:0]   cart_err;
+    wire    [4:0]   cart_err;
+    wire    [1:0]   cart_len_st;
     wire    [31:0]  cart_crc;
     wire    [16:0]  cart_words;
     wire    [7:0]   cart_layout, cart_flags;
@@ -690,6 +696,7 @@ intv_media media (
     .ld_data    ( ioctl_dout ),
     .len_valid  ( cart_len_valid ),
     .cart_len   ( cart_len ),
+    .len_chk    ( cart_len_chk ),
     .bus_req    ( cbus_req ),
     .bus_we     ( cbus_we ),
     .bus_addr   ( cbus_addr ),
@@ -715,6 +722,7 @@ intv_media media (
     .ready      ( cart_ready ),
     .busy       ( cart_busy ),
     .err        ( cart_err ),
+    .len_st     ( cart_len_st ),
     .slot_st    ( slot_st ),
     .crc        ( cart_crc ),
     .words      ( cart_words ),
@@ -851,6 +859,7 @@ test_pattern pattern (
     .pf_y       ( pf_y ),
     .slot_st    ( slot_st ),
     .slot_req   ( 6'b001101 ),
+    .len_st     ( cart_len_st ),
     .colour     ( colour )
 );
 

@@ -41,4 +41,6 @@ Where the sources disagree and what the model does: `docs/CPU_NOTES.md`.
     python3 tools/cp1610.py prog.asm --steps 200   # trace a program
     python3 tools/lockstep.py                 # model vs MAME traces (3 games)
 
-Packaging (`package.sh`) comes with build step 1.
+Packaging (build step 1): `package.sh` assembles the SD card zip from
+`dist/` and a Quartus bitstream (`release/M_Intellivision_Pocket_<version>.zip`);
+`reverse_bits.py` makes the bit-reversed `.rbf_r` the Pocket loads.

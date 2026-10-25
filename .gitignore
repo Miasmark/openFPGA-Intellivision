@@ -19,6 +19,7 @@ games/
 # Memory images: anything built from a BIOS or game stays out. The tables
 # our own tools generate (CRC map table, palette) are tracked only under
 # src/fpga/core/tables/.
+# (apf/build_id.mif is written by the pre-flow script on every build.)
 *.mif
 *.hex
 *.mem

@@ -100,8 +100,8 @@ not documented; the model puts them before the read (estimated).
 |---|---|---|---|---|---|---|
 | 1 | Cost of taking an interrupt | 9 cycles: INTAK NACT DW DWS NACT IAB NACT NACT NACT, counted on the p.35 timing diagram | 7 (Interrupt_Enable_Flag); 10 (Bus_Phases, "unsure about the NACTs at the end") | MAME 9 | **9** | interrupts.asm, phase sweep |
 | 2 | SIN interruptible? | yes: "The interrupt will be acknowledged at the end of the SIN instruction" (p.13) | CP1610 table: yes; SIN page: no | MAME: yes | **yes** | sweep |
-| 3 | SETC cycles | 4 (p.56) | 4 | MAME 6 | **4** | implied.asm |
-| 4 | SARC Rr, 2 cycles | 8 ("add 2 cycles if shift is 2 bits", p.53) | 8 | MAME 6 | **8** | sweep |
+| 3 | SETC cycles | 4 (p.56) | 4 | MAME 6 (cp1610.cpp:153); the lockstep sees MAME charge 6 for every SETC in the game traces | **4** | implied.asm |
+| 4 | SARC Rr, 2 cycles | 8 ("add 2 cycles if shift is 2 bits", p.53) | 8 | MAME 6 (cp1610.cpp:567; every other two-position shift there is 8); the lockstep sees 6 for every SARC Rr,2 | **8** | sweep |
 | 5 | NEGR of 0: carry | status S Z C OV (p.53, OCR damaged) | "Negating 0 ... sets the Carry Flag" (NEGR) | MAME never sets C (it truncates to 16 bits before the carry test) | **C=1** | single_reg.asm |
 | 6 | SWAP Rr, 2 | "swap bytes ..., then swap them back to original form" (p.53) | low byte copied to both halves (SWAP) | MAME as the wiki ("not officially supported by GI"); S9 "swaps bytes in word once or twice" | **wiki** | shifts.asm |
 | 7 | HLT | "HaLT after next instruction is executed. Resume on control start", 4 cycles (p.56) | halts, cycles "Infinity", ignores interrupts until reset or STPST (HLT) | S9: "Halts the CPU (until next interrupt?)"; MAME: 4 cycles, does not halt (TBD) | **S1**; option `hlt='immediate'` | hlt.asm, hlt_immediate.asm |
@@ -151,12 +151,70 @@ values" (Undocumented_SDBD_Behavior), without details.
    traces and STIC test ROMs.
 2. **Phase position inside branches and stack reads** (estimated, see
    above). Only the totals are documented.
-3. **MAME trace comparison** (step 0 done-test, three games for ten
-   frames): expect MAME to differ on SETC (6 cycles), SARC Rr,2 (6), NEGR
-   of 0 (C), interrupts taken at the edge, and in showing SDBD and its
-   instruction as one 14-cycle step. The comparison tool has to allow for
-   these.
+3. **MAME trace comparison**: done, see "MAME lockstep" below. NEGR,
+   ADCR, arithmetic overflow, SIN, TCI, HLT and SDBD with R6 do not occur
+   in the traced code, so rows 5-10 and 14-15 of the table are still
+   unchecked against MAME; only our own test ROMs cover them.
 4. **HLT** is never used by games; the choice only matters for test ROMs.
+
+## MAME lockstep (step 0 done-test)
+
+`tools/lockstep.py` runs the model against MAME instruction traces made by
+`tools/refs/mame_trace.sh` (MAME 0.289, the owner's fork at 3c6120b6, built
+for `intv` only). The model owns the CPU and the memory a bare CPU system
+has: EXEC, GROM, the cartridge segments, scratchpad RAM and System RAM. Reads
+of everything else (STIC, PSG and controllers, GRAM, Intellivoice, unmapped
+probes) are replayed from the trace, and INTRM is raised at the boundary
+where the trace shows MAME's "(interrupted at ...)". Before each instruction
+it compares PC, R0-R7 and S Z O C; during it, every read and write in
+order, with address and data; after it, the cycle count. MAME shows SDBD
+and the instruction it prefixes as one step, so the tool merges the two
+model steps.
+
+Result, 2026-10-25, on Astrosmash, Tower of Doom and B-17 Bomber (plain
+`intv`, so no Intellivoice), from reset:
+
+| Run | Steps (3 games) | Interrupts | State and bus | Cycles |
+|---|---|---|---|---|
+| 10 frames (refs lane traces) | 56,678 | 14 | all agree | differ only on SETC and SARC Rr,2 |
+| 120 frames | 688,237 | 344 | all agree | differ only on SETC and SARC Rr,2 |
+
+- No model bug was found, so no new opcode test was needed. Negative
+  checks: a model that pushes the wrong return address on an interrupt, or
+  that sets S from bit 15 after SWAP, is caught at the first use; a model
+  that never sets O passes, because no ADD/SUB in the traced code
+  overflows (O is only raised there by RLC, RRC and SARC).
+- **Interrupts**: every interrupt in the traces is taken at a boundary
+  the model also treats as interruptible, with I set, and the push writes
+  the same return address to the same stack word. Across each interrupt
+  MAME's cycle count grows by exactly instruction + 9, which agrees with
+  row 1.
+- **SDBD**: the 795 SDBD-prefixed instructions of the 10-frame run (MVII,
+  ADDI, ANDI, MVI@ through R4 and R5, ADD@ through R5) agree in data and
+  cycles: MAME's merged step costs SDBD 4 + the documented SDBD form.
+- **Cycles**: the only differences are rows 3 and 4 (SETC: model 4, MAME
+  6; SARC Rr,2: model 8, MAME 6). The model keeps the documented values.
+- **STIC cycle stealing does not show in MAME's cycle counter.** Every
+  instruction's cycle delta equals its documented count (rows 3-4 aside),
+  also across interrupts, and a frame is about 14,934 cycles
+  (3,579,545 / 4 / 59.92), so the CPU gets the whole frame. MAME's
+  interrupt handler subtracts the STIC's BUSRQ cycles with `adjust_icount`
+  (intv_m.cpp:668, 680), but the counter does not show them; most likely
+  the handler runs outside the CPU's timeslice, which was not checked
+  further. So MAME's cycle counts are not a reference for BUSRQ timing in
+  step 4.
+- **GROM reads give $FFxx** in MAME (`0xFF00 | byte`, stic.cpp:1319): the
+  GROM drives DB0-7 only and the pulled-up bus gives ones above (DESIGN
+  2.5). The lockstep's memory does the same; the first run, with the
+  upper byte at 0, diverged at the EXEC's first GROM read ($36DF at $1F40).
+  EXEC reads give $0xxx (10-bit words, upper bits 0) in MAME; whether the
+  real EXEC ROMs drive DB10-15 low or leave them high is open for step 3.
+
+Run it (the BIOS, images and traces are outside the repo; the paths go in
+INTV_BIOS_DIR, INTV_GAME_DIR and INTV_TRACE_ROOT, or the matching options):
+
+    python3 tools/lockstep.py                  # the three games
+    python3 tools/lockstep.py --context 20 b17bomb
 
 ## Assembler
 

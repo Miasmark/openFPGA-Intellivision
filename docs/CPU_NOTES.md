@@ -160,6 +160,14 @@ values" (Undocumented_SDBD_Behavior), without details.
    at the ce that starts the boundary cycle (see "RTL" below). Whether the
    real chip needs the request a cycle earlier or later is still open and
    moves the STIC's figures by a constant; settle with STIC test ROMs.
+   Step 3 (tools/intv_system.py `mame`) found how MAME times it: MAME
+   raises INTRM from a timer between CPU time slices, so the instruction
+   running at VBlank start finishes first, and its CPU checks the line only
+   after the next instruction (cp1610.cpp execute_run). With that latency
+   and the frame starts read from the trace, the model takes every
+   interrupt of the four traces at MAME's instruction. Our own system takes
+   it at the first boundary after VBlank starts; MAME's extra instruction
+   is an emulator artefact, not evidence about the chip.
 2. **Phase position inside branches and stack reads** (estimated, see
    above). Only the totals are documented.
 3. **MAME trace comparison**: done, see "MAME lockstep" below. NEGR,

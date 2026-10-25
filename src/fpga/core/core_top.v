@@ -15,6 +15,11 @@
 // intv_media (cartridge into the SRAM with its CRC32, CRC table and page
 // table; EXEC, GROM and Intellivoice ROMs into block RAM; ECS ROM into the
 // SRAM), with the cartridge length from the data table (apf_datatable).
+// Step 3: the machine (intv_machine: CP1610, bus fabric, scratchpad,
+// System RAM, GRAM, STIC and PSG register stubs) runs the EXEC from the
+// first frame after the loader is ready. No picture or sound from it yet:
+// the test pattern stays, and the machine's status is readable over the
+// bridge (0x60000000) for debugging.
 //
 
 `default_nettype none
@@ -372,6 +377,9 @@ synch_3 s01(pll_core_locked, pll_core_locked_s, clk_74a);
 //   0x10000000  settings (interact.json)
 //   0x20000000  JLP flash (0x106, nonvolatile; step 11)
 //   0x50000000  save state blob (step 7; DESIGN.md 4.1)
+//   0x60000000  machine status, read only (step 3, debugging): [15:0] the
+//               address of the last opcode fetch, [25:16] its opcode,
+//               [28] CPU halted, [29] CPU held in reset, [31:30] 0
 //   0xF8000000  APF command interface
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -409,12 +417,18 @@ end
 // JLP flash (step 11): nothing is stored yet. Its size in the data table is
 // 0 (below), and a read of 0x20xxxxxx returns 0 (the mux's default).
 
+// Machine status (0x60000000), from the machine section below
+    reg     [31:0]  mstat_74 = 32'd0;
+
 // for bridge write data, we just broadcast it to all bus devices
 // for bridge read data, we have to mux it
 always @(*) begin
     casex(bridge_addr)
     default: begin
         bridge_rd_data <= 0;
+    end
+    32'h6xxxxxxx: begin
+        bridge_rd_data <= mstat_74;
     end
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -614,9 +628,9 @@ apf_datatable #(
 // agg23's data loader (pocket_utils/, MIT) turns the bridge's 32-bit writes
 // below 0x10000000 into bytes on clk_sys, one write strobe per byte;
 // intv_media takes them (DESIGN.md 5; the CFG slot is counted only until
-// step 8). The CPU (step 3) reaches the cartridge through its bus port, and
-// EXEC/GROM through the ROM read ports; until then they are idle. The state
-// port is tied off until ss_ctl (step 7).
+// step 8). The CPU (intv_machine) reaches the cartridge through its bus
+// port, and EXEC/GROM through the ROM read ports. The state port is tied
+// off until ss_ctl (step 7).
 ////////////////////////////////////////////////////////////////////////////////
 
     wire            ioctl_wr;
@@ -655,6 +669,10 @@ data_loader #(
     wire    [16:0]  cart_words;
     wire    [7:0]   cart_layout, cart_flags;
     wire            cbus_ack, cbus_hit, cbus_paged;
+    wire            cbus_req, cbus_we;
+    wire    [15:0]  cbus_addr, cbus_wdata;
+    wire    [11:0]  exec_addr;
+    wire    [10:0]  grom_addr;
     wire    [15:0]  cbus_rdata;
     wire    [1:0]   cbus_kind;
     wire            aux_ack;
@@ -672,10 +690,10 @@ intv_media media (
     .ld_data    ( ioctl_dout ),
     .len_valid  ( cart_len_valid ),
     .cart_len   ( cart_len ),
-    .bus_req    ( 1'b0 ),
-    .bus_we     ( 1'b0 ),
-    .bus_addr   ( 16'd0 ),
-    .bus_wdata  ( 16'd0 ),
+    .bus_req    ( cbus_req ),
+    .bus_we     ( cbus_we ),
+    .bus_addr   ( cbus_addr ),
+    .bus_wdata  ( cbus_wdata ),
     .bus_ack    ( cbus_ack ),
     .bus_rdata  ( cbus_rdata ),
     .bus_hit    ( cbus_hit ),
@@ -688,9 +706,9 @@ intv_media media (
     .aux_be     ( 2'b11 ),
     .aux_ack    ( aux_ack ),
     .aux_rdata  ( aux_rdata ),
-    .exec_addr  ( 12'd0 ),
+    .exec_addr  ( exec_addr ),
     .exec_q     ( exec_q ),
-    .grom_addr  ( 11'd0 ),
+    .grom_addr  ( grom_addr ),
     .grom_q     ( grom_q ),
     .ivoice_addr( 11'd0 ),
     .ivoice_q   ( ivoice_q ),
@@ -724,11 +742,11 @@ always @(posedge clk_sys) begin
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
     timing_reset  <= ~lock_s[2];
-    // For the machine from step 3: held while the host holds the core in
-    // reset (loading) and for the menu's Reset. Step 3 also holds the CPU
-    // until cart_ready (the loader finishes about 3 ms after the host's
-    // "all complete", which comes before its reset exit).
-    machine_reset <= ~lock_s[2] | ~rst_s[2] | mrst_s[2];
+    // The machine: held while the host holds the core in reset (loading),
+    // for the menu's Reset, and until the loader is ready (it finishes about
+    // 3 ms after the host's "all complete", which comes before its reset
+    // exit). The CPU then starts on the next frame (intv_bus).
+    machine_reset <= ~lock_s[2] | ~rst_s[2] | mrst_s[2] | ~cart_ready;
 end
 
 
@@ -757,6 +775,70 @@ intv_timing timing (
     .ss_wdata   ( 32'd0 ),
     .ss_rdata   ( ss_rdata_timing )
 );
+
+////////////////////////////////////////////////////////////////////////////////
+// The machine (step 3)
+////////////////////////////////////////////////////////////////////////////////
+
+    wire    [2:0]   m_phase;
+    wire    [15:0]  m_dout, m_din, m_addr;
+    wire            m_fetch, m_hold, m_halted;
+    wire    [31:0]  ss_rdata_machine;
+
+intv_machine machine (
+    .clk            ( clk_sys ),
+    .mreset         ( machine_reset ),
+    .ce             ( ce_cpu ),
+    .hcnt           ( hcnt ),
+    .vcnt           ( vcnt ),
+    .cfg_hlt_imm    ( 1'b0 ),
+    .cfg_sdbd_r6_mame ( 1'b0 ),
+    .pad_r          ( 8'hFF ),          // input module: step 6
+    .pad_l          ( 8'hFF ),
+    .cart_req       ( cbus_req ),
+    .cart_we        ( cbus_we ),
+    .cart_addr      ( cbus_addr ),
+    .cart_wdata     ( cbus_wdata ),
+    .cart_ack       ( cbus_ack ),
+    .cart_rdata     ( cbus_rdata ),
+    .cart_hit       ( cbus_hit ),
+    .exec_addr      ( exec_addr ),
+    .exec_q         ( exec_q ),
+    .grom_addr      ( grom_addr ),
+    .grom_q         ( grom_q ),
+    .phase          ( m_phase ),
+    .dout           ( m_dout ),
+    .din            ( m_din ),
+    .addr           ( m_addr ),
+    .fetch          ( m_fetch ),
+    .hold           ( m_hold ),
+    .halted         ( m_halted ),
+    .ss_en          ( 1'b0 ),
+    .ss_addr        ( 16'd0 ),
+    .ss_we          ( 1'b0 ),
+    .ss_wdata       ( 32'd0 ),
+    .ss_rdata       ( ss_rdata_machine )
+);
+
+// Machine status for the bridge (0x60000000): the last opcode fetch. It is
+// read across clock domains as a quasi-static debugging value (the groups
+// are asynchronous in the SDC); a read may catch it mid-update.
+    reg     [15:0]  mstat_pc = 16'd0;
+    reg     [9:0]   mstat_op = 10'd0;
+    reg     [1:0]   mstat_f = 2'b00;
+    reg     [31:0]  mstat = 32'd0;
+always @(posedge clk_sys) begin
+    if (ce_cpu) begin
+        mstat_f <= {mstat_f[0], m_fetch};       // BAR, NACT, DTB
+        if (m_fetch)
+            mstat_pc <= m_dout;
+        if (mstat_f[1] && m_phase == 3'd3)
+            mstat_op <= m_din[9:0];
+    end
+    mstat <= {2'b00, m_hold, m_halted, 2'b00, mstat_op, mstat_pc};
+end
+always @(posedge clk_74a)
+    mstat_74 <= mstat;
 
     wire            in_pf;
     wire    [7:0]   pf_x, pf_y;

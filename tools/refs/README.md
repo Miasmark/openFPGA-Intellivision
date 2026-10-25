@@ -9,7 +9,7 @@ outside this repository and is never committed (DESIGN.md section 1).
 |---|---|
 | `build_mame_intv.sh FORK DIR [REV]` | Intellivision-only MAME from the owner's fork, as a git worktree; `SOURCES=src/mame/mattel/intv.cpp`, `-j8`, nice 10 |
 | `setup_mame_rompath.sh BIOS OUT` | MAME rompath from the user's BIOS files under MAME's names, CRC-checked |
-| `mame_trace.sh SYS IMAGE FRAMES OUT` | per-instruction CPU trace with every bus read and write and the interrupts, from reset |
+| `mame_trace.sh SYS IMAGE FRAMES OUT` | per-instruction CPU trace with every bus read and write and the interrupts, from reset; IMAGE `none` for an empty cartridge slot |
 | `trace_summary.py TRACE...` | parses a trace; prints counts and a sha256 only |
 | `mame_snap.sh SYS IMAGE FRAME OUT` | one PNG snapshot at the end of a frame |
 | `build_jzintv.sh ZIP DIR` | jzIntv from its official source zip (run only; GPL-2 source never read) |

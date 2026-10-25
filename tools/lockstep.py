@@ -25,9 +25,10 @@ What is compared, instruction by instruction
   - every bus read and write, in order, with address and data;
   - the cycle count of each instruction against the trace's cycle delta.
     MAME charges the STIC's stolen cycles in one lump when it raises the
-    interrupt (MAME intv_m.cpp:668, 680), so the delta across an interrupt
-    is only checked to be at least instruction + interrupt (the extra is
-    printed; in the traces so far it is always 0). Cycle differences are
+    interrupt (MAME intv_m.cpp:668, 680). In the traces so far that lump is
+    always 0, so the delta across an interrupt must be exactly instruction +
+    interrupt; a larger lump is accepted only up to --max-lump N (default 0,
+    for later traces where STIC stealing shows up). Cycle differences are
     tallied per mnemonic; only those in KNOWN_CYCLE_DIFF (SETC 4 vs 6,
     SARC Rr,2 8 vs 6, docs/CPU_NOTES.md rows 3-4) are accepted, any other
     one is a divergence.
@@ -301,7 +302,8 @@ class Result:
         self.undefined = collections.Counter()
 
 
-def run(name, recs, mem, context=8, keep_going=False, max_div=20, **cpu_opts):
+def run(name, recs, mem, context=8, keep_going=False, max_div=20, max_lump=0,
+        **cpu_opts):
     res = Result(name)
     bus = LockBus(mem)
     cpu = CP1610(bus=bus, **cpu_opts)
@@ -411,12 +413,13 @@ def run(name, recs, mem, context=8, keep_going=False, max_div=20, **cpu_opts):
                         bad = "%s takes %d cycles in the model, %d in MAME" % (mn, cyc, dt)
             else:
                 res.lumps.append(dt - cyc - icyc)
-                if dt < cyc + icyc:
+                if dt < cyc + icyc or dt - cyc - icyc > max_lump:
                     key = (mn + " +INT", cyc + icyc, dt)
                     res.cycle_diff[key] += 1
                     res.cycle_examples.setdefault(key, "%04X %s" % (rec.pc, rec.text))
                     bad = ("%s + interrupt takes %d + %d cycles in the model, MAME's "
-                           "delta is only %d" % (mn, cyc, icyc, dt))
+                           "delta is %d (lump allowed: 0..%d)"
+                           % (mn, cyc, icyc, dt, max_lump))
             if bad is not None:
                 hist.append("  %6d c=%-7d %04X %-22s | (cycles differ)" %
                             (rec.idx, rec.cycle, rec.pc, rec.text))
@@ -490,6 +493,9 @@ def main(argv=None):
                     help="resync on the trace after a divergence and go on")
     ap.add_argument("--max-div", type=int, default=20)
     ap.add_argument("--sdbd-r6", default="wiki", choices=("wiki", "mame"))
+    ap.add_argument("--max-lump", type=int, default=0,
+                    help="cycles MAME may add at an interrupt beyond instruction + "
+                         "interrupt (default 0: none in the traces so far)")
     a = ap.parse_args(argv)
     if not (a.exec_path and a.grom) and not a.bios_dir:
         ap.error("give --bios-dir (or INTV_BIOS_DIR), or --exec and --grom")
@@ -514,7 +520,7 @@ def main(argv=None):
         recs = read_trace(tr)
         mem = Memory(exec_path, grom, cart, parse_map(mp))
         res = run(name, recs, mem, context=a.context, keep_going=a.keep_going,
-                  max_div=a.max_div, sdbd_r6=a.sdbd_r6)
+                  max_div=a.max_div, max_lump=a.max_lump, sdbd_r6=a.sdbd_r6)
         all_ok &= report(res)
     print("LOCKSTEP %s" % ("pass" if all_ok else "FAIL"))
     return 0 if all_ok else 1

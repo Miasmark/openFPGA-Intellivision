@@ -205,11 +205,14 @@ Result, 2026-10-25, on Astrosmash, Tower of Doom and B-17 Bomber (plain
   6; SARC Rr,2: model 8, MAME 6). The model keeps the documented values.
   The lockstep enforces this: those two (mnemonic, model, MAME) triples
   are its allowlist (`KNOWN_CYCLE_DIFF`), and any other cycle difference,
-  or an interrupt step whose MAME delta is less than instruction +
-  interrupt, is a divergence and makes the run `LOCKSTEP FAIL`. Checked by
+  or an interrupt step whose MAME delta is not exactly instruction +
+  interrupt, is a divergence and makes the run `LOCKSTEP FAIL`. (A lump
+  of extra cycles at an interrupt is accepted only up to `--max-lump N`,
+  default 0, for later traces where STIC stealing may show up.) Checked by
   planting a model that charges 9 instead of 8 cycles for indirect and
-  immediate reads, one with a 10-cycle interrupt and one with a 5-cycle
-  SETC: each fails, on both the 10- and the 120-frame traces.
+  immediate reads, one with a 10-cycle interrupt, one with an 8-cycle
+  interrupt and one with a 5-cycle SETC: each fails, on both the 10- and
+  the 120-frame traces.
 - **STIC cycle stealing does not show in MAME's cycle counter.** Every
   instruction's cycle delta equals its documented count (rows 3-4 aside),
   also across interrupts, and a frame is about 14,934 cycles

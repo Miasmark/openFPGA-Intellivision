@@ -13,7 +13,8 @@ simulator and comes first. Python 3, standard library only.
 - `run_cpu_tests.py`: runs `sim/tests/cpu/*.asm` (expected results written
   by hand in `;!` comments) and sweeps over all 1024 opcodes (documented
   cycle counts, interruptibility, bus log, disassembler round trip). A test
-  fails if any expectation or cycles label is never reached, if it halts
+  fails if any expectation or cycles label is never reached (in a
+  `;! raises` test, any expectation before the raise point), if it halts
   without `;! stop halt`, or if it fetches an instruction from a word that
   was neither assembled nor written.
 - `lockstep.py`: runs the model against MAME instruction traces (from
@@ -21,7 +22,8 @@ simulator and comes first. Python 3, standard library only.
   instruction, every bus access and the cycle counts, replaying only the
   reads from outside the CPU and the interrupt points. The step 0
   done-test; results in `docs/CPU_NOTES.md`. Cycle differences other
-  than the two documented ones (SETC, SARC Rr,2) fail it. Needs the user's BIOS, game
+  than the two documented ones (SETC, SARC Rr,2) fail it, and so does
+  any extra lump of cycles at an interrupt (`--max-lump`, default 0). Needs the user's BIOS, game
   images and traces, which stay outside the repo.
 - `mapper/`: cartridge mapper model and the CRC map table generator (to come).
 

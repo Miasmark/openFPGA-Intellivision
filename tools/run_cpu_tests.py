@@ -345,6 +345,10 @@ def run_asm_test(path, trace_dir=None, verbose=False):
             fails.append("expected UndefinedBehaviour '%s', none raised" % spec["raises"])
         elif spec["raises"] not in raised:
             fails.append("raised '%s', want '%s'" % (raised, spec["raises"]))
+        # Expects placed before the raise point must still be reached.
+        for lineno, lab, k, checks in spec["expect"]:
+            if lab != "end" and lineno not in reached:
+                fails.append("line %d: expect %s#%d never reached" % (lineno, lab, k))
     elif raised is not None:
         fails.append("unexpected UndefinedBehaviour: %s" % raised)
     else:

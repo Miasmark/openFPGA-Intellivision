@@ -1,7 +1,7 @@
 # tools
 
 Python tools, our own (MIT). Build step 0 of DESIGN.md section 9 needs no
-simulator and comes first. Python 3, standard library only.
+simulator and comes first. Python 3, standard library only (`stic_frames.py import` also needs Pillow).
 
 - `as1610.py`: CP1610 assembler for our own test ROMs, written from the
   CP-1600 manual (S1) and the wiki opcode pages. Raw image, `.cfg` and
@@ -26,15 +26,29 @@ simulator and comes first. Python 3, standard library only.
   any extra lump of cycles at an interrupt (`--max-lump`, default 0).
   Needs the user's BIOS, game images and traces, which stay outside the
   repo.
-- `intv_system.py`: the Intellivision as build step 3 has it around the
-  CPU model: memory map, pull-ups, EXEC (10 bits), GROM, GRAM with its
-  windows, scratchpad and System RAM, STIC and PSG register stubs that
-  answer as MAME does, the frame timing (INTRM and the bus-copy window,
-  the STIC handshake) and the cartridge (the mapper model). The golden
-  model of `sim/tb/tb_system.py`. `intv_system.py mame TRACE [--cart IMG]`
-  compares it with a MAME trace, nothing replayed: every read and write
-  and every interrupt point must agree (no-cartridge, Astrosmash, Tower
-  of Doom; B-17 with `--mame-voice-zero`, as MAME reads $0080-$0081 as 0).
+- `intv_system.py`: the Intellivision as build steps 3-4 have it around
+  the CPU model: memory map, pull-ups, EXEC (10 bits), GROM, GRAM with its
+  windows, scratchpad and System RAM, the STIC (`stic.py`) and the PSG
+  register stub that answers as MAME does, the frame timing (INTRM and the
+  bus-copy window, the STIC handshake, BUSRQ) and the cartridge (the
+  mapper model). The golden model of `sim/tb/tb_system.py`.
+  `intv_system.py mame TRACE [--cart IMG] [--timing computed]` compares it
+  with a MAME trace, nothing replayed: every read and write and every
+  interrupt point must agree. It runs on MAME's terms: MAME's clock, its
+  NEGR carry and its memory map (no GRAM alias above $3BFF, unmapped
+  ranges read 0), and with `--timing computed` MAME's 59.92 Hz frames
+  computed rather than read from the trace.
+- `stic.py`: the STIC model (build step 4, backgrounds): registers, Color
+  Stack / Colored Squares / Foreground-Background cards from GROM and
+  GRAM, border colour, delays and border extension, the display enable,
+  the row FIFO fetches and BUSRQ, one 189 x 240 palette-index picture per
+  frame plus a log of its graphics-bus reads. Modes `none` (step 3,
+  default), `stic` (the hardware, BUSRQ on) and `mame` (MAME as it runs).
+  Facts, sources and disagreements: `docs/STIC_NOTES.md`.
+- `stic_frames.py`: the model's pictures against MAME's snapshots:
+  `import` (MAME PNG to palette-index PGM, the palette read from MAME's
+  own source; needs Pillow), `run` (pictures, MOB masks, bus logs) and
+  `compare` (snapshot N against picture N - 1, MOB boxes masked).
 - `cpu_buslog.py`: exports the model's bus-phase log, step ends and
   final registers for the RTL lockstep bench (`sim/tb/tb_cpu.sv`, build
   step 3): every program in `sim/tests/cpu`, a sweep over all 1024
@@ -48,7 +62,8 @@ simulator and comes first. Python 3, standard library only.
 - `refs/`: scripts that build and drive MAME and jzIntv as black-box
   references (traces, snapshots). Their outputs are never committed.
 
-Where the sources disagree and what the model does: `docs/CPU_NOTES.md`.
+Where the sources disagree and what the model does: `docs/CPU_NOTES.md`
+(CPU), `docs/STIC_NOTES.md` (STIC).
 
     python3 tools/run_cpu_tests.py            # all tests
     python3 tools/run_cpu_tests.py -k sdbd    # some
@@ -56,6 +71,7 @@ Where the sources disagree and what the model does: `docs/CPU_NOTES.md`.
     python3 tools/cp1610.py prog.asm --steps 200   # trace a program
     python3 tools/lockstep.py                 # model vs MAME traces (3 games)
     python3 tools/intv_system.py mame T.log --cart G.int   # system model vs MAME
+    python3 tools/stic_frames.py compare --cart G.int --ref FRAMES --snaps 60,120   # STIC vs MAME
 
 Packaging (build step 1): `package.sh` assembles the SD card zip from
 `dist/` and a Quartus bitstream (`release/M_Intellivision_Pocket_<version>.zip`);

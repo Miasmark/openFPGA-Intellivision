@@ -1,14 +1,44 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Miasmark and contributors
-"""stic: model of the STIC (AY-3-8900-1) for build step 4, backgrounds only.
+"""stic: model of the STIC (AY-3-8900-1): backgrounds (build step 4), MOBs
+and collisions (build step 5).
 
-The golden model for the step-4 STIC RTL (DESIGN.md 2.4, 3 row 6, 9 step 4).
+The golden model for the STIC RTL (DESIGN.md 2.4, 3 row 6, 9 steps 4-5).
 It is driven by tools/intv_system.py (SystemBus owns the RAMs and the frame
 timing; this module owns the STIC's registers and its view of the
-graphics bus). MOBs and collisions are build step 5: the MOB registers are
-stored and read back, but not drawn. docs/STIC_NOTES.md lists every fact,
-its source and every place where the sources disagree.
+graphics bus). docs/STIC_NOTES.md lists every fact, its source and every
+place where the sources disagree.
+
+MOBs (build step 5; STIC_NOTES 5)
+  Eight MOBs from the X, Y and A registers ($00-$17; bits: S9 stic.txt:
+  204-234, MAME stic.cpp:40-107): X coordinate 0-255 (0 = no MOB at all),
+  INTR, VISB, XSIZE (16 pixels wide); Y coordinate 0-127 in card pixel
+  rows (2 scanlines), YRES (two cards, 16 rows), YSIZ2 / YSIZ4 (each
+  pattern row 2 / 4 / 8 scanlines; 1 when both clear), XFLIP, YFLIP; card
+  bits 3-10 from GROM, 3-8 from GRAM (bit 11), colour bits 0-2 + 12, PRIO
+  (behind the background's "on" pixels). The object field starts 8 pixels
+  left of and 8 pixel rows above the card grid and moves with the delays
+  (S9 stic.txt:86-194). Collision ("interaction") bits ($18-$1F): MOB n,
+  bit 8 background (an "on" card pixel, squares colours 0-6), bit 9 border;
+  both MOBs need INTR, a MOB never sets its own bit, the bits stay set
+  until the CPU writes the register (S9 stic.txt:239-245, 311-329).
+  The STIC computes them while it draws the frame; the CPU can only read
+  them in the next VBlank (the registers are closed during the display when
+  it is enabled), so the model ORs them in when it draws the frame (MAME
+  stic.cpp:1111-1131 does the same at its vblank). MOB patterns come over
+  the graphics bus during STIC time (GI80 p.5-10: "the fetch of
+  'foreground' object patterns"): no BUSRQ, no CPU cycles.
+  Two rule sets: mode "mame" follows MAME's stic.cpp exactly (MOBs drawn 7
+  to 0, each over the last, a PRIO MOB skipped over an "on" pixel; YRES
+  reads cards N and N + 1; GROM cards 0-255 in both modes; colour 7 of a
+  Colored Squares card is "on" when bit 4 of the stored colour-stack word
+  is set; the background under a delay strip is the last frame's), modes
+  "stic" and "none" follow S9 where it says otherwise (STIC_NOTES 5, M1-M4):
+  the lowest-numbered visible MOB pixel wins and only then its PRIO bit
+  decides against the background, YRES ignores the card's bit 0, GROM
+  cards 64-255 are not reachable in Foreground/Background mode, a delay
+  strip has no "on" pixels.
 
 Registers (CPU side, unchanged from the step-3 stub)
   Read masks per register class as MAME's stic_device::read returns them
@@ -132,6 +162,37 @@ STIC_DEF[HDR] = STIC_DEF[VDR] = (0x3FF8, 0x0007)
 STIC_DEF[CBR] = (0x3FFC, 0x0003)
 
 MODES = ("none", "stic", "mame")
+
+# MOB register bits (S9 stic.txt:204-234; MAME stic.cpp:40-107)
+MXR, MYR, MAR, MCR = 0x00, 0x08, 0x10, 0x18
+MX_X, MX_INTR, MX_VISB, MX_XSIZE = 0x00FF, 0x0100, 0x0200, 0x0400
+MY_Y, MY_YRES, MY_YSIZ2, MY_YSIZ4, MY_XFLIP, MY_YFLIP = 0x007F, 0x0080, 0x0100, 0x0200, 0x0400, 0x0800
+MA_FG20, MA_CARD, MA_GRAM, MA_FG3, MA_PRIO = 0x0007, 0x07F8, 0x0800, 0x1000, 0x2000
+MC_BKGD, MC_BRDR = 0x0100, 0x0200
+# collision area: pixels outside it touch the border (MAME stic.cpp:801-804;
+# picture coordinates, inclusive; the left / top edge moves 8 pixels / 8 card
+# rows in with a border extension bit)
+COL_X1 = OV_L + CARD_COLS * 8 - 2                   # 171: the 159th playfield column
+COL_Y1 = (OV_T + CARD_ROWS * 8) * 2 - 1             # 215
+
+
+def _row_table(double, flip):
+    """Pattern byte -> pixel mask of one MOB line (bit x = pixel x from the
+    left), for XSIZE (double) and XFLIP (flip)."""
+    w = 16 if double else 8
+    out = []
+    for b in range(256):
+        m = 0
+        for k in range(w):
+            if (b >> (7 - k // (2 if double else 1))) & 1:
+                m |= 1 << ((w - 1 - k) if flip else k)
+        out.append(m)
+    return out
+
+
+ROWBITS = {(d, f): _row_table(d, f) for d in (0, 1) for f in (0, 1)}
+# pattern byte -> 8 bytes of 0/1 (bit 7 first), for drawing cards
+BYTEPIX = [bytes((b >> (7 - k)) & 1 for k in range(8)) for b in range(256)]
 # A picture's last pixel (line 23 of the next frame, pixel clock 212) is
 # position 4 x start + 285 x 228 + 212; writes from cycle start + PIC_DONE
 # on show only after it.
@@ -160,12 +221,17 @@ class Stic:
         self.bcr_log = [(-1, 0)]        # modes stic/none: ($2C pixel position, colour)
         self.pending = []               # pictures waiting for their last border line
         self.last_drawn = bus.timing.first   # the last picture handed out
+        self.mobs = True                # False: backgrounds only (build step 4)
+        self.mob_rules = None           # "mame" / "hw": MOB rules (default: by mode)
+        self.raw = [0] * STIC_REGS      # mode "mame": the words as written (MAME keeps them)
+        self.mame_fg = None             # mode "mame": "on" pixels left in MAME's bitmap
         self.reset()
 
     def reset(self):
         """Machine reset (MAME stic.cpp:448-498: registers, mode, handshake).
-        The frame timing and the System RAM FIFO go on."""
+        The frame timing and the System RAM FIFO go on (and MAME's bitmap)."""
         self.regs[:] = [0] * STIC_REGS
+        self.raw[:] = [0] * STIC_REGS
         self.hs_frame = None            # frame in which $20 was written
         self.csmode = 0
 
@@ -200,8 +266,9 @@ class Stic:
         elif n == STIC_GMR:
             self.csmode = 0
         if n < STIC_REGS:
-            if 0x18 <= n < 0x20:
-                value &= ~(1 << (n & 7))   # MAME stic.cpp:1258-1266
+            if MCR <= n < MCR + 8:
+                value &= ~(1 << (n & 7))   # MAME stic.cpp:1258-1266; S9 stic.txt:319-327
+            self.raw[n] = value
             self.regs[n] = value & STIC_DEF[n][1]
 
     # -- BUSRQ (mode "stic") -------------------------------------------------
@@ -362,18 +429,38 @@ class Stic:
                            "requests": len(cur["sched"]),
                            "loaded": sum(1 for f in cur["fetches"] if f[2])})
         want = self.keep_frames is None or n in self.keep_frames
+        # MOB collisions need the frame drawn; MAME's bitmap carries "on"
+        # pixels from frame to frame (under a delay strip), so mode mame
+        # draws every enabled frame
+        collide = self.mobs and enabled and (
+            self.mame_rules() or any(self.regs[MXR + i] & MX_X and self.regs[MXR + i] & MX_INTR
+                                       for i in range(8)))
+        if not (want or self.on_frame is not None or collide):
+            if self.mode == "mame":
+                self.mame_fg = None
+                self.last_drawn = n
+            else:
+                self.pending.append((cur["start"] + PIC_DONE, n, None, None, None))
+            return
+        rows = [r if r is not None else list(self.fifo) for r in self.rows]
+        pic, fg, cards, mobs = self.draw(enabled, rows, border)
+        if mobs is not None:
+            for i, bits in enumerate(mobs["coll"]):
+                if bits:                # sticky until the CPU writes (S9 stic.txt:322-327)
+                    self.regs[MCR + i] = (self.regs[MCR + i] | bits) & STIC_DEF[MCR + i][1]
+                    self.raw[MCR + i] |= bits
         if not (want or self.on_frame is not None):
             if self.mode == "mame":
                 self.last_drawn = n
             else:
                 self.pending.append((cur["start"] + PIC_DONE, n, None, None, None))
             return
-        rows = [r if r is not None else list(self.fifo) for r in self.rows]
-        pic, fg, cards = self.draw(enabled, rows, border)
         info = {"n": n, "start": cur["start"], "enabled": enabled, "vdr": cur["vdr"],
                 "csmode": self.csmode, "fetches": cur["fetches"], "stolen": stolen,
                 "cards": cards, "fg": fg, "rows": rows,
-                "stats": dict(self.stats[-1]), "mob_boxes": self.mob_boxes()}
+                "stats": dict(self.stats[-1]),
+                "mobs": mobs["log"] if mobs is not None else [],
+                "coll": mobs["coll"] if mobs is not None else [0] * 8}
         if self.mode == "mame":
             self._hand_out(n, pic, info, want)
         else:
@@ -422,17 +509,23 @@ class Stic:
                     pic[y * W + x] = log[jj][1]
 
     def draw(self, enabled, rows, border=None):
-        """(picture, foreground mask, card fetch log) from the registers,
-        GRAM/GROM now and the given 12 rows of BACKTAB words. border: the
-        border colour (default: register $2C now)."""
+        """(picture, foreground mask, card fetch log, MOB result) from the
+        registers, GRAM/GROM now and the given 12 rows of BACKTAB words.
+        border: the border colour (default: register $2C now). The MOB
+        result (None without MOBs) is {"coll": 8 collision words to OR into
+        $18-$1F, "log": [(MOB, memory, first address, last address, x, y)]}."""
         r = self.regs
+        mame = self.mame_rules()
         if border is None:
             border = r[BCR] & 0xF
         pic = bytearray([border]) * (W * H)
-        fg = bytearray(W * H)
         cards = []
         if not enabled:
-            return pic, fg, cards
+            if mame:
+                self.mame_fg = None     # MAME fills the bitmap (stic.cpp:1132-1135)
+            return pic, bytearray(W * H), cards, None
+        # mode mame: what MAME's bitmap holds where this frame draws no card
+        fg = bytearray(self.mame_fg) if (mame and self.mame_fg is not None) else bytearray(W * H)
         grom, gram = self.bus.grom, self.bus.gram
         hd, vd = r[HDR] & 7, r[VDR] & 7
         cs = 0                          # colour stack pointer, 0 every frame
@@ -447,11 +540,16 @@ class Stic:
                         q = (w & 7, (w >> 3) & 7, (w >> 6) & 7,
                              ((w >> 9) & 3) | ((w >> 11) & 4))
                         top = r[CSR + cs] & 0xF
-                        for py in range(8):
-                            for px in range(8):
-                                c = q[(py >> 2) * 2 + (px >> 2)]
-                                self._put(pic, fg, x0 + px, y0 + 2 * py,
-                                          top if c == 7 else c, c != 7)
+                        # colour 7 is "off"; MAME: "on" if bit 4 of the stored word is (D12)
+                        top_on = (self.raw[CSR + cs] >> 4) & 1 if mame else 0
+                        for half in (0, 1):
+                            a, b = q[2 * half], q[2 * half + 1]
+                            line = bytes([top if a == 7 else a] * 4 + [top if b == 7 else b] * 4)
+                            on = bytes([top_on if a == 7 else 1] * 4 + [top_on if b == 7 else 1] * 4)
+                            for py in range(8 * half, 8 * half + 8):
+                                i = (y0 + py) * W + x0
+                                pic[i:i + 8] = line
+                                fg[i:i + 8] = on
                         cards.append((row, col, "squares", None))
                         continue
                     if w & 0x2000:
@@ -467,53 +565,157 @@ class Stic:
                     bgc = ((w >> 9) & 3) | ((w >> 11) & 4) | ((w >> 9) & 8)
                     mem, base = (gram if w & 0x0800 else grom), w & 0x01F8
                 cards.append((row, col, "GRAM" if mem is gram else "GROM", base))
+                tr = bytes([bgc, fgc]) + bytes(254)
                 for py in range(8):
-                    bits = mem[base + py]
-                    for px in range(8):
-                        on = (bits >> (7 - px)) & 1
-                        self._put(pic, fg, x0 + px, y0 + 2 * py, fgc if on else bgc, on)
+                    bits = BYTEPIX[mem[base + py] & 0xFF]
+                    line = bits.translate(tr)
+                    i = (y0 + 2 * py) * W + x0
+                    pic[i:i + 8] = line
+                    pic[i + W:i + W + 8] = line
+                    fg[i:i + 8] = bits
+                    fg[i + W:i + W + 8] = bits
+        mobs = self._draw_mobs(pic, fg) if self.mobs else None
         # borders (MAME stic.cpp:1102-1108): left, right, top, bottom
         lw = OV_L + (8 if r[CBR] & 1 else hd)
         th = (OV_T + (8 if r[CBR] & 2 else vd)) * 2
+        x1 = OV_L + CARD_COLS * 8 - 1
+        full, zero = bytes([border]) * W, bytes(W)
         for y in range(H):
             base = y * W
             if y < th or y >= (OV_T + CARD_ROWS * 8) * 2:
-                pic[base:base + W] = bytes([border]) * W
-                fg[base:base + W] = bytes(W)
+                pic[base:base + W] = full
+                fg[base:base + W] = zero
                 continue
-            pic[base:base + lw] = bytes([border]) * lw
-            fg[base:base + lw] = bytes(lw)
-            x1 = OV_L + CARD_COLS * 8 - 1
-            pic[base + x1:base + W] = bytes([border]) * (W - x1)
-            fg[base + x1:base + W] = bytes(W - x1)
-        return pic, fg, cards
+            pic[base:base + lw] = full[:lw]
+            fg[base:base + lw] = zero[:lw]
+            pic[base + x1:base + W] = full[:W - x1]
+            fg[base + x1:base + W] = zero[:W - x1]
+        if mame:
+            self.mame_fg = bytes(fg)
+        return pic, fg, cards, mobs
 
-    @staticmethod
-    def _put(pic, fg, x, y, c, on):
-        if 0 <= x < W and 0 <= y + 1 < H:
-            i = y * W + x
-            pic[i] = pic[i + W] = c
-            fg[i] = fg[i + W] = on
+    # -- MOBs (build step 5) -------------------------------------------------
+    def mame_rules(self):
+        """True: MOBs and collisions by MAME's rules (mode mame), else by
+        the hardware's (modes stic and none; STIC_NOTES 5.2). mob_rules
+        overrides it for diagnostics."""
+        if self.mob_rules is not None:
+            return self.mob_rules == "mame"
+        return self.mode == "mame"
 
-    # -- helpers for the comparisons (step 5 draws MOBs) ---------------------
-    def mob_boxes(self):
-        """Rectangles (x0, y0, x1, y1) in picture coordinates that a MOB may
-        cover, by MAME's rules (stic.cpp:777-851: X = 0 or neither VIS nor
-        COL means no MOB). Used to mask MOBs out of a background compare."""
+    def mob_shape(self, i):
+        """MOB i as (x, y, lines, log entry) in picture coordinates: x, y of
+        its top left pixel (picture line), lines = one pixel mask per
+        scanline (bit k = pixel x + k). None: X coordinate 0 (S9
+        stic.txt:187-189; MAME stic.cpp:789)."""
         r = self.regs
-        out = []
+        xr, yr, ar = r[MXR + i], r[MYR + i], r[MAR + i]
+        if not xr & MX_X:
+            return None
         hd, vd = r[HDR] & 7, r[VDR] & 7
-        for i in range(8):
-            x, y = r[i], r[8 + i]
-            if (x & 0xFF) == 0 or not (x & 0x300):
+        x = (xr & MX_X) - 8 + OV_L + hd
+        y = ((yr & MY_Y) - 8 + OV_T + vd) * 2
+        size = (4 if yr & MY_YSIZ4 else 1) * (2 if yr & MY_YSIZ2 else 1)  # scanlines a pattern row
+        nrows = 16 if yr & MY_YRES else 8
+        card = (ar & MA_CARD) >> 3
+        gram_ = ar & MA_GRAM
+        if self.mame_rules():
+            if gram_:
+                card &= 0x3F            # MAME stic.cpp:622
+        else:
+            if gram_ or not self.csmode:
+                card &= 0x3F            # S9 stic.txt:298-303; WIKI STIC (M2)
+            if yr & MY_YRES:
+                card &= ~1              # S9 stic.txt:274-279, 305-306 (M1)
+        base = card * 8
+        mem = self.bus.gram if gram_ else self.bus.grom
+        pats = []
+        for k in range(nrows):
+            a = base + k
+            if gram_:
+                pats.append(mem[a] & 0xFF if a < 0x200 else 0xFF)   # MAME stic.cpp:629-635
+            else:
+                pats.append(mem[a] & 0xFF if a < len(mem) else 0xFF)
+        tab = ROWBITS[(1 if xr & MX_XSIZE else 0, 1 if yr & MY_XFLIP else 0)]
+        lines = []
+        for p in pats:
+            lines.extend([tab[p]] * size)
+        if yr & MY_YFLIP:
+            lines.reverse()
+        off = 0x3800 if gram_ else 0x3000
+        log = (i, "GRAM" if gram_ else "GROM", off + base, off + base + nrows - 1, x, y)
+        return x, y, lines, log
+
+    def _draw_mobs(self, pic, fg):
+        """Draw the MOBs into a picture whose cards are drawn (fg: their "on"
+        pixels) and return their collision bits (see draw())."""
+        r = self.regs
+        mame = self.mame_rules()
+        x0 = OV_L + (8 if r[CBR] & 1 else 0)
+        y0 = (OV_T + (8 if r[CBR] & 2 else 0)) * 2
+        shapes = [self.mob_shape(i) for i in range(8)]
+        coll = [0] * 8
+        log = []
+        claimed = None if mame else bytearray(W * H)
+        # MAME draws 7 to 0, each MOB over the last (stic.cpp:786-851); the
+        # hardware rules take the lowest-numbered visible pixel (M3)
+        order = range(7, -1, -1) if mame else range(8)
+        for i in order:
+            s = shapes[i]
+            xr = r[MXR + i]
+            vis, intr = xr & MX_VISB, xr & MX_INTR
+            if s is None or not (vis or intr):
                 continue
-            # MYR: YSIZE $200 x4, YFULL $100 x2, YRES $80 two cards (lines)
-            h = (4 if y & 0x200 else 1) * (2 if y & 0x100 else 1) * (2 if y & 0x80 else 1) * 8
-            w = 16 if x & 0x400 else 8
-            x0 = (x & 0xFF) - 8 + OV_L + hd
-            y0 = ((y & 0x7F) - 8 + OV_T + vd) * 2
-            out.append((max(x0, 0), max(y0, 0), min(x0 + w, W), min(y0 + h, H)))
-        return out
+            x, y, lines, ent = s
+            log.append(ent)
+            prio = r[MAR + i] & MA_PRIO
+            colour = (r[MAR + i] & MA_FG20) | ((r[MAR + i] & MA_FG3) >> 9)
+            bord = back = False
+            for dy, m in enumerate(lines):
+                if not m:
+                    continue
+                py = y + dy
+                k = 0
+                while m:
+                    if m & 1:
+                        px = x + k
+                        if px < x0 or px > COL_X1 or py < y0 or py > COL_Y1:
+                            bord = True
+                        else:
+                            idx = py * W + px
+                            on = fg[idx]
+                            if on:
+                                back = True
+                            if vis:
+                                if mame:
+                                    if not (on and prio):
+                                        pic[idx] = colour
+                                elif not claimed[idx]:
+                                    claimed[idx] = 1
+                                    if not (on and prio):
+                                        pic[idx] = colour
+                    m >>= 1
+                    k += 1
+            if intr:
+                coll[i] |= (MC_BKGD if back else 0) | (MC_BRDR if bord else 0)
+        log.sort()
+        # MOB to MOB: both need INTR, anywhere in the object field (MAME
+        # stic.cpp:539-603; S9 stic.txt:239-241)
+        act = [i for i in range(8) if shapes[i] is not None and r[MXR + i] & MX_INTR]
+        for a in range(len(act)):
+            i = act[a]
+            xi, yi, li, _ = shapes[i]
+            for b in range(a + 1, len(act)):
+                j = act[b]
+                xj, yj, lj, _ = shapes[j]
+                lo, hi = max(yi, yj), min(yi + len(li), yj + len(lj))
+                xm = min(xi, xj)
+                for py in range(lo, hi):
+                    if (li[py - yi] << (xi - xm)) & (lj[py - yj] << (xj - xm)):
+                        coll[i] |= 1 << j
+                        coll[j] |= 1 << i
+                        break
+        return {"coll": coll, "log": log}
 
 
 # --------------------------------------------------------------- picture I/O

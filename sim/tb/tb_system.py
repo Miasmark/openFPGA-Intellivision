@@ -85,6 +85,9 @@ RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg_regs.sv', 'intv_ram
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
 FRAME = isys.FRAME
+# The step-4 RTL draws no MOBs and sets no collision bits: the model runs with
+# its MOBs off (tools/stic.py Stic.mobs) until the step-5 RTL turns this on.
+STIC_MOBS = False
 NCYC = 10 * FRAME
 DUMP1 = 5 * FRAME + 8000
 # (name, cartridge: a file in the library or ('forced', CRC, bytes) from
@@ -168,6 +171,7 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
     cart = isys.load_cart(cart_path)
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
+    bus.vid.mobs = STIC_MOBS
     bus.pad = tuple(pads)
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
@@ -244,6 +248,7 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic'):
     cart = isys.load_cart(cart_path)
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
+    bus.vid.mobs = STIC_MOBS
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
     ncyc = (npics + 1) * FRAME

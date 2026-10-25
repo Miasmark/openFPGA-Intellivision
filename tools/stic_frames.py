@@ -11,15 +11,14 @@
         is an error.
   run --cart IMG|none --pictures N[,N...] --out DIR [--mode mame|stic|none]
         run the system model (tools/intv_system.py with tools/stic.py) and
-        write picture N as DIR/m<N>.pgm, the MOB boxes as DIR/m<N>.mask.pgm
-        (1 = a MOB may cover the pixel) and the STIC's graphics bus accesses
-        of that frame as DIR/m<N>.bus.txt.
+        write picture N as DIR/m<N>.pgm and the STIC's graphics bus accesses
+        of that frame (row fetches, cards, MOB patterns, collisions) as
+        DIR/m<N>.bus.txt.
   compare --cart IMG|none --ref DIR --snaps N[,N...] [--mode ...]
         run the model and compare DIR/f<N>.pgm (MAME's snapshot at its
-        frame notifier N, imported as above) with model picture N - 1.
-        Pixels inside the model's MOB boxes are not compared (MOBs are
-        build step 5). Prints one line per picture and STIC_FRAMES pass /
-        FAIL.
+        frame notifier N, imported as above) with model picture N - 1,
+        every pixel (MOBs included; until build step 5 the MOB areas were
+        masked). Prints one line per picture and STIC_FRAMES pass / FAIL.
 
 Picture N is the one the STIC model draws at the start of frame N, as MAME
 draws the whole frame in its vblank-N interrupt (intv_m.cpp:683). MAME
@@ -78,18 +77,13 @@ def parse_list(s):
 
 
 def model_pictures(cart, pictures, mode, bios_dir=None, want_info=False):
-    """{n: (picture, mask, info)} from the system model."""
+    """{n: (picture, info)} from the system model."""
     bus, cpu, mclk = isys.system_for(mode, bios_dir, None if cart == "none" else cart)
     out = {}
 
     def grab(n, pic, info):
         if n in pictures:
-            mask = bytearray(sticm.W * sticm.H)
-            # MOB boxes and stats as they were when the frame ended
-            for x0, y0, x1, y1 in info["mob_boxes"]:
-                for y in range(y0, y1):
-                    mask[y * sticm.W + x0:y * sticm.W + x1] = b"\x01" * (x1 - x0)
-            out[n] = (pic, mask, info)
+            out[n] = (pic, info)
     bus.vid.keep_frames = set()
     bus.vid.on_frame = grab
     isys.run_pictures(bus, cpu, max(pictures), mclk)
@@ -103,7 +97,9 @@ def bus_log(info):
         info["stolen"]),
         "# ROW r cycle: when row r was copied into the FIFO, in cycles from the frame",
         "#   start (mode stic: the CPU's BUSAK; mame: MAME's timer boundary; none: the",
-        "#   fetch cycle). CARD row col: the pattern the card's 8 pixel rows read."]
+        "#   fetch cycle). CARD row col: the pattern the card's 8 pixel rows read.",
+        "# MOB i: the pattern rows MOB i reads, its top left pixel in picture coordinates.",
+        "# COLL: the collision bits this frame ORs into $18-$1F (MOB 0 first)."]
     for r, rel, ok, addr in info["fetches"]:
         lines.append("ROW %d cycle %s %s sysram $%04X-$%04X" % (
             r, "-" if rel is None else "%d" % rel, "load" if ok else "missed",
@@ -114,6 +110,11 @@ def bus_log(info):
         else:
             off = 0x3000 if mem == "GROM" else 0x3800
             lines.append("CARD %d %d %s $%04X-$%04X" % (row, col, mem, off + base, off + base + 7))
+    for i, mem, a0, a1, x, y in info.get("mobs", []):
+        lines.append("MOB %d %s $%04X-$%04X at x=%d line=%d" % (i, mem, a0, a1, x, y))
+    coll = info.get("coll", [0] * 8)
+    if any(coll):
+        lines.append("COLL " + " ".join("$%03X" % c for c in coll))
     return "\n".join(lines) + "\n"
 
 
@@ -157,9 +158,8 @@ def main():
     if a.cmd == "run":
         os.makedirs(a.out, exist_ok=True)
         for n in pics:
-            pic, mask, info = got[n]
+            pic, info = got[n]
             sticm.write_pgm(os.path.join(a.out, "m%d.pgm" % n), pic)
-            sticm.write_pgm(os.path.join(a.out, "m%d.mask.pgm" % n), mask)
             with open(os.path.join(a.out, "m%d.bus.txt" % n), "w") as f:
                 f.write(bus_log(info))
         print("wrote %d pictures" % len(pics))
@@ -168,18 +168,17 @@ def main():
     ok = True
     for sn in snaps:
         n = sn - 1
-        pic, mask, info = got[n]
+        pic, info = got[n]
         if a.save:
             os.makedirs(a.save, exist_ok=True)
             sticm.write_pgm(os.path.join(a.save, "m%d.pgm" % n), pic)
             with open(os.path.join(a.save, "m%d.bus.txt" % n), "w") as f:
                 f.write(bus_log(info))
         ref = sticm.read_pgm(os.path.join(a.ref, "f%d.pgm" % sn))
-        bad = [i for i in range(len(pic)) if not mask[i] and pic[i] != ref[i]]
-        masked = sum(mask)
+        bad = [i for i in range(len(pic)) if pic[i] != ref[i]]
         st = info["stats"]
-        line = "snapshot %d / picture %d: %s, %d pixels differ, %d masked (MOB boxes), display %s, VDR %d, " \
-               "csmode %d, stolen %d" % (sn, n, "match" if not bad else "DIFFER", len(bad), masked,
+        line = "snapshot %d / picture %d: %s, %d pixels differ, %d MOBs, display %s, VDR %d, " \
+               "csmode %d, stolen %d" % (sn, n, "match" if not bad else "DIFFER", len(bad), len(info["mobs"]),
                                          "on" if st["enabled"] else "off", st["vdr"],
                                          info["csmode"], st["stolen"])
         if bad:

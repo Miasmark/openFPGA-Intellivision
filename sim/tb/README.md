@@ -133,3 +133,7 @@ checked against (docs/STIC_NOTES.md 3). The bench runs with `+bushash=1`
 (one hash a frame of its B and S lines instead of the lines) while the
 model runs beside it; every picture, row fetch, card row and per-frame
 bus hash must be equal.
+
+Until the step-5 RTL draws MOBs, both modes of the bench run the model with
+its MOBs off (`STIC_MOBS = False` in `tb_system.py`; `tools/stic.py`
+`Stic.mobs`, docs/STIC_NOTES.md 5): backgrounds only, exactly as step 4.

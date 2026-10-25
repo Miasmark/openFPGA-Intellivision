@@ -1,9 +1,9 @@
-# STIC notes (build step 4: backgrounds)
+# STIC notes (build steps 4 and 5: backgrounds, MOBs and collisions)
 
 What the STIC model (`tools/stic.py`, driven by `tools/intv_system.py`) does,
 where each fact comes from, and every place where the sources disagree.
-MOBs and collisions are build step 5; their registers are stored and read
-back here, nothing more.
+Sections 1-4 are the backgrounds (build step 4); section 5 is the MOBs and
+their collisions (build step 5, model).
 
 Sources (DESIGN.md section 12 for the full list):
 
@@ -161,7 +161,8 @@ documented; the log lists each card's 8 bytes once (D15).
   in MAME-compatible runs (`SystemBus.mame_map`).
 - MAME draws MOBs and reports their collisions; games that read collision
   registers then run differently from a model without MOBs (Atlantis reads
-  $001B = $3E00 at frame 8 of its trace). Such games wait for step 5.
+  $001B = $3E00 at frame 8 of its trace). Such games waited for step 5;
+  they match now (section 5).
 
 ## 3 Done-test (build step 4, model)
 
@@ -196,6 +197,9 @@ Not matching, as expected before step 5: Atlantis and Demon Attack (MOB
 collisions read back: MAME sets collision bits the model does not have, and
 the games then run differently; Atlantis reads $001B = $3E00 at frame 8),
 and the MTE201 test cartridge (it tests MOBs and collisions).
+**(build step 5)** With the MOBs in the model all of these match, every
+snapshot above is compared without masks, and the masks are gone from
+`stic_frames.py` (section 5.4).
 
 **What this done-test proves for the RTL.** The pixel-exact match above
 is the model's mode `mame`, which the RTL does not run. The RTL equals
@@ -340,3 +344,190 @@ been stable for a clock, so a freeze may fall in any clk_sys.
 **Gates** (lane `stic-rtl`): see `sim/tb/README.md`; results in the lane's
 NOTES.md.
 
+
+## 5 MOBs and collisions (build step 5, model)
+
+### 5.1 What the model does
+
+**MOB registers** (S9 stic.txt:204-234; MAME stic.cpp:40-107, 1203-1309;
+GI80 p.5-10). Read masks as in step 3 (MAME stic.cpp:1139-1180).
+
+| Register | Bits |
+|---|---|
+| X, $00-$07 | 0-7 X coordinate, 8 INTR (interacts), 9 VISB (visible), 10 XSIZE (16 pixels wide) |
+| Y, $08-$0F | 0-6 Y coordinate (in card pixel rows, 2 scanlines each), 7 YRES (two cards, 16 pattern rows), 8 YSIZ2, 9 YSIZ4, 10 XFLIP, 11 YFLIP |
+| A, $10-$17 | 0-2 colour, 3-10 card (GROM 0-255; GRAM bits 3-8, 0-63), 11 GRAM, 12 colour bit 3, 13 PRIO (behind the background) |
+| C, $18-$1F | 0-7 collision with MOB 0-7, 8 with the background, 9 with the border |
+
+- Placement: the object field starts 8 pixels left of and 8 pixel rows (16
+  scanlines) above the card grid and moves with the delays; a MOB whose X
+  coordinate is 0 does not exist (not drawn, no collisions); Y = 0 is not
+  special (S9 stic.txt:86-194; MAME stic.cpp:789, 798-799). In the
+  picture of section 1: x = X - 8 + 13 + HDR, line = (Y - 8 + 12 + VDR) x 2.
+- Size: 8 pixels wide, 16 with XSIZE, each pattern bit then 2 pixels. Each
+  pattern row is 1 scanline, 2 with YSIZ2, 4 with YSIZ4, 8 with both; 8
+  pattern rows, 16 with YRES (two cards). So the default MOB is 8 scanlines
+  = 4 card pixels high and the largest 128 scanlines (S9 stic.txt:259-284,
+  table; MAME stic.cpp:605-646 the same; GI80: "half height, y zoom, x zoom
+  and 8 or 16 character lines high").
+- XFLIP mirrors each line, YFLIP the line order (of both cards with YRES).
+- Colour: bits 0-2 and 12, all 16 colours. VISB clear: not drawn, but it
+  still interacts (S9 stic.txt:243-245; MAME stic.cpp:789, 834-837).
+- Pixels outside the playfield are never shown (the border is drawn over
+  them, MAME stic.cpp:1102-1108; the strip a delay uncovers too, D6).
+- Priority: MOB 0 over MOB 1 over ... MOB 7. PRIO puts a MOB's visible
+  pixels behind the background's "on" pixels (the card's foreground,
+  Colored Squares colours 0-6) and in front of its "off" pixels. How the two
+  orders combine differs (M3).
+
+**Collisions** ("interaction", S9 stic.txt:239-245, 311-329; MAME
+stic.cpp:539-603, 777-851, 1111-1131):
+
+- a MOB's pixel on an "on" background pixel sets its bit 8; a MOB pixel
+  outside the collision area sets bit 9. The area is the playfield's pixels
+  13-171 (the 159 shown columns) and lines 24-215, its left edge 8 pixels
+  and its top edge 16 lines further in with the border extension bits;
+  the 160th column counts as border (MAME stic.cpp:801-804, 817-822; M8);
+- two MOBs that both have INTR set and a pixel on the same spot set each
+  other's bits 0-7, anywhere in the object field (MAME; M7); a MOB never
+  sets its own bit, and a write never sets it either (step 3);
+- INTR clear: the MOB sets no bit (and no other MOB's bit for it); VISB
+  does not matter;
+- the bits are sticky: the model ORs them in, only a CPU write clears them,
+  and bits stay set when INTR is cleared later (S9 stic.txt:322-327).
+
+**When the bits are set.** The hardware sets them while it draws the
+frame; MAME sets them all at its vblank, when it draws the frame (stic.cpp:1111-1131). The model ORs them in when
+it draws the frame (modes `stic` and `none`: at the frame's end; mode `mame`: at MAME's vblank boundary). With
+the display enabled the registers are closed from cycle 3,790 to the frame's
+end, so the CPU cannot tell the two apart; with the display not enabled
+nothing is drawn and no bit is set (MAME screenrefresh does the same,
+stic.cpp:1132-1135). The RTL may set them pixel by pixel.
+
+**Two rule sets.** Mode `mame` follows MAME's stic.cpp line by line; modes
+`stic` and `none` (the hardware model, the RTL's reference) follow S9 where
+S9 (or the wiki) says otherwise, and MAME where they say nothing (M1-M5).
+`Stic.mobs = False` turns MOBs off (backgrounds only, as step 4):
+`sim/tb/tb_system.py` sets it (`STIC_MOBS`) until the step-5 RTL draws
+MOBs. With MOBs off the model's pictures, STIC logs and machine state are
+identical to step 4's (checked: modes `stic`/`none`/`mame` on 6 runs of
+300-700 pictures, SHA-1 of every picture, row fetch, card log and the final
+state).
+
+### 5.2 Where the sources disagree
+
+| # | Topic | Sources | Model |
+|---|---|---|---|
+| M1 | YRES card number | S9: the upper half always comes from an even card, the lower from the next odd card; bit 0 of the card number is ignored (stic.txt:274-279, 305-306). MAME reads card N and N + 1, so an odd N gives N, N + 1 (stic.cpp:618-636) | `mame`: MAME; `stic`/`none`: S9 |
+| M2 | MOB GROM cards in Foreground/Background mode | S9: card bits 6-7 ignored in FGBG mode, so GROM 64-255 are not available to MOBs (stic.txt:298-303, 459-461); WIKI STIC: "both the BACKTAB and the MOBs are limited to GROM cards 0 through 63"; MAME: GROM 0-255 in both modes | `mame`: MAME; `stic`/`none`: S9 and WIKI |
+| M3 | MOB order and PRIO together | S9: "MOBs are first ordered according to their number ... The PRIO bit does not affect MOB-to-MOB priority ordering" (stic.txt:247-252): the lowest-numbered MOB with a visible pixel there wins, then its PRIO decides against the background. MAME draws MOB 7 to MOB 0, each over the last, and skips a PRIO MOB's pixel over an "on" background pixel, so the higher-numbered MOB under it shows there (stic.cpp:786-851) | `mame`: MAME; `stic`/`none`: S9 |
+| M4 | Background under a delay strip, for collisions | S9: the object field outside the cards is "filled in with the background color", i.e. no "on" pixels (stic.txt:121-125); MAME draws no cards there and its bitmap keeps what the frame before left (stic.cpp:668-775, 1102-1108): a card pixel of a frame with a smaller delay still counts as "on" | `mame`: MAME (the model keeps MAME's last "on" pixels); `stic`/`none`: no "on" pixels. Shown pixels are the border colour in both (D6) |
+| M5 | Colour 7 of a Colored Squares card | S9: never "on" (stic.txt:433-434); MAME takes the colour-stack register as stored, 16 bits, and its bit 4 is MAME's "on" flag (stic.cpp:685-697; D12) | `mame`: "on" when bit 4 of the stored word is set; `stic`/`none`: never |
+| M6 | When collision bits are set | S9: set by an interaction, sticky; when in the frame not said. MAME: all at the vblank | at the frame's end (section 5.1); the CPU cannot tell while the display is enabled |
+| M7 | MOB to MOB collisions outside the playfield | MAME: anywhere in both MOBs' boxes, also over the border and under the delay strip (stic.cpp:539-579); S9 does not say | MAME, all modes. Hardware test: our STIC test ROM |
+| M8 | The border for collisions | MAME: outside playfield columns 0-158 (picture x 13-171) and lines 24-215, edges moved in by the extension bits, not by the delays (stic.cpp:801-804, 817-822); S9: "interacts with the display borders" | MAME, all modes. Whether the 160th column and the delay strips count is a hardware question (test ROM) |
+| M9 | Collisions of invisible MOBs | DESIGN 13.8 listed this as unknown; S9 stic.txt:243-245 says it: "The MOB does not need to be visible in order to interact with other MOBs, background cards or the screen border"; MAME the same | no disagreement: INTR alone decides |
+| M10 | GROM card 255 with YRES | MAME reads GROM bytes 2,048-2,055, past its 2 KiB region (stic.cpp:629-631, undefined); with M1 the hardware reads cards 254 and 255 | `mame`: $FF for bytes past GROM (no game in the done-test does this); `stic`/`none`: M1 |
+
+### 5.3 Bus accesses
+
+MOB patterns come over the graphics bus: GI80 p.5-10: "The graphics
+control BUS is used during 'STIC' time in the fetch of 'foreground' object
+patterns and 'background' object patterns". So a MOB costs the CPU no
+BUSRQ and no cycles: the BUSRQ schedule of section 1 (frame request, one
+request per card row) is unchanged. When and how often the STIC reads a
+MOB's pattern rows is not documented (as D15 for cards). The bus log
+(`stic_frames.py run`, `m<N>.bus.txt`) adds one MOB line per MOB that is
+drawn or interacts (its GROM/GRAM rows, its top left pixel) and a COLL line
+with the bits the frame sets.
+
+### 5.4 Done-test (build step 5, model)
+
+DESIGN 9 step 5: "10 more games match; STIC test ROM passes". The task for
+the model: mode `mame` matches MAME's frames, with no masks, on every screen
+of steps 4 and 5, and MAME's traces of the MOB games, where the collision
+reads must match for the trace to match. Snapshots, frames and traces stay
+outside the repository. Result 2026-10-25 (mode `mame`): **pass**.
+
+Snapshots, compared pixel for pixel with no masks (`stic_frames.py
+compare`, mode `mame`; snapshot N against model picture N - 1):
+
+| Screens | Snapshots | With MOBs drawn | Result |
+|---|---|---|---|
+| Step 4: the 26 games and the no-cartridge EXEC of section 3 (Beamrider, Body Slam, BurgerTime, River Raid, TRON Solar Sailer, Zzzz Spina the Bee and Thunder Castle were masked there) | 286 | 77 | all match |
+| Atlantis | 8 (60-700) | 8 | all match |
+| Demon Attack | 8 (60-700) | 8 | all match |
+| MTE201 test cartridge | 110 (3-16, 142-180, 209-222, 240-400, 420-900) | 81 | all match |
+| Buzz Bombers, Centipede, Defender, Dracula, Dragonfire, Ice Trek, Tropical Trouble | 35 each (20-700, every 20) | 35 each | all match |
+| Also: Fathom, Nova Blast, International Demonstration Cartridge | 35 each | 29, 35, 3 | all match |
+
+In all 762 snapshots of 39 cartridges and the EXEC, 486 of them with MOBs.
+The step-5 games use, between them, every MOB feature: GROM and GRAM cards,
+XSIZE, YSIZ2, YSIZ4, YRES, XFLIP, YFLIP, PRIO, pastel colours, MOBs that
+only interact (INTR without VISB), and collisions with MOBs, the background
+and the border (MTE201 alone has all of them; per game: lane notes).
+
+MAME traces (`tools/refs/mame_trace.sh`, `intv_system.py mame --timing
+computed`): every read and write equal, so every collision register read
+returns MAME's value:
+
+| Game | Frames | Steps | Collision register reads (with a bit set) | First set bit read |
+|---|---|---|---|---|
+| Atlantis | 301 | 575,793 | 2,392 (350) | frame 8 |
+| Demon Attack | 301 | 577,031 | 2,392 (292) | frame 9 |
+| MTE201 | 301 | 539,191 | 344 (186) | frame 15 |
+| Buzz Bombers | 301 | 583,708 | 1,144 (96) | frame 23 |
+| Centipede | 400 | 702,226 | 415 (82) | frame 314 |
+| Defender | 450 | 827,003 | 168 (11) | frame 354 |
+| Dracula | 301 | 566,010 | 2,288 (415) | frame 18 |
+| Dragonfire | 301 | 582,835 | 2,360 (223) | frame 9 |
+| Ice Trek | 301 | 572,399 | 2,128 (516) | frame 15 |
+| Tropical Trouble | 301 | 572,383 | 2,336 (8) | frame 115 |
+
+All pass (MAME_COMPARE pass). The 9 traces of section 3 (no cartridge,
+Astrosmash, Tower of Doom, Diner, Dig Dug, Sewer Sam, Solar Sailer 652
+frames, Safecracker, Beamrider) pass again with the MOBs on, with the same
+step counts.
+
+**Sensitivity.** Each of 23 planted faults in a copy of `stic.py` (mode `mame`)
+must make one of the comparisons above fail; 20 do: MOB order 0 to 7, PRIO
+ignored, XSIZE, XFLIP, YFLIP, YSIZ2, YSIZ4 or YRES ignored, GRAM card mask
+5 bits, colour bit 3 dropped, X one pixel off, Y one scanline off, X = 0
+drawn, invisible MOBs drawn, no background, border or MOB collisions, the
+right border one column late, collisions only for visible MOBs (Atlantis
+trace), collision bits overwritten instead of ORed (Centipede trace). Not
+caught: the bottom border one line late, MAME's stale "on" pixels under a
+delay strip ignored (M4) and MAME's colour-7 "on" bit ignored (M5): no game
+in the set has a MOB there or such a colour-stack value. These need our own
+STIC test ROM (for the RTL bench; MAME can run it as a cartridge too).
+
+**Hardware rules against MAME.** A diagnostic (lane script, not a gate) redrew every
+enabled picture of the 20 MOB games above, in their mode `mame` runs, with
+the hardware rules from the same registers, rows and GRAM. No picture
+changes in any of them (M3's PRIO MOBs appear in Centipede, Dracula,
+Dragonfire, Fathom, River Raid, Thunder Castle and MTE201, but never over
+another MOB on an "on" pixel). The collision bits change in MTE201 only,
+at pictures 293-296: its eight MOBs use YRES with an odd card number (M1),
+and under MAME's rule all eight collide with each other, the background and
+the border, under S9's none. Run on MAME's timing with the hardware rules,
+MTE201's snapshots 240-900 still all match MAME, so the test shows nothing
+on screen for it there. Mode `stic` (hardware timing and rules) against the
+same MAME snapshots, for comparison with section 3: Buzz Bombers 35 of 35
+match, MTE201 105 of 110 (500-580: it fills BACKTAB during the display,
+T2/T5), the others 0-18 of 35 (and 0 of 8): the stolen cycles (T2) change
+when the games move their MOBs, as for Sewer Sam in section 3.
+
+### 5.5 Hardware checks
+
+The owner's console (no flash cartridge) can settle little here:
+
+- the games here draw the same pictures under both rule sets (5.4), so
+  watching them on the console cannot tell M1-M5 apart;
+- MTE201 differs only in collision bits at pictures 293-296 and shows no
+  difference on screen in the snapshots checked; and it is a factory test
+  cartridge the owner may not have;
+- what a console run of a game can show is the T2 question of section 3
+  again (MOB games run with the hardware's stolen cycles): not new.
+
+M1-M8 otherwise need our own STIC test ROM on hardware (a flash cartridge),
+as D6, D8 and T1-T10 do.

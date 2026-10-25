@@ -18,9 +18,10 @@ Checks (each prints a line; the last line is APF_JSON pass or APF_JSON FAIL):
   Intellivision core 1.0.2 installs (the platform is shared with it);
 - data.json: DESIGN.md 5.6's slots in order (ids 0x100-0x106, file names,
   sizes), each loader slot's bridge address = its number in core_top.v and
-  slot_stub.sv (bits 27:24), slot_stub's expected sizes, the required slots
-  as core_top.v tells the test pattern, the JLP flash slot's data table
-  entry, and the save-state address clear of every slot;
+  intv_loader.sv (bits 27:24), the loader's expected sizes, the required
+  slots as core_top.v tells the test pattern, the JLP flash slot's data
+  table entry (apf_datatable.sv), and the save-state address clear of every
+  slot;
 - interact.json: the Pocket's menu limits, every address decoded by
   core_top.v, defaults equal to core_top.v's power-up values;
 - video.json: slots 0 and 1 are pocket_video.sv's playfield and border
@@ -303,7 +304,8 @@ def main():
     rtl = os.path.join(root, "src/fpga/core")
     core_top = open(os.path.join(rtl, "core_top.v")).read()
     video = open(os.path.join(rtl, "pocket_video.sv")).read()
-    stub = open(os.path.join(rtl, "slot_stub.sv")).read()
+    stub = open(os.path.join(rtl, "intv_loader.sv")).read()
+    dtab = open(os.path.join(rtl, "apf_datatable.sv")).read()
     package = open(os.path.join(root, "tools/package.sh")).read()
 
     print("-- JSON files")
@@ -374,7 +376,7 @@ def main():
         if i < 6:
             check(loader_mask and addr >> 28 == int(loader_mask.group(1), 16) and addr == i << 24,
                   f"{name}: address {s['address']} reaches the data loader as slot {i} (bits 27:24)")
-            check(i < len(stub_sizes) and stub_sizes[i] == (size or 0), f"{name}: slot_stub expects {size or 'any size'}")
+            check(i < len(stub_sizes) and stub_sizes[i] == (size or 0), f"{name}: intv_loader expects {size or 'any size'}")
             check(i < len(req) and req[i] == required, f"{name}: core_top tells the test pattern required = {required}")
     cart, cfg = slots[0], slots[1]
     check(int(cart["parameters"], 16) == 0x109 and int(cfg["parameters"], 16) == 0x109,
@@ -385,8 +387,10 @@ def main():
     check(jlp.get("nonvolatile") is True and int(jlp["parameters"], 16) == 0x84 and "filename" not in jlp,
           "JLP flash: nonvolatile, one file per game (0x84)")
     check(int(jlp["address"], 16) == 0x20000000, "JLP flash at 0x20000000 (core_top's bridge map; reads 0 until step 11)")
-    dt = re.findall(r"datatable_addr <= 10'd(\d+) \* 2 \+ 1;\s*\n\s*datatable_data <= 32'd(\d+);", core_top)
-    check(dt == [("6", "0")], f"core_top reports JLP flash (slot index 6) as 0 bytes until step 11: {dt}")
+    dt = re.findall(r"\.JLP_IDX\s*\(\s*(\d+)\s*\)", core_top)
+    dw = re.findall(r"dt_addr <= 10'\(2 \* JLP_IDX \+ 1\);\s*\n\s*dt_data <= 32'd(\d+);", dtab)
+    check(dt == ["6"] and dw == ["0"],
+          f"core_top reports JLP flash (slot index 6) as 0 bytes until step 11 (apf_datatable): {dt} {dw}")
     ss = re.search(r"localparam \[31:0\] SS_ADDR = 32'h([0-9A-Fa-f]+);", core_top)
     ss = int(ss.group(1), 16) if ss else None
     check(ss == 0x50000000 and all(int(s["address"], 16) >> 24 != ss >> 24 for s in slots),

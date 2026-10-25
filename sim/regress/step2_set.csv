@@ -1,0 +1,26 @@
+image,crc32,bytes,layout,flags,class
+"Atlantis (USA, Europe).zip",13FF363C,16384,2,00,layout 2: Imagic 8K words at $4800
+"Astrosmash (USA, Europe).zip",FAB2992C,8192,3,00,layout 3: 4K words at $5000
+"Lock 'N' Chase (USA, Europe).zip",E00D1399,16384,5,40,"layout 5: derived-prefix, $5000-$67FF of an 8K-word image"
+"BurgerTime (USA, Europe).zip",43806375,16384,7,00,layout 7: 8K words at $5000
+"Scooby Doo's Maze Chase (USA, Europe).zip",E9E3F60D,16384,7,01,layout 7 + ECS flag
+"Space Spartans (USA, Europe).zip",3784DC52,16384,7,02,layout 7 + Intellivoice flag
+"USCF Chess ~ Chess (USA, Europe).zip",752FD927,16384,8,04,"layout 8: 8-bit cart RAM, 1K cells mirrored in $D000-$D7FF"
+Land Battle (USA) (Proto).zip,3825C25B,16384,9,04,layout 9: 8-bit cart RAM $D000-$D7FF; 16-bit prototype ROM
+Pac-Man (USA) (INTV Corp.).zip,6E4E8EB4,24576,10,20,"layout 10: 12K words $5000-$7FFF, ECS_OFF"
+MTE201 Intellivision Test Cartridge (USA).zip,C83EEA4C,16386,11,60,"layout 11: MTE201 alt, 16,386 bytes (4n+2: length gate), ECS_OFF, estimated"
+Party Line - Blow Out (USA) (Proto).zip,A63AA3D8,16384,12,40,"layout 12: derived-jumps, $5000 + $D000"
+Commando (USA).zip,3289C8BA,32768,13,00,"layout 13: 16K words, $5000 + $9000"
+"Triple Challenge - Chess, Checkers, Backgammon (USA).zip",095638C0,45058,14,44,"layout 14: Triple Challenge, 45,058 bytes (4n+2: length gate), 8-bit RAM, estimated"
+"B-17 Bomber (USA, Europe).zip",8AD19AB3,24576,15,02,"layout 15: $5000 + $D000, Intellivoice flag"
+Championship Tennis (Europe).zip,4CC46A04,32768,17,80,"layout 17: $5000 + $D000-$EFFF, ECS_RISK"
+Dig Dug (USA).zip,159AF7F7,32768,20,20,"layout 20: $5000 + $7000 + $9000, ECS_OFF"
+Hover Force (USA).zip,FF83FF80,49152,22,00,"layout 22: 24K words, $5000 + $9000-$BFFF + $D000"
+Thunder Castle (USA).zip,C1F1CA74,32768,23,00,layout 23: $5000 + $D000 + $F000
+Tower of Doom (USA).zip,D1D352A0,49152,24,00,layout 24: 24K words in four segments
+Game Factory (USA) (Proto).zip,CE8FC699,49152,25,05,"layout 25: 8-bit cart RAM at $8800 (Game Factory), ECS + RAM flags"
+World Series Major League Baseball (USA).zip,C2063C08,49152,26,0B,"layout 26: ECS-style paged ROM at $F000, two pages (WSMLB); ECS + Intellivoice + paged flags"
+Centipede (USA).zip,D5363B8C,16384,27,20,"layout 27: 8K words at $6000, ECS_OFF"
+IMI Test Cartridge (USA).zip,7217CA7B,8192,28,20,"layout 28: 4K words at $7000 (IMI test cartridge), ECS_OFF"
+synthetic:a,F05D1102,9217,1,40,"default map: sim/testroms/loader_odd.asm + table, 4,609 words cut to 9,217 bytes (4n+1: three pad bytes, odd last word)"
+synthetic:b,1BEAB385,94407,1,E0,"default map: as above, 47,204 words cut to 94,407 bytes (4n+3: one pad byte); 24 pages reach $2000 and $7000, so ECS_RISK + ECS_OFF"

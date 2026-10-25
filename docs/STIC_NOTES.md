@@ -80,6 +80,10 @@ The CPU sees BUSRQ through `SystemBus.busrq`: it stops at its next
 interruptible boundary and is held until the request ends (cp1610.py, S1
 p.24). Stolen cycles per frame in mode `stic`, measured: see section 3.
 
+In modes `stic` and `none` the FIFO counter restarts at INTAK (in mode
+`none` it was never restarted before the RTL step) and stops once it has
+passed System RAM (both the model and the RTL leave it at 360).
+
 Mode `mame` is MAME as it runs (T2): no stolen cycles; row r copied at the
 first instruction boundary at or after vblank + 3,891 + 114 x VDR + 802 x r
 (MAME intv_m.cpp:670-676; VDR as it is at the vblank); the row counter back
@@ -230,3 +234,69 @@ Commands (lane scripts outside the repository drive these):
     python3 tools/stic_frames.py compare --cart GAME.int --ref FRAMES --snaps 60,120,...
     tools/refs/mame_trace.sh intv GAME.int 301 OUT
     python3 tools/intv_system.py mame OUT/trace.log --cart GAME.int --timing computed
+
+## 4 The RTL (build step 4)
+
+`src/fpga/core/intv_stic.sv` replaces the step-3 register stub
+(`intv_stic_regs.sv`; its read masks, handshake, mode latch and closed
+accesses are kept unchanged). It follows the model in modes `stic` (BUSRQ
+on, as the core runs) and `none` (`busrq_en` = 0, benches only).
+
+**Timing as built** (CPU cycles from the frame start, 57 a line; the frame
+position is the raster's, `intv_timing`):
+
+| What | When | Notes |
+|---|---|---|
+| frame latches: display enable, VDR, border colour | the ce that ends cycle 3,789, after that cycle's write | the model's `window_end` |
+| frame BUSRQ | 3,790-3,831 when enabled | T4 |
+| row r BUSRQ | lines 68 + 2 VDR + 16 r and the next, while they fit (12 rows, 13 with VDR = 0) | T1, T3 |
+| row r copy | the start of line 69 + 2 VDR + 16 r, if BUSAK is low in that cycle (or BUSRQ is off): 20 words from System RAM's port B, two clk_sys a word, done 41 clk_sys after the cycle starts (the CPU's next write could come at 48) | T10: all or nothing |
+| card engine | pixel clocks 8-27 of line L build line L + 1 into a two-bank line buffer, one card a pixel clock: row-buffer word, GROM / GRAM byte, colours, stack | |
+| picture | line buffer shown from pixel clock 37 (playfield x 0) of lines 70-261; border elsewhere | D14 below |
+| border colour shown | switches at line 67 | |
+
+**Picture semantics.** The RTL draws line by line, so a frame's picture
+cannot depend on what the CPU does after it is shown. Where MAME's
+draw-at-vblank and the hardware can differ, the RTL (and the model in
+modes `stic` / `none`) takes:
+
+- the display enable at the end of the VBlank window: a $20 write after
+  cycle 3,789 leaves that frame blank (D8; MAME draws it). This is the
+  first enabled frame of most games (one picture);
+- the border colour of a blank frame at the end of the window;
+- picture rows 0-20 (raster lines 46-66, before the window ends) in the
+  border colour of the frame before;
+- CSR, HDR, CBR, the mode and GRAM live: closed to the CPU from cycle
+  3,790 when the display is enabled, unused when it is not.
+
+Mode `mame` keeps MAME's semantics, so the MAME comparisons of section 3
+are unchanged.
+
+**Framing (D14).** RTL picture n (the model's numbering) is raster lines
+46-261 of frame n - 1 and 0-23 of frame n, pixel clocks 24-212: MAME's
+13/17 pixel and 24/24 line border around the 159 x 192 playfield, which
+starts at pixel clock 37 and line 70 (the first fetch, 3,933, is line 69).
+The Pocket shows the playfield (160 x 192, slot 0) or the playfield with 3
+pixels left, 4 right and 9 lines above and below (167 x 210, slot 1;
+`pocket_video`); the bottom border lines are the next frame's VBlank lines
+0-8. The colours are MAME's palette (`intv_palette.sv`, BSD-3, credited
+in THIRD_PARTY_NOTICES.md) until a capture of the owner's console.
+
+**Pattern reads (D15).** The RTL reads a card's pattern byte once per
+scanline (twice per card pixel row), from GROM's second port or GRAM's
+port B; the bench logs the card rows at their first line, as the model's
+card log gives them.
+
+**State.** STIC id $04, 55 words: the registers, {handshake, mode}, the
+frame latches (enable, VDR, border colour, the border shown), the fetch
+state (FIFO counter, armed, copy running, word, phase), the colour-stack
+position and its value at the card row's start, the next pixel's colour;
+$0C the row buffer (20 words), $0D the line buffer (64). The row and
+column positions are the raster's (`intv_timing`'s state). Every block-RAM
+read port is read every clock from an address that depends only on the
+state and the position, and its word is used only after the address has
+been stable for a clock, so a freeze may fall in any clk_sys.
+
+**Gates** (lane `stic-rtl`): see `sim/tb/README.md`; results in the lane's
+NOTES.md.
+

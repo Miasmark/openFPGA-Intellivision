@@ -44,7 +44,10 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   the row FIFO fetches and BUSRQ, one 189 x 240 palette-index picture per
   frame plus a log of its graphics-bus reads. Modes `none` (step 3,
   default), `stic` (the hardware, BUSRQ on) and `mame` (MAME as it runs).
-  Facts, sources and disagreements: `docs/STIC_NOTES.md`.
+  In modes `stic` and `none` a picture is what the RTL (`intv_stic.sv`)
+  draws: display enable and border colour from the end of the VBlank
+  window, picture rows 0-20 in the frame before's border colour. Facts,
+  sources and disagreements: `docs/STIC_NOTES.md`.
 - `stic_frames.py`: the model's pictures against MAME's snapshots:
   `import` (MAME PNG to palette-index PGM, the palette read from MAME's
   own source; needs Pillow), `run` (pictures, MOB masks, bus logs) and

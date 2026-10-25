@@ -1,22 +1,26 @@
-// Intellivision core: the machine as build step 3 has it (DESIGN.md 9):
-// the CP1610, the bus fabric, scratchpad, System RAM and GRAM, and the
-// STIC and PSG register stubs, around the cartridge port and the system
-// ROMs of intv_media. No picture and no sound yet: the EXEC runs, with or
-// without a cartridge, and the bus matches tools/intv_system.py cycle by
-// cycle (sim/tb/tb_system.sv).
+// Intellivision core: the machine as build step 4 has it (DESIGN.md 9):
+// the CP1610, the bus fabric, scratchpad, System RAM and GRAM, the STIC
+// (backgrounds, BUSRQ, the picture) and the PSG register stub, around the
+// cartridge port and the system ROMs of intv_media. No sound yet: the EXEC
+// and the games run, and the bus and the picture match tools/intv_system.py
+// cycle by cycle (sim/tb/tb_system.sv).
 //
 //   cp1610          CPU (one bus phase per ce)
 //   intv_bus        address latch, decode, data-in, IAB vectors, INTRM and
 //                   the bus-copy window from the frame position, the reset
 //                   hold that starts the CPU on a frame, the cartridge port
-//   intv_stic_regs  STIC registers and handshake (stub)
+//   intv_stic       STIC: registers and handshake, row fetches from System
+//                   RAM (BUSRQ), cards from GROM / GRAM, the picture
 //   intv_psg_regs   PSG registers and hand controllers (stub)
 //   intv_ram x 3    scratchpad 256 x 8 ($0100-$01EF), System RAM 352 x 16
 //                   ($0200-$035F), GRAM 512 x 8 ($3800-$3FFF)
 //
 // ce is the CPU cycle enable from intv_timing (ce_cpu: only while the
-// machine is live), hcnt / vcnt its position. mreset is the machine reset;
-// the CPU starts at the frame after it ends (intv_bus).
+// machine is live), ce_pix its pixel clock (ce_stic), live high on every
+// clk_sys the machine runs, hcnt / vcnt its position. mreset is the
+// machine reset; the CPU starts at the frame after it ends (intv_bus).
+// busrq_en = 1 is the hardware (the STIC holds the CPU for its row
+// fetches); 0 is the step-3 system without BUSRQ (benches only).
 //
 // Save state (DESIGN.md 4.3; the ids are provisional until the step 7
 // package file): all ports are OR-combined into ss_rdata. Write only while
@@ -25,11 +29,13 @@
 // at once); it must drop two clocks before the machine runs again.
 //   SS_CPU  ($02)        cp1610, 8 words
 //   SS_BUS  ($03)        intv_bus, 2 words
-//   SS_STIC ($04)        intv_stic_regs, 52 words
+//   SS_STIC ($04)        intv_stic, 55 words
 //   SS_PSG  ($05)        intv_psg_regs, 14 words
 //   SS_SCR  ($06)        scratchpad, 256 words
 //   SS_SYS  ($07, $08)   System RAM, 352 words
 //   SS_GRAM ($09, $0A)   GRAM, 512 words
+//   SS_ROW  ($0C)        the STIC's row buffer, 20 words
+//   SS_LINE ($0D)        the STIC's line buffer, 64 words
 // The timing ($01) and the cartridge ($0B) have their own modules.
 //
 // SPDX-License-Identifier: MIT
@@ -46,15 +52,20 @@ module intv_machine #(
     parameter logic [7:0] SS_PSG  = 8'h05,
     parameter logic [7:0] SS_SCR  = 8'h06,
     parameter logic [7:0] SS_SYS  = 8'h07,
-    parameter logic [7:0] SS_GRAM = 8'h09
+    parameter logic [7:0] SS_GRAM = 8'h09,
+    parameter logic [7:0] SS_ROW  = 8'h0C,
+    parameter logic [7:0] SS_LINE = 8'h0D
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
     input  wire logic        ce,
+    input  wire logic        ce_pix,
+    input  wire logic        live,
     input  wire logic [8:0]  hcnt,
     input  wire logic [8:0]  vcnt,
     input  wire logic        cfg_hlt_imm,
     input  wire logic        cfg_sdbd_r6_mame,
+    input  wire logic        busrq_en,
     input  wire logic [7:0]  pad_r,           // hand controllers ($FF: none)
     input  wire logic [7:0]  pad_l,
 
@@ -70,6 +81,10 @@ module intv_machine #(
     input  wire logic [9:0]  exec_q,
     output logic [10:0]      grom_addr,
     input  wire logic [7:0]  grom_q,
+    output logic [10:0]      vgrom_addr,      // the STIC's GROM port
+    input  wire logic [7:0]  vgrom_q,
+
+    output logic [3:0]       colour,          // the picture, this pixel clock
 
     // what the bus does (bench, later the STIC)
     output logic [2:0]       phase,
@@ -89,8 +104,15 @@ module intv_machine #(
 );
 
     /* verilator lint_off UNUSEDSIGNAL */
-    logic        wr, busak, tci, pcit;    // not used until later steps
+    logic        wr, tci, pcit;           // not used until later steps
     logic [3:0]  ebca;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        busrq, busak;
+    logic [8:0]  v_sys_addr, v_gram_addr;
+    logic [15:0] v_sys_q;
+    logic [7:0]  v_gram_q;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [7:0]  scr_qb;                  // the scratchpad's port B is not used
     /* verilator lint_on UNUSEDSIGNAL */
     logic        intrm, rd, vb, frame_end;
     logic        scr_we, psg_we, sys_we, gram_we, stic_we;
@@ -101,7 +123,7 @@ module intv_machine #(
 
     cp1610 #(.SS_ID(SS_CPU)) cpu (
         .clk, .reset(hold && !ss_en), .ce, .cfg_hlt_imm, .cfg_sdbd_r6_mame,
-        .phase, .dout, .din, .intrm, .intr(1'b0), .busrq(1'b0), .busak,
+        .phase, .dout, .din, .intrm, .intr(1'b0), .busrq, .busak,
         .ebca, .ebci(1'b0), .tci, .pcit, .halted, .fetch,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_cpu));
 
@@ -119,10 +141,15 @@ module intv_machine #(
     assign exec_addr = addr[11:0];
     assign grom_addr = addr[10:0];
 
-    intv_stic_regs #(.SS_ID(SS_STIC)) stic (
-        .clk, .reset(mreset), .vb, .frame_end, .a(addr), .rd, .we(stic_we),
-        .wdata(dout), .open(stic_open), .q(stic_q),
-        .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_stic));
+    intv_stic #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .VB_CYCLES(VB_CYCLES),
+                .SS_ID(SS_STIC), .SS_ROW(SS_ROW), .SS_LINE(SS_LINE)) stic (
+        .clk, .reset(mreset), .ce, .ce_pix, .live, .hcnt, .vcnt,
+        .vb, .frame_end, .a(addr), .wdata(dout), .rd, .we(stic_we),
+        .open(stic_open), .q(stic_q), .intak(ce && phase == 3'd7),
+        .busrq_en, .busrq, .busak,
+        .sys_addr(v_sys_addr), .sys_q(v_sys_q), .gram_addr(v_gram_addr), .gram_q(v_gram_q),
+        .grom_addr(vgrom_addr), .grom_q(vgrom_q), .colour,
+        .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_stic));
 
     intv_psg_regs #(.SS_ID(SS_PSG)) psg (
         .clk, .reset(mreset), .n(addr[3:0]), .we(psg_we), .wdata(dout[7:0]),
@@ -131,14 +158,17 @@ module intv_machine #(
 
     intv_ram #(.AW(8), .DW(8), .WORDS(256), .SS_ID(SS_SCR)) scratch (
         .clk, .addr(addr[7:0]), .we(scr_we), .d(dout[7:0]), .q(scr_q),
+        .addr_b(8'd0), .q_b(scr_qb),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_scr));
 
     intv_ram #(.AW(9), .DW(16), .WORDS(352), .SS_ID(SS_SYS)) sysram (
         .clk, .addr(addr[8:0]), .we(sys_we), .d(dout), .q(sys_q),
+        .addr_b(v_sys_addr), .q_b(v_sys_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_sys));
 
     intv_ram #(.AW(9), .DW(8), .WORDS(512), .SS_ID(SS_GRAM)) gram (
         .clk, .addr(addr[8:0]), .we(gram_we), .d(dout[7:0]), .q(gram_q),
+        .addr_b(v_gram_addr), .q_b(v_gram_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_gram));
 
     assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram;

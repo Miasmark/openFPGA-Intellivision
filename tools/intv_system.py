@@ -344,7 +344,8 @@ class SystemBus:
                 "gram": list(self.gram), "stic": list(self.stic),
                 "psg": list(self.psg), "handshake": int(self.handshake(cycle)),
                 "csmode": self.csmode,
-                "sel": list(self.cart.sel) if self.cart is not None else [0] * 16}
+                "sel": list(self.cart.sel) if self.cart is not None else [0] * 16,
+                "fifo": list(self.vid.fifo), "counter": self.vid.counter}
 
 
 # ----------------------------------------------------------------- loading

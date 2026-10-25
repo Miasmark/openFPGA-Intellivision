@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Miasmark and contributors
-"""Step 3 bench driver (DESIGN.md 9): the machine RTL against the system model.
+"""Steps 3-4 bench driver (DESIGN.md 9): the machine RTL against the system model.
 
 "EXEC runs with no cartridge; bus log matches the Python model in lockstep",
-plus the save/restore round trip of DESIGN 8.4. For each image (no
+plus the save/restore round trip of DESIGN 8.4; from step 4 also the STIC:
+its pictures pixel by pixel, its row fetches (cycle, loaded or missed,
+address counter, the 20 words) and its card reads (the card row's GROM /
+GRAM card or squares), against tools/stic.py in mode "stic" (BUSRQ on, as
+the core runs) or "none" (BUSRQ off; image astro_nobusrq). For each image (no
 cartridge; Astrosmash from the owner's library; our sim/testroms/systest.asm
 in the EXEC slot; our sim/testroms/carttest.asm with two synthetic
 cartridges from tools/synth_image.py, whose CRCs are forced to table
@@ -21,21 +25,32 @@ entries with cart RAM and with paged ROM) it
      loader's byte port) four times: straight, and with a round trip each
      (restore into a reset machine at a cartridge read or in VBlank; restore
      over a state 20,000 cycles later, which rewinds the run; restore into
-     a reset machine outside VBlank; before each restore every state word,
-     and the cart RAM, is overwritten with junk);
+     a reset machine outside VBlank; with the display on, restore into a
+     reset machine in the middle of a row copy and over a later state from
+     inside a BUSRQ, during the card engine's work; before each restore
+     every state word, and the cart RAM, is overwritten with junk);
   3. compares every run with the model: every bus phase other than NACT
      with its cycle, address and data; R0-R7, S Z O C, I and D at every step
      start; every change of the handshake and the mode latch with its
      cycle; at the dumps, scratchpad, System RAM, GRAM, the STIC and PSG
-     registers, the handshake and mode latches and the page selects. All
-     runs must also leave every state word identical at both dumps.
+     registers, the handshake and mode latches, the page selects, the
+     STIC's row buffer and FIFO counter; every picture, row fetch and card
+     row. All runs must also leave every state word identical at both
+     dumps.
   4. with --mame (or INTV_TRACE_ROOT set): the model against MAME's trace
      of the same image (tools/intv_system.py mame: every read and write and
      every interrupt point equal), so the stubs answer as MAME does.
 
-  python3 -I sim/tb/tb_system.py --all     the step-3 gate: the above, then
+  python3 -I sim/tb/tb_system.py --all     the step-3/4 gate: the above, then
                                            the planted faults (each must fail)
   python3 -I sim/tb/tb_system.py [--only nocart] [--no-build]
+  python3 -I sim/tb/tb_system.py --screens [--only astrosmash,...]
+        the step-4 frame gate (DESIGN 9 step 4): the EXEC without a
+        cartridge and with Astrosmash (its title screen) and five games
+        (SCREENS), each run as far as the MAME snapshots the model was
+        checked against (docs/STIC_NOTES.md 3); every picture, row fetch
+        and card row of the RTL equal to the model's (mode "stic"), and
+        the CPU bus and registers equal frame by frame (a hash per frame)
 
 Environment: VERILATOR (default verilator), WORK (default sim/work/tb_system),
 INTV_LIBRARY (default ~/ROMLibrary/Intellivision), INTV_BIOS_DIR (default
@@ -63,7 +78,7 @@ import intv_system as isys  # noqa: E402
 import intvcart as m        # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
-RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic_regs.sv', 'intv_psg_regs.sv', 'intv_ram.sv',
+RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg_regs.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_media.sv']
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
@@ -73,12 +88,30 @@ NCYC = 10 * FRAME
 DUMP1 = 5 * FRAME + 8000
 # (name, cartridge: a file in the library or ('forced', CRC, bytes) from
 # tools/synth_image.py, program for the EXEC slot instead of exec.bin,
-# frames, hand controllers (right, left))
-IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF)),
-          ('astrosmash', 'Astrosmash (USA, Europe).zip', None, 10, (0xFF, 0xFF)),
-          ('systest', None, 'systest.asm', 22, (0x5A, 0xC3)),
-          ('cartram', ('forced', 0xCE8FC699, 49152), 'carttest.asm', 10, (0xFF, 0xFF)),
-          ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF))]
+# frames, hand controllers (right, left), STIC mode: 'stic' = BUSRQ on (the
+# core), 'none' = off (+busrq=0))
+IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
+          ('astrosmash', 'Astrosmash (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
+          ('astro_nobusrq', 'Astrosmash (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'none'),
+          # systest's probe delays are tuned for the step-3 system (no BUSRQ;
+          # it enables the display, so BUSRQ would move them)
+          ('systest', None, 'systest.asm', 22, (0x5A, 0xC3), 'none'),
+          # step 4: our STIC test (sim/testroms/sticbus.asm), BUSRQ on
+          ('sticbus', None, 'sticbus.asm', 24, (0xFF, 0xFF), 'stic'),
+          ('cartram', ('forced', 0xCE8FC699, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic'),
+          ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic')]
+# the step-4 frame gate: (name, library file or None, pictures)
+SCREENS = [('nocart', None, 600),
+           ('astrosmash', 'Astrosmash (USA, Europe).zip', 700),
+           ('towerofdoom', 'Tower of Doom (USA).zip', 700),
+           ('diner', 'Diner (USA).zip', 300),
+           ('digdug', 'Dig Dug (USA).zip', 700),
+           ('sewersam', 'Sewer Sam (USA).zip', 300),
+           ('solarsailer', 'TRON Solar Sailer (USA, Europe).zip', 700)]
+PIC_W, PIC_H = 189, 240
+PIC_BYTES = 4 + PIC_W * PIC_H // 2
+KIND = {'GROM': 0, 'GRAM': 1, 'squares': 2}
+FNV0, FNVP = 0x811C9DC5, 0x01000193
 # systest section 7: (phase, address, frame slot) of each probe
 SECT7 = [('DW', 0x002B, 3788), ('DTB', 0x3850, 3789), ('DTB', 0x002A, 3790), ('DW', 0x3851, 3791),
          ('DW', 0x3852, 3789), ('DW', 0x0030, 3790), ('DTB', 0x002B, 3789), ('DTB', 0x3E53, 3790)]
@@ -86,26 +119,51 @@ SECT7_START = 7 * FRAME
 TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
 SS = {'cpu': 0x02, 'bus': 0x03, 'stic': 0x04, 'psg': 0x05, 'scr': 0x06, 'sys': 0x07,
-      'gram': 0x09, 'cart': 0x0B}
+      'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D}
 
 
 # ------------------------------------------------------------------- model
 class Exp:
     """The model's expectations for one image."""
 
-    def __init__(self, blog, steps, snaps, bus, mlog, ncyc):
+    def __init__(self, blog, steps, snaps, bus, mlog, ncyc, pics=None, sinfo=None, mode='stic'):
         self.blog, self.steps, self.snaps, self.bus = blog, steps, snaps, bus
         self.mlog, self.ncyc = mlog, ncyc
+        self.pics, self.sinfo, self.mode = pics or {}, sinfo or {}, mode
 
 
-def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF)):
+def stic_expect(info):
+    """What the RTL's G / GW and C lines should say for one frame: row
+    fetches [(r, ok, counter, words or None)] and cards [(row, col, kind,
+    base)] (tools/stic.py on_frame info)."""
+    rows = info['rows']
+    g = sorted((r, int(ok), addr, tuple(rows[r]) if ok else None)
+               for r, rel, ok, addr in info['fetches'])
+    c = [(row, col, KIND[k], base or 0) for row, col, k, base in info['cards']]
+    return g, c
+
+
+def capture(bus):
+    """Collect the model's pictures and STIC logs by picture number."""
+    pics, sinfo = {}, {}
+
+    def on_frame(n, pic, info):
+        pics[n] = bytes(pic)
+        sinfo[n] = stic_expect(info)
+    bus.vid.keep_frames = set()
+    bus.vid.on_frame = on_frame
+    return pics, sinfo
+
+
+def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic'):
     """The model's expected log: bus phases, step starts, handshake and mode
-    latch changes, state at the dumps."""
+    latch changes, state at the dumps, pictures and STIC logs."""
     cart = isys.load_cart(cart_path)
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
-                         cart[0] if cart else None)
+                         cart[0] if cart else None, stic_mode=mode)
     bus.pad = tuple(pads)
     cpu = isys.CP1610(bus=bus, buslog=True)
+    pics, sinfo = capture(bus)
     snaps = {}
     want = [DUMP1, ncyc]
     orig_r, orig_w = bus.read, bus.write
@@ -152,16 +210,62 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF)):
     prev = (list(cpu.r), cpu.flags << 2 | cpu.I << 1 | cpu.D)
     while cpu.cycle < ncyc:
         ev = cpu.step()
+        bus.boundary(cpu.cycle)
         if ev.kind in ('insn', 'intr') and ev.cycle > 0:
             steps.append((ev.cycle, prev[0], prev[1]))
         prev = (list(ev.regs), ev.flags << 2 | ev.i << 1 | ev.d)
     snap(ncyc)
+    bus.vid.advance(ncyc + FRAME)     # draw the last frame
     advance(ncyc - 1)
     blog = [(c, PHASE[p], a or 0, d or 0) for (c, p, a, d) in cpu.buslog
             if c < ncyc and p != 'NACT']
     steps = [s for s in steps if s[0] < ncyc]
     mlog = [x for x in mlog if x[0] < ncyc]
-    return Exp(blog, steps, snaps, bus, mlog, ncyc)
+    return Exp(blog, steps, snaps, bus, mlog, ncyc, pics, sinfo, mode)
+
+
+def fnv(h, *xs):
+    for x in xs:
+        h = ((h ^ (x & 0xFFFFFFFF)) * FNVP) & 0xFFFFFFFF
+    return h
+
+
+def model_stream(exec_path, grom_path, cart_path, npics, mode='stic'):
+    """A long model run for the frame gate: per frame k the hash of the
+    bus phases and of the step starts as the bench's H lines give them,
+    and pictures 1..npics with their STIC logs."""
+    cart = isys.load_cart(cart_path)
+    bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
+                         cart[0] if cart else None, stic_mode=mode)
+    cpu = isys.CP1610(bus=bus, buslog=True)
+    pics, sinfo = capture(bus)
+    ncyc = (npics + 1) * FRAME
+    hashes = {}
+    acc = {'k': 0, 'hb': FNV0, 'nb': 0, 'hs': FNV0, 'ns': 0}
+
+    def close(upto):            # frames that ended before cycle `upto`
+        while (acc['k'] + 1) * FRAME <= upto:
+            hashes[acc['k']] = (acc['hb'], acc['nb'], acc['hs'], acc['ns'])
+            acc.update(k=acc['k'] + 1, hb=FNV0, nb=0, hs=FNV0, ns=0)
+
+    prev = (list(cpu.r), cpu.flags << 2 | cpu.I << 1 | cpu.D)
+    while cpu.cycle < ncyc:
+        ev = cpu.step()
+        bus.boundary(cpu.cycle)
+        if ev.kind in ('insn', 'intr') and 0 < ev.cycle < ncyc:
+            close(ev.cycle)
+            acc['hs'] = fnv(acc['hs'], ev.cycle, *prev[0], prev[1])
+            acc['ns'] += 1
+        prev = (list(ev.regs), ev.flags << 2 | ev.i << 1 | ev.d)
+        for (c, p, a, d) in cpu.buslog:
+            if p != 'NACT' and c < ncyc:
+                close(c)
+                acc['hb'] = fnv(acc['hb'], c, PHASE[p], a or 0, d or 0)
+                acc['nb'] += 1
+        cpu.buslog.clear()
+    close(ncyc)
+    bus.vid.advance(ncyc + FRAME)
+    return hashes, pics, sinfo
 
 
 def check_sect7(exp, symbols):
@@ -213,13 +317,28 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_system')
 
 
-def parse_log(path):
+class Got(tuple):
+    """parse_log's result: (blog, steps, dumps, notes, fails, mlog) and the
+    STIC's logs as attributes."""
+
+
+def parse_log(path, pic_path=None):
     blog, steps, dumps, notes, fails, mlog = [], [], {}, [], [], []
+    gl, gw, cl, hl = [], {}, [], {}
+    mark = (0, 0)
     for ln in open(path):
         t = ln.split()
         if not t:
             continue
-        if t[0] == 'B':
+        if t[0] == 'G':
+            gl.append((int(t[1]), int(t[2]), int(t[3]), int(t[4])))
+        elif t[0] == 'GW':
+            gw[int(t[1])] = tuple(int(x, 16) for x in t[2:22])
+        elif t[0] == 'C':
+            cl.append((int(t[1]), int(t[2]), int(t[3]), int(t[4]), int(t[5])))
+        elif t[0] == 'H':
+            hl[int(t[1])] = (int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5]))
+        elif t[0] == 'B':
             blog.append((int(t[1]), int(t[2]), int(t[3], 16), int(t[4], 16)))
         elif t[0] == 'S':
             if int(t[1]) > 0:
@@ -228,12 +347,19 @@ def parse_log(path):
             mlog.append((int(t[1]), int(t[2]), int(t[3])))
         elif t[0] == 'W':
             dumps.setdefault(int(t[1]), {})[(int(t[2], 16), int(t[3]))] = int(t[4], 16)
+        elif t[0] == 'R' and t[1] == 'mark':
+            mark = (len(gl), len(cl))
+            notes.append(ln.strip())
         elif t[0] == 'R' and t[1] == 'rewind':
             c = int(t[2])
             notes.append(ln.strip())
             blog = [b for b in blog if b[0] < c]
             steps = [s for s in steps if s[0] < c]
             mlog = [x for x in mlog if x[0] < c]
+            # the STIC's lines are cut at the save (a freeze inside a cycle
+            # may come after some of that cycle's lines)
+            gl, cl = gl[:mark[0]], cl[:mark[1]]
+            gw = {k: v for k, v in gw.items() if k < c or k in [g[0] for g in gl]}
         elif t[0] in ('R', 'L'):
             notes.append(ln.strip())
         elif t[0] == 'FAIL':
@@ -243,7 +369,80 @@ def parse_log(path):
         if x[1:] != last:
             dedup.append(x)
             last = x[1:]
-    return blog, steps, dumps, notes, fails, dedup
+    got = Got((blog, steps, dumps, notes, fails, dedup))
+    got.fetches, got.cards = {}, {}
+    for c, r, ok, a in gl:
+        got.fetches.setdefault(c // FRAME, []).append((r, ok, a, gw.get(c) if ok else None))
+    for c, r, col, k, base in cl:
+        got.cards.setdefault(c // FRAME, []).append((r, col, k, base))
+    got.hashes = hl
+    got.pics = read_pics(pic_path) if pic_path else {}
+    return got
+
+
+def read_pics(path):
+    """Pictures from the bench's +pic file: {n: bytes of 189 x 240 colours};
+    the last record of a number counts (rewinds write some again)."""
+    import struct
+    pics = {}
+    if not os.path.exists(path):
+        return pics
+    data = open(path, 'rb').read()
+    for i in range(0, len(data) - PIC_BYTES + 1, PIC_BYTES):
+        n = struct.unpack_from('<I', data, i)[0]
+        px = bytearray(PIC_W * PIC_H)
+        raw = data[i + 4:i + PIC_BYTES]
+        for j, b in enumerate(raw):
+            px[2 * j] = b & 15
+            px[2 * j + 1] = b >> 4
+        pics[n] = bytes(px)
+    return pics
+
+
+def compare_stic(got, exp, frames, check_hash=False):
+    """The STIC's pictures, row fetches and card rows (and with check_hash
+    the per-frame bus hashes) against the model. frames: the frame numbers
+    k (picture k + 1) to compare."""
+    probs = []
+    shown = 0
+    for k in frames:
+        n = k + 1
+        e = exp.pics.get(n)
+        g = got.pics.get(n)
+        if e is None or g is None:
+            probs.append('picture %d: %s' % (n, 'not drawn by the model' if e is None else 'missing from the RTL'))
+            break
+        if g != e:
+            i = next(j for j in range(len(e)) if g[j] != e[j])
+            nd = sum(1 for j in range(len(e)) if g[j] != e[j])
+            probs.append('picture %d: %d pixels differ, first x=%d y=%d RTL %d model %d' % (
+                n, nd, i % PIC_W, i // PIC_W, g[i], e[i]))
+            break
+        if len(set(e[24 * PIC_W:216 * PIC_W])) > 1:
+            shown += 1
+    for k in frames:
+        ef, ec = exp.sinfo.get(k + 1, ([], []))
+        gf, gc = got.fetches.get(k, []), got.cards.get(k, [])
+        if gf != ef:
+            i = next((j for j in range(max(len(gf), len(ef)))
+                      if (gf[j] if j < len(gf) else None) != (ef[j] if j < len(ef) else None)), 0)
+            probs.append('frame %d row fetch %d (row, loaded, counter, words): RTL %s, model %s' % (
+                k, i, gf[i] if i < len(gf) else None, ef[i] if i < len(ef) else None))
+            break
+        if gc != ec:
+            i = next((j for j in range(max(len(gc), len(ec)))
+                      if (gc[j] if j < len(gc) else None) != (ec[j] if j < len(ec) else None)), 0)
+            probs.append('frame %d card %d (row, col, GROM/GRAM/squares, base): RTL %s, model %s' % (
+                k, i, gc[i] if i < len(gc) else None, ec[i] if i < len(ec) else None))
+            break
+    if check_hash:
+        for k in frames:
+            if got.hashes.get(k) != exp.hashes.get(k):
+                probs.append('frame %d bus hash (B hash, n, S hash, n): RTL %s, model %s' % (
+                    k, got.hashes.get(k), exp.hashes.get(k)))
+                break
+    got.shown = shown
+    return probs
 
 
 def fmt_b(b):
@@ -255,7 +454,7 @@ def fmt_b(b):
 
 def compare(name, run, got, exp):
     """Problems of one run against the model (a list of strings)."""
-    blog, steps, dumps, notes, fails, mlog = got
+    blog, steps, dumps, notes, fails, mlog = got[:6]
     eb, es, snaps = exp.blog, exp.steps, exp.snaps
     probs = list(fails)
     n = max(len(blog), len(eb))
@@ -299,24 +498,31 @@ def compare(name, run, got, exp):
         checks.append(('page selects 8-15', d[(SS['cart'], 20)],
                        sum(sel[8 + i] << 4 * i for i in range(8))))
         checks.append(('bus: reset vector flag, hold', d[(SS['bus'], 0)] >> 16 & 5, 0))
+        checks += [('row buffer %d' % i, d[(SS['row'], i)], st['fifo'][i]) for i in range(20)]
+        checks.append(('FIFO counter', d[(SS['stic'], 0x35)] & 0x1FF, st['counter']))
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (
                 k, cyc, len(bad), '; '.join('%s RTL %X model %X' % b for b in bad[:4])))
+    probs += compare_stic(got, exp, range(exp.ncyc // FRAME - 1))
     return probs
 
 
 def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pads, timeout=1200):
     log = os.path.join(work, 'run_%s.log' % tag)
+    pic = os.path.join(work, 'run_%s.pic' % tag)
     cmd = [binary, '+exec=' + exec_path, '+grom=' + grom_path, '+cycles=%d' % exp.ncyc,
-           '+dump=%d' % DUMP1, '+log=' + log, '+pads=%02X%02X' % tuple(pads)] + args
+           '+dump=%d' % DUMP1, '+log=' + log, '+pads=%02X%02X' % tuple(pads), '+pic=' + pic,
+           '+busrq=%d' % (exp.mode != 'none')] + args
     if cart_path:
         cmd.append('+cart=' + cart_path)
     with open(os.path.join(work, 'stdout_%s.txt' % tag), 'w') as f:
         r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout, cwd=work)
     if r.returncode != 0 or not os.path.exists(log):
         return None
-    return parse_log(log)
+    got = parse_log(log, pic)
+    os.remove(pic)
+    return got
 
 
 def rt_runs(exp):
@@ -328,10 +534,27 @@ def rt_runs(exp):
     cart_dtb = [b[0] for b in eb if b[1] == PHASE['DTB'] and b[0] < DUMP1 and
                 exp.bus.cart is not None and exp.bus.cart.read(b[2]) is not None]
     c1 = cart_dtb[-1] if cart_dtb else 5 * FRAME + 600
-    return [('straight', []),
+    runs = [('straight', []),
             ('rt1', ['+rt=1', '+rtcyc=%d' % c1, '+rtsub=17']),
             ('rt2', ['+rt=2', '+rtcyc=%d' % (5 * FRAME + 600), '+rtsub=30', '+rton=20000']),
             ('rt3', ['+rt=1', '+rtcyc=%d' % (5 * FRAME + 6000), '+rtsub=3'])]
+    # with the display on: the fetch cycles of loaded rows in frames 3 on
+    # (row r of frame k at k FRAME + 3933 + 114 VDR + 912 r)
+    fl = []
+    for n, (g, _) in sorted(exp.sinfo.items()):
+        k = n - 1
+        st = [s for s in exp.bus.vid.stats if s['n'] == n]
+        if k >= 3 and st and st[0]['enabled'] and (k + 2) * FRAME < exp.ncyc:
+            fl += [(k, r, k * FRAME + 3933 + 114 * st[0]['vdr'] + 912 * r) for r, ok, _, _ in g if ok]
+    if fl:
+        rt4 = [f for f in fl if f[1] == 3][0][2]
+        rt5 = [f for f in fl if f[1] == 6][-1][2]
+        # reset restore 17 clk_sys into the row copy (word 8 of 20); a later
+        # state, restored from 3 cycles into the fetch line plus 30 clk_sys:
+        # the CPU in BUSAK, the card engine building the row's first line
+        runs += [('rt4', ['+rt=1', '+rtcyc=%d' % rt4, '+rtsub=17']),
+                 ('rt5', ['+rt=2', '+rtcyc=%d' % (rt5 + 3), '+rtsub=30', '+rton=20000'])]
+    return runs
 
 
 def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, verbose=True,
@@ -351,8 +574,10 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
         results[tag] = got
         if verbose:
             rt = [x for x in got[3] if x.startswith('R ')]
-            print('  %s %s: %d bus phases, %d step starts, %.1fs%s%s' % (
-                name, tag, len(got[0]), len(got[1]), time.time() - t0,
+            print('  %s %s: %d bus phases, %d step starts, %d pictures (%d with the display on), '
+                  '%d row fetches, %.1fs%s%s' % (
+                name, tag, len(got[0]), len(got[1]), len(got.pics), getattr(got, 'shown', 0),
+                sum(len(v) for v in got.fetches.values()), time.time() - t0,
                 ('; ' + '; '.join(x[2:] for x in rt)) if rt else '',
                 ('\n    FAIL ' + '\n    FAIL '.join(p)) if p else ''))
         probs += ['%s %s: %s' % (name, tag, x) for x in p]
@@ -367,6 +592,57 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
                 probs.append('%s %s: dump %d differs from the straight run in %d words, first %s' % (
                     name, tag, k, len(diff), ', '.join('%02X.%d %08X/%08X' % (w[0], w[1], a[w], b.get(w, -1))
                                                        for w in diff[:4])))
+    return probs
+
+
+# ------------------------------------------------------------- frame gate
+def screen_cart(work, name, zipname, lib):
+    if not zipname:
+        return None
+    cart = os.path.join(work, 'screen_%s.bin' % name)
+    with open(cart, 'wb') as f:
+        f.write(m.load_image_bytes(os.path.join(lib, zipname)))
+    return cart
+
+
+def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=True):
+    """One image of the frame gate: the bench (+bushash, +pic) runs while
+    the model runs; then every picture, row fetch, card row and per-frame
+    bus hash must be equal. Returns problems."""
+    ncyc = (npics + 1) * FRAME
+    log = os.path.join(work, 'screen_%s.log' % name)
+    pic = os.path.join(work, 'screen_%s.pic' % name)
+    cmd = [binary, '+exec=' + exec_path, '+grom=' + grom_path, '+cycles=%d' % ncyc,
+           '+dump=%d' % DUMP1, '+log=' + log, '+pic=' + pic, '+bushash=1', '+busrq=1']
+    if cart:
+        cmd.append('+cart=' + cart)
+    t0 = time.time()
+    out = open(os.path.join(work, 'screen_%s.out' % name), 'w')
+    proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=work)
+    try:
+        hashes, pics, sinfo = model_stream(exec_path, grom_path, cart, npics)
+        t1 = time.time() - t0
+        r = proc.wait(timeout=7200)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        out.close()
+    if r != 0 or not os.path.exists(log):
+        return ['%s: the bench did not finish' % name]
+    got = parse_log(log, pic)
+    os.remove(pic)
+    exp = Exp([], [], {}, None, [], ncyc, pics, sinfo)
+    exp.hashes = hashes
+    probs = list(got[4]) + compare_stic(got, exp, range(npics), check_hash=True)
+    if verbose:
+        en = sum(1 for n in range(1, npics + 1) if exp.sinfo.get(n, ([], []))[1])
+        print('  %s: %d pictures (%d with the display on, %d of them not blank), %d row fetches '
+              '(%d missed), %d card rows, %d frames of bus hashes; model %.0fs, bench %.0fs%s' % (
+                  name, len(got.pics), en, got.shown,
+                  sum(len(v) for v in got.fetches.values()),
+                  sum(1 for v in got.fetches.values() for f in v if not f[1]),
+                  sum(len(v) for v in got.cards.values()) // 20, len(got.hashes), t1,
+                  time.time() - t0, ('\n    FAIL ' + '\n    FAIL '.join(probs)) if probs else ''))
     return probs
 
 
@@ -386,9 +662,9 @@ PLANTS = [
                                           "if (hold && slot == 16'(FRAME - 2 - CPL))")], 'astrosmash', None),
     ('iab_always_1004', 'intv_bus.sv', [("din = iab_rst ? 16'h1000 : 16'h1004;", "din = 16'h1004;")],
      'nocart', None),
-    ('stic_mxr_mask', 'intv_stic_regs.sv', [("if (n < 6'h08)       fixed = 14'h3800;",
+    ('stic_mxr_mask', 'intv_stic.sv', [("if (n < 6'h08)       fixed = 14'h3800;",
                                              "if (n < 6'h08)       fixed = 14'h3000;")], 'nocart', None),
-    ('stic_always_open', 'intv_stic_regs.sv', [("assign open = vb || !hs;", "assign open = 1'b1;")],
+    ('stic_always_open', 'intv_stic.sv', [("assign open = vb || !hs;", "assign open = 1'b1;")],
      'systest', None),
     ('stic_no_aliases', 'intv_bus.sv', [("assign stic_we = wr && a[13:6] == 8'd0;",
                                          "assign stic_we = wr && a[15:6] == 10'd0;")], 'systest', None),
@@ -413,7 +689,7 @@ PLANTS = [
                                      "{hold, cart_hit} <= ss_wdata[18:17];"),
                                     ("8'd0: ss_rdata = {13'd0, hold, cart_hit, iab_rst, a};",
                                      "8'd0: ss_rdata = {13'd0, hold, cart_hit, 1'b0, a};")], 'astrosmash', ['rt1']),
-    ('ss_handshake_lost', 'intv_stic_regs.sv', [("{hs, csmode} <= ss_wdata[1:0];", "csmode <= ss_wdata[0];"),
+    ('ss_handshake_lost', 'intv_stic.sv', [("{hs, csmode} <= ss_wdata[1:0];", "csmode <= ss_wdata[0];"),
                                                 ("ss_rdata = {30'd0, hs, csmode};", "ss_rdata = {31'd0, csmode};")],
      'systest', ['rt3']),
     ('ss_addr_lost', 'intv_bus.sv', [("                a <= ss_wdata[15:0];\n", ""),
@@ -432,11 +708,11 @@ PLANTS = [
                                         "wire logic          wa = ss_en ? ss_we && ss_hit && SS_ID != 8'h07 : we;")],
      'systest', ['rt1']),
     # the mode latch (the change log)
-    ('csmode_no_alias', 'intv_stic_regs.sv', [("if (rd && open && a[13:0] == 14'h0021)",
+    ('csmode_no_alias', 'intv_stic.sv', [("if (rd && open && a[13:0] == 14'h0021)",
                                                "if (rd && open && a == 16'h0021)")], 'systest', None),
-    ('csmode_no_open', 'intv_stic_regs.sv', [("if (rd && open && a[13:0] == 14'h0021)",
+    ('csmode_no_open', 'intv_stic.sv', [("if (rd && open && a[13:0] == 14'h0021)",
                                               "if (rd && a[13:0] == 14'h0021)")], 'systest', None),
-    ('csmode_wr_kept', 'intv_stic_regs.sv', [("                if (n == 6'h21)\n                    csmode <= 1'b0;\n",
+    ('csmode_wr_kept', 'intv_stic.sv', [("                if (n == 6'h21)\n                    csmode <= 1'b0;\n",
                                               "")], 'systest', None),
     # the end of the bus-copy window and of INTRM (systest section 7)
     ('vb_end_p1', 'intv_bus.sv', [("assign vb        = slot < 16'(VB_CYCLES);",
@@ -454,6 +730,59 @@ PLANTS = [
     ('gram_closed_11', 'intv_bus.sv', [("din &= stic_open ? {8'h00, gram_q} : {7'd0, a[8:0]};",
                                         "din &= stic_open ? {8'h00, gram_q} : {5'd0, a[10:0]};")],
      'systest', None),
+    # the STIC (build step 4): pictures, row fetches, card rows, BUSRQ. An
+    # image ('screen', name, pictures) runs the frame gate's image that far.
+    ('stack_no_advance', 'intv_stic.sv', [("cs_new = cs_use + {1'b0, w[13]};", "cs_new = cs_use;")],
+     'sticbus', None),
+    ('stack_no_restart', 'intv_stic.sv', [("            if (frame_end)\n                {cs, cs_row} <= 4'd0;\n", "")],
+     'sticbus', None),
+    ('stack_row_start', 'intv_stic.sv', [("ec[4:0] == 5'd0 && !rstart ? cs_row : cs", "cs")],
+     'sticbus', None),
+    ('vdr_minus1', 'intv_stic.sv', [("vdr_l <= vdr_eff;", "vdr_l <= vdr_eff - {2'd0, vdr_eff != 3'd0};")],
+     ('screen', 'diner', 30), None),
+    ('hdr_minus1', 'intv_stic.sv', [("wire logic [2:0] hd  = r[6'h30][2:0];",
+                                     "wire logic [2:0] hd  = r[6'h30][2:0] - {2'd0, r[6'h30][2:0] != 3'd0};")],
+     'sticbus', None),
+    ('top_ext_off', 'intv_stic.sv', [("&& !(cbr[1] && vcnt < 9'(PF_LINE + 16))", "")], ('screen', 'diner', 30), None),
+    ('row_busrq_3lines', 'intv_stic.sv', [("wire logic row_rq   = en_l && d >= 0 && d[3:1] == 3'd0;",
+                                           "wire logic row_rq   = en_l && d >= 0 && d[3:0] <= 4'd2;")],
+     'astrosmash', None),
+    ('frame_busrq_43', 'intv_stic.sv', [("parameter int         FRAME_RQ  = 42,", "parameter int         FRAME_RQ  = 43,")],
+     'astrosmash', None),
+    ('pattern_select_swapped', 'intv_stic.sv', [("wire logic [7:0] pat = w[11] ? gram_q : grom_q;",
+                                                 "wire logic [7:0] pat = w[11] ? grom_q : gram_q;")],
+     ('screen', 'towerofdoom', 15), None),
+    ('fgbg_grom_256', 'intv_stic.sv', [("assign grom_addr = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
+                                        "assign grom_addr = {w[10:3], py};")], ('screen', 'towerofdoom', 15), None),
+    ('squares_off', 'intv_stic.sv', [("wire logic squares = csmode && w[12] && !w[11];",
+                                      "wire logic squares = 1'b0;")], ('screen', 'sewersam', 15), None),
+    ('fifo_no_intak_clear', 'intv_stic.sv', [("            if (intak)\n                cnt <= 9'd0;\n", "")],
+     'astrosmash', None),
+    ('fetch_late_line', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
+                                          "d[3:0] == 4'd2 && hcnt[8:2] == 7'(CPL - 1);")], 'astro_nobusrq', None),
+    ('enable_live', 'intv_stic.sv', [("wire logic pf_line = en_l &&", "wire logic pf_line = hs &&")],
+     'sticbus', None),
+    ('border_switch_late', 'intv_stic.sv', [("parameter int         BD_LINE   = 67,", "parameter int         BD_LINE   = 68,")],
+     'astrosmash', None),
+    ('missed_row_loads', 'intv_stic.sv', [("if (!busrq_en || busak) begin", "if (1'b1) begin")], 'sticbus', None),
+    ('counter_no_stop', 'intv_stic.sv', [("if (cnt < 9'(SYSW))", "if (1'b1)")], 'sticbus', None),
+    ('squares_q12_swapped', 'intv_stic.sv', [("e_fg   = sqc(py[2] ? w[8:6] : w[2:0], csr[cs_use]);",
+                                              "e_fg   = sqc(py[2] ? w[5:3] : w[2:0], csr[cs_use]);"),
+                                             ("e_bg   = sqc(py[2] ? {w[13], w[10:9]} : w[5:3], csr[cs_use]);",
+                                              "e_bg   = sqc(py[2] ? {w[13], w[10:9]} : w[8:6], csr[cs_use]);")],
+     'sticbus', None),
+    ('ss_rowbuf_wr_lost', 'intv_ram.sv', [("wire logic          wa = ss_en ? ss_we && ss_hit : we;",
+                                           "wire logic          wa = ss_en ? ss_we && ss_hit && SS_ID != 8'h0C : we;")],
+     'astrosmash', ['rt4']),
+    ('ss_linebuf_wr_lost', 'intv_ram.sv', [("wire logic          wa = ss_en ? ss_we && ss_hit : we;",
+                                            "wire logic          wa = ss_en ? ss_we && ss_hit && SS_ID != 8'h0D : we;")],
+     'astrosmash', ['rt5']),
+    ('ss_copy_lost', 'intv_stic.sv', [("8'h35: {cp_ph, cp_j, cp_on, cp_arm, cnt} <= ss_wdata[16:0];",
+                                       "8'h35: cnt <= ss_wdata[8:0];")], 'astrosmash', ['rt4']),
+    ('ss_latches_lost', 'intv_stic.sv', [("8'h34: {bcr_d, bcr_l, vdr_l, en_l} <= ss_wdata[11:0];", "8'h34: ;")],
+     'astrosmash', ['rt4']),
+    ('ss_pix_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];", "8'h36: {cs_row, cs} <= ss_wdata[3:0];")],
+     'astrosmash', ['rt3']),
     # the cartridge port not asked on a write (carttest: cart RAM, page selects)
     ('cart_write_no', 'intv_bus.sv', [("                end else if (phase == PH_DW) begin\n                    cart_req   <= 1'b1;",
                                        "                end else if (phase == PH_DW) begin\n                    cart_req   <= 1'b0;")],
@@ -472,6 +801,7 @@ def main():
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names')
     ap.add_argument('--mame', action='store_true', help='also compare the model with MAME traces')
+    ap.add_argument('--screens', action='store_true', help='the step-4 frame gate (SCREENS)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_system'))
@@ -481,6 +811,9 @@ def main():
     exec_path, grom_path = os.path.join(bdir, 'exec.bin'), os.path.join(bdir, 'grom.bin')
     os.makedirs(work, exist_ok=True)
     os.environ['INTV_BIOS_DIR'] = bdir
+
+    if a.screens:
+        return screens_main(a, verilator, work, lib, exec_path, grom_path)
 
     imgs = IMAGES
     if a.only:
@@ -492,7 +825,7 @@ def main():
     fails = []
     t0 = time.time()
     try:
-        for name, zipname, prog, nframes, pad in imgs:
+        for name, zipname, prog, nframes, pad, smode in imgs:
             cart = None
             if isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
                 cart = os.path.join(work, name + '.bin')
@@ -520,10 +853,14 @@ def main():
                 with open(ex, 'wb') as f:
                     f.write(img)
             execs[name] = ex
-            exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad)
+            exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode)
             e = exps[name]
-            print('model %s: %d bus phases, %d step starts, %d latch changes in %d cycles' % (
-                name, len(e.blog), len(e.steps), len(e.mlog), e.ncyc))
+            print('model %s (STIC mode %s): %d bus phases, %d step starts, %d latch changes in %d cycles; '
+                  '%d pictures with the display on, %d rows loaded, %d missed' % (
+                      name, smode, len(e.blog), len(e.steps), len(e.mlog), e.ncyc,
+                      sum(1 for x in e.bus.vid.stats if x['enabled']),
+                      sum(1 for g, _ in e.sinfo.values() for f in g if f[1]),
+                      sum(1 for g, _ in e.sinfo.values() for f in g if not f[1])))
             if prog == 'systest.asm':
                 p7 = check_sect7(e, pr.symbols)
                 print('  systest section 7: %s' % ('every probe in its slot' if not p7 else '; '.join(p7)))
@@ -533,7 +870,7 @@ def main():
                 sw = sum(1 for b in e.blog if b[1] == PHASE['DW'] and (b[2] & 0xFFF) == 0xFFF
                          and b[3] >> 4 == (b[2] >> 12) << 8 | 0xA5)
                 print('  %s: %d writes to cartridge RAM/ROM, %d page selects' % (name, cw, sw))
-            if (a.all or a.mame) and troot and not prog:
+            if (a.all or a.mame) and troot and not prog and name in ('nocart', 'astrosmash'):
                 tr = os.path.join(troot, 'none' if name == 'nocart' else name, 'trace.log')
                 if os.path.exists(tr):
                     sys.stdout.write('  MAME %s: ' % name)
@@ -553,7 +890,7 @@ def main():
                 return 1
             print('build: %.1fs' % (time.time() - t1))
         if not a.plants_only:
-            for name, _, _, _, _ in imgs:
+            for name, _, _, _, _, _ in imgs:
                 p = check_image(binary, work, name, execs[name], grom_path, carts[name], exps[name],
                                 pads[name])
                 if p:
@@ -567,7 +904,7 @@ def main():
             for pname, f, edits, img, runs in PLANTS:
                 if sel and pname not in sel:
                     continue
-                if img not in exps:
+                if not isinstance(img, tuple) and img not in exps:
                     continue
                 d = os.path.join(work, 'plant_' + pname)
                 shutil.rmtree(d, ignore_errors=True)
@@ -588,8 +925,17 @@ def main():
                     print('PLANT %s: build failed' % pname)
                     fails.append('plant ' + pname)
                     continue
-                pr = check_image(b, d, img, execs[img], grom_path, carts[img], exps[img], pads[img],
-                                 verbose=False, only_runs=runs or ['straight'])
+                if isinstance(img, tuple):        # ('screen', name, pictures)
+                    sc = [x for x in SCREENS if x[0] == img[1]][0]
+                    c = screen_cart(d, sc[0], sc[1], lib)
+                    try:
+                        pr = check_screen(b, d, sc[0], c, exec_path, grom_path, img[2], verbose=False)
+                    finally:
+                        if c:
+                            os.remove(c)
+                else:
+                    pr = check_image(b, d, img, execs[img], grom_path, carts[img], exps[img], pads[img],
+                                     verbose=False, only_runs=runs or ['straight'])
                 if pr:
                     print('PLANT %s: caught: %s' % (pname, pr[0][:150]))
                 else:
@@ -600,6 +946,33 @@ def main():
             if c and os.path.exists(c):
                 os.remove(c)
     print('TB_SYSTEM_ALL %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:6])))
+    return 1 if fails else 0
+
+
+def screens_main(a, verilator, work, lib, exec_path, grom_path):
+    """The step-4 frame gate (--screens)."""
+    sel = SCREENS
+    if a.only:
+        sel = [x for x in SCREENS if x[0] in a.only.split(',')]
+    binary = os.path.join(work, 'obj', 'tb_system')
+    if not a.no_build:
+        t1 = time.time()
+        binary = build(work, CORE, verilator)
+        if not binary:
+            print('TB_SCREENS FAIL (build)')
+            return 1
+        print('build: %.1fs' % (time.time() - t1))
+    fails = []
+    for name, zipname, npics in sel:
+        cart = screen_cart(work, name, zipname, lib)
+        try:
+            p = check_screen(binary, work, name, cart, exec_path, grom_path, npics)
+        finally:
+            if cart:
+                os.remove(cart)
+        print('TB_SCREEN %s %s' % (name, 'FAIL' if p else 'pass'))
+        fails += ['%s: %s' % (name, x) for x in p]
+    print('TB_SCREENS %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:4])))
     return 1 if fails else 0
 
 

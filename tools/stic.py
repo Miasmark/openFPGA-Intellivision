@@ -70,6 +70,26 @@ Timing (cycles = CPU cycles from the frame start = SR1 / VBlank start)
     vblank boundary (MAME intv_m.cpp:683).
   mode "none": the step-3 system (no BUSRQ). Rows are copied at the
     "stic" fetch cycles, as if every request were acknowledged at once.
+
+Pictures in modes "stic" and "none" (the RTL, src/fpga/core/intv_stic.sv;
+build step 4) differ from mode "mame" in what decides a frame's picture,
+because the RTL draws line by line and cannot look ahead:
+  - the display enable and the border colour are taken at the end of the
+    VBlank window (after the CPU's accesses in cycles 0-3789), not at the
+    frame's end: a $20 write after cycle 3,789 leaves that frame blank
+    (STIC_NOTES D8), and a border colour written later in a blank frame
+    shows from the next frame on;
+  - picture rows 0-20 (raster lines 46-66, before the window ends) show the
+    previous frame's border colour; the RTL switches its border colour at
+    line 67 (picture row 21);
+  - the other registers, GRAM and the colour-stack mode are read during the
+    display, where they are closed to the CPU when the display is enabled,
+    so they equal the values at the frame's end that draw() uses.
+Picture n of the RTL is raster lines 46-261 of frame n - 1 and lines 0-23 of
+frame n, pixel clocks 24-212 (pocket_video PF_X0 = 37 is picture x = 13).
+The FIFO's address counter stops once it reaches the end of System RAM
+(352 words; the model and the RTL both stop it at 360) and restarts at
+INTAK in modes "stic" and "none", at every vblank in mode "mame".
 """
 
 FRAME = 14934            # CPU cycles per frame (57 x 262; DESIGN 2.4)
@@ -77,6 +97,8 @@ VBLANK = 3790            # INTRM / bus-copy window (MAME stic.h:50)
 LINE = 57                # CPU cycles per scanline (MAME stic.h:47)
 CARD_ROWS, CARD_COLS = 12, 20
 FRAME_BUSRQ = 42         # MAME stic.h:49 ("approximate")
+SYSRAM_WORDS = 352
+PREV_BORDER_ROWS = 21    # RTL picture rows 0-20 show the previous border (see above)
 ROW0_REQ = 3876          # row 0 BUSRQ: FIRST_FETCH (MAME stic.h:51) - 1 line
 ROW_PERIOD = 16 * LINE   # 912: one card row = 16 scanlines
 ROW_HOLD = 2 * LINE      # 114: request line + fetch line (wiki)
@@ -125,6 +147,7 @@ class Stic:
         self.rows = [None] * (CARD_ROWS + 1)
         self.next_frame = bus.timing.first
         self.stats = []                 # per frame (see _finish)
+        self.prev_bcr = 0               # modes stic/none: border of the frame before
         self.reset()
 
     def reset(self):
@@ -200,7 +223,7 @@ class Stic:
         return False
 
     def intak(self, t):
-        if self.mode == "stic":
+        if self.mode != "mame":
             self.counter = 0
 
     # -- event processing ----------------------------------------------------
@@ -267,7 +290,9 @@ class Stic:
         (only with the display enabled; a blanked frame fetches nothing)."""
         cur = self.cur
         cur["defer"] = False
-        if not self.handshake(cur["k"]):
+        cur["en"] = self.handshake(cur["k"])    # modes stic/none: the picture's enable
+        cur["bcr"] = self.regs[BCR] & 0xF       # and border colour
+        if not cur["en"]:
             return
         vdr = self.regs[VDR]
         cur["vdr"] = vdr
@@ -290,10 +315,11 @@ class Stic:
             words = [sysram[a + j] & 0x3FFF if a + j < len(sysram) else 0x3FFF
                      for j in range(CARD_COLS)]
             self.fifo = words
-            self.counter = a + CARD_COLS
+            if a < SYSRAM_WORDS:        # the counter stops past System RAM
+                self.counter = a + CARD_COLS
         if r < len(self.rows):
             self.rows[r] = list(self.fifo)
-        cur["fetches"].append((r, rel, ok, self.counter - (CARD_COLS if ok else 0)))
+        cur["fetches"].append((r, rel, ok, a if ok else self.counter))
 
     # -- drawing -------------------------------------------------------------
     def _finish(self):
@@ -308,6 +334,9 @@ class Stic:
         if self.mode != "mame":
             self._advance_rows(1 << 62)
         enabled = self.handshake(k)
+        border = None
+        if self.mode != "mame":
+            enabled, border = cur["en"], cur["bcr"]
         stolen = 0
         for i, (kind, req, end, fetch) in enumerate(cur["sched"]):
             a = cur["ack"].get(i)
@@ -316,11 +345,17 @@ class Stic:
         self.stats.append({"n": n, "enabled": enabled, "vdr": cur["vdr"], "stolen": stolen,
                            "requests": len(cur["sched"]),
                            "loaded": sum(1 for f in cur["fetches"] if f[2])})
+        prev_bcr = self.prev_bcr
+        if self.mode != "mame":
+            self.prev_bcr = border
         want = self.keep_frames is None or n in self.keep_frames
         if not (want or self.on_frame is not None):
             return
         rows = [r if r is not None else list(self.fifo) for r in self.rows]
-        pic, fg, cards = self.draw(enabled, rows)
+        pic, fg, cards = self.draw(enabled, rows, border)
+        if self.mode != "mame":
+            n0 = PREV_BORDER_ROWS * W
+            pic[:n0] = bytes([prev_bcr]) * n0
         if want:
             self.frames.append((n, pic))
         if self.on_frame is not None:
@@ -329,11 +364,13 @@ class Stic:
                     "cards": cards, "fg": fg, "rows": rows}
             self.on_frame(n, pic, info)
 
-    def draw(self, enabled, rows):
+    def draw(self, enabled, rows, border=None):
         """(picture, foreground mask, card fetch log) from the registers,
-        GRAM/GROM now and the given 12 rows of BACKTAB words."""
+        GRAM/GROM now and the given 12 rows of BACKTAB words. border: the
+        border colour (default: register $2C now)."""
         r = self.regs
-        border = r[BCR] & 0xF
+        if border is None:
+            border = r[BCR] & 0xF
         pic = bytearray([border]) * (W * H)
         fg = bytearray(W * H)
         cards = []

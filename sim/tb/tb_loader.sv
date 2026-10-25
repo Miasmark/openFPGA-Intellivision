@@ -160,7 +160,7 @@ module tb_loader;
     logic [11:0] exec_addr = 12'd0;
     logic [10:0] grom_addr = 11'd0, ivoice_addr = 11'd0;
     wire  logic [9:0]  exec_q;
-    wire  logic [7:0]  grom_q, ivoice_q;
+    wire  logic [7:0]  grom_q, vgrom_q, ivoice_q;
     wire  logic        ready, busy, hit;
     wire  logic [4:0]  err;
     wire  logic [1:0]  len_st;
@@ -188,6 +188,7 @@ module tb_loader;
         .aux_req(aux_req), .aux_we(1'b0), .aux_addr(aux_addr), .aux_wdata(16'd0), .aux_be(2'b11),
         .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
+        .vgrom_addr(grom_addr), .vgrom_q(vgrom_q),
         .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
         .ready(ready), .busy(busy), .err(err), .len_st(len_st), .slot_st(slot_st),
         .crc(crc), .words(words), .layout(layout), .flags(flags), .hit(hit),
@@ -389,6 +390,7 @@ module tb_loader;
         logic [31:0] c, w32;
         logic [15:0] v;
         int n;
+        int vgrom_bad = 0;
         if (!$value$plusargs("out=%s", outn)) outn = "tb_loader.out";
         void'($value$plusargs("gap=%d", gap));
         void'($value$plusargs("jitter=%d", jitter));
@@ -445,7 +447,9 @@ module tb_loader;
         for (int i = 0; i < 2048; i++) begin
             @(negedge clk_sys); grom_addr = 11'(i); ivoice_addr = 11'(i); @(negedge clk_sys); @(negedge clk_sys);
             c = crc_byte(c, grom_q);
+            if (vgrom_q !== grom_q) vgrom_bad++;     // the STIC's GROM port (step 4)
         end
+        check(vgrom_bad == 0, $sformatf("STIC GROM port differs in %0d bytes", vgrom_bad));
         $fdisplay(outf, "grom %08X", ~c);
         c = 32'hFFFFFFFF;
         for (int i = 0; i < 2048; i++) begin

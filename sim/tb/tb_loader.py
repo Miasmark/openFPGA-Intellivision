@@ -14,8 +14,9 @@ Library images must also give the CRC, layout, flags and mapped-space CRC
 recorded in sim/regress/mapper_library.csv.
 
   python3 -I sim/tb/tb_loader.py --all        build, the 33 images, the
-                                              refused loads and the length
-                                              cases, then the planted faults
+                                              refused loads, the length and
+                                              reload cases, then the planted
+                                              faults
                                               (each must fail)
   python3 -I sim/tb/tb_loader.py [--only CRC,...] [--no-build]
 
@@ -203,7 +204,7 @@ def expect(img, tab, bios):
             assert tab.lookup(crc_v, len(words), meth) == tab.lookup(crc_v, len(words), 'linear')
         cart, lid, flags, hit = tab.model(words, crc_v)
         err = e4
-        cslot = 1 if err else 2
+        cslot = 1 if err & 15 else 2      # err[4] alone: still ok (the second card shows it)
     crc = '%08X' % crc_v
     L = []
     L.append('status crc %s words %d layout %d flags %02X hit %d err %d lenst %d' % (
@@ -280,6 +281,22 @@ def expect(img, tab, bios):
     ssf = mi.ss()
     for i in (19, 20):
         L.append('ssh %d %08X' % (i, ssf[i]))
+    # the reload: another cartridge (img['reload']) in the same session,
+    # its own 0x0082 size, in the table or not (img['notable2'])
+    if img.get('reload'):
+        rdata = img['reload']['data']
+        rcrc, rwords = m.load_through_loader(rdata)
+        rcart, rlid, rflags, rhit = tab.model(rwords, rcrc)
+        L.append('reload status crc %08X words %d layout %d flags %02X hit %d err 0 lenst %d' % (
+            rcrc, len(rwords), rlid, rflags, int(rhit), 3 if img.get('notable2') else 1))
+        L.append('reload slots %03X' % (2 | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+        L.append('reload image %08X' % crc32(struct.pack('>%dH' % len(rwords), *rwords)))
+        rm = Mirror(rwords, rcart.pt, '%08X' % rcrc, rlid, rflags, rhit)
+        for i, w in enumerate(rm.ss()):
+            L.append('rss %d %08X' % (i, w))
+        rm.cart.reset()
+        for r in range(16):
+            L.append('R %d %08X' % (r, rm.block(r)))
     L.append('end')
     return L, dict(crc=crc, layout=lid, flags=flags, hit=hit, mapped='%08X' % mc,
                    model_mapped='%08X' % model_mapped)
@@ -312,9 +329,13 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_loader')
 
 
-def run_one(binary, img, path, bios_paths, work, k, timeout=1500):
+def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None):
     out = os.path.join(work, 'out_%s.txt' % img['crc'])
     args = [binary, '+out=' + out, '+seed=%d' % (k + 1)]
+    if path2:
+        args.append('+cart2=' + path2)
+    if img.get('notable2'):
+        args.append('+notable2=1')
     if img.get('neg') != 'nocart':
         args.append('+cart=' + path)
     if img.get('lenadj'):
@@ -354,10 +375,17 @@ def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
         path = os.path.join(tmp, '%s.bin' % img['crc'])
         with open(path, 'wb') as f:
             f.write(img['data'])
+        path2 = None
+        if img.get('reload'):
+            path2 = os.path.join(tmp, '%s_2.bin' % img['crc'])
+            with open(path2, 'wb') as f:
+                f.write(img['reload']['data'])
         try:
-            so, got, dt = run_one(binary, img, path, bios_paths, work, k)
+            so, got, dt = run_one(binary, img, path, bios_paths, work, k, path2=path2)
         finally:
             os.remove(path)
+            if path2:
+                os.remove(path2)
         bad = compare([g.upper() for g in got], [w.upper() for w in exp[img['crc']][0]])
         okrun = 'TB_LOADER run ok' in so
         if not okrun:
@@ -404,8 +432,13 @@ PLANTS = [
      "if (wr_req) begin", 'the 0x0082 size of any slot taken'),
     ('rerun', 'intv_loader.sv', "F_IDLE: if (len_valid && !len_d && pending) begin",
      "F_IDLE: if (len_valid && !len_d) begin", 'the finish runs again on every all complete'),
+    ('pending_byte0', 'intv_loader.sv', "                        pending <= 1'b1;\n                        seq_err <= 1'b0;",
+     "                        seq_err <= 1'b0;", 'a reload\'s byte 0 does not arm the finish'),
+    ('req_len_first', 'apf_datatable.sv', "            req_len  <= wr_size;",
+     "            if (!req_seen) req_len <= wr_size;", 'only the first 0x0082 size kept'),
 ]
-PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1')
+PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
+                'RELOAD0', 'RELOAD1')
 
 
 def main():
@@ -444,6 +477,18 @@ def main():
                              reqadj=4, dtfirst=dt))
             imgs.append(dict(syn[0], name='length:no table entry, dtfirst %d' % dt, crc='NOTAB%d' % dt,
                              notable=True, dtfirst=dt))
+    # user reloads in one session (no power-on reset between): synthetic:a,
+    # then synthetic:b (another size, in the table, data table after the
+    # files), or C2063C08 (paged layout 26, no table entry: its own 0x0082
+    # size, data table first)
+    byname = {i['name']: i for i in imgs}
+    if syn and 'synthetic:b' in byname:
+        imgs.append(dict(syn[0], name='reload:synthetic:a then synthetic:b', crc='RELOAD0',
+                         reload=byname['synthetic:b'], dtfirst=0))
+    cpg = [i for i in imgs if i['crc'] == 'C2063C08']
+    if syn and cpg:
+        imgs.append(dict(syn[0], name='reload:synthetic:a then C2063C08, no table entry', crc='RELOAD1',
+                         reload=cpg[0], notable2=True, dtfirst=1))
     if a.only:
         keep = set(a.only.split(','))
         imgs = [i for i in imgs if i['crc'] in keep or i['name'] in keep]

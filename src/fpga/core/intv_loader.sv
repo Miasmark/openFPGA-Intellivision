@@ -390,14 +390,17 @@ module intv_loader #(
     assign busy = st != F_IDLE || wq_n != 3'd0;
 
     // slot status for the test pattern: the system ROMs by size (the owner's
-    // files, DESIGN.md 5.6), the cartridge by the loader's verdict
+    // files, DESIGN.md 5.6), the cartridge by the loader's verdict: wrong
+    // only for err[3:0] (not mapped, or an SRAM overrun); err[4] alone (the
+    // load went on with the table's length) leaves it ok, the cartridge's
+    // second card shows the length check
     localparam logic [24:0] SIZE [6] = '{25'd0, 25'd0, 25'd8192, 25'd2048, 25'd24576, 25'd2048};
     always_comb begin
         for (int i = 0; i < 6; i++) begin
             if (cnt[i] == 25'd0)
                 slot_st[2*i +: 2] = 2'd0;
             else if (i == 0)
-                slot_st[1:0] = (ready && err != 5'd0) ? 2'd1 : 2'd2;
+                slot_st[1:0] = (ready && err[3:0] != 4'd0) ? 2'd1 : 2'd2;
             else if (SIZE[i] == 25'd0 || cnt[i] == SIZE[i])
                 slot_st[2*i +: 2] = 2'd2;
             else

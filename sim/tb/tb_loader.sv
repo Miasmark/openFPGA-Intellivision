@@ -39,6 +39,12 @@
 //            complete" (0x008F) again without a cartridge stream: the
 //            loader must not run its finish again (busy stays low, the page
 //            selects stay): "hazard busy B ready R" and the select words
+//   reload   with +cart2=, a user reload of another cartridge in the same
+//            session (no power-on reset): reset enter, its 0x0082 with its
+//            own size, its bytes, the data table with its length (or no
+//            entry with +notable2=1), all complete, reset exit; the loader
+//            must map it: "reload status", "reload slots", "reload image",
+//            the state words rss and, after a machine reset, the space R
 //
 // +cart= +exec= +grom= +ecs= +ivoice= (files; a missing one is not loaded),
 // +lenadj=N adds N to the cartridge's size in the data table (a refused
@@ -47,7 +53,7 @@
 // used, err[4] set), +notable=1 leaves the cartridge out of the data table
 // (the 0x0082 size is used), +out= (result file), +gap=N (bridge clocks
 // between writes, default 75, +jitter=N adds 0..N-1), +pad=HH (pad byte),
-// +dtfirst=0/1, +seed=N.
+// +dtfirst=0/1, +seed=N, +cart2= and +notable2=1 (reload).
 //
 // SPDX-License-Identifier: MIT
 
@@ -349,6 +355,20 @@ module tb_loader;
         end
         c = ~c;
     endtask
+    task automatic wait_ready();
+        int to;
+        to = 0;
+        while (!(ready && !busy) && to < 2000000) begin @(negedge clk_sys); to++; end
+        check(to < 2000000, "loader ready");
+        repeat (10) @(negedge clk_sys);
+    endtask
+    task automatic image_crc(input string tag);
+        logic [31:0] c;
+        logic [15:0] v;
+        c = 32'hFFFFFFFF;
+        for (int i = 0; i < int'(words); i++) begin aux_rd(17'(i), v); c = crc_word(c, v); end
+        $fdisplay(outf, "%s %08X", tag, ~c);
+    endtask
     task automatic space(input string tag);
         logic [31:0] c;
         for (int r = 0; r < 16; r++) begin
@@ -368,7 +388,7 @@ module tb_loader;
         string outn;
         logic [31:0] c, w32;
         logic [15:0] v;
-        int n, to;
+        int n;
         if (!$value$plusargs("out=%s", outn)) outn = "tb_loader.out";
         void'($value$plusargs("gap=%d", gap));
         void'($value$plusargs("jitter=%d", jitter));
@@ -401,10 +421,7 @@ module tb_loader;
         if (dtfirst == 0) send_table();
         host_cmd(16'h008F, 32'd0, 32'd0);
         host_cmd(16'h0011, 32'd0, 32'd0);
-        to = 0;
-        while (!(ready && !busy) && to < 2000000) begin @(negedge clk_sys); to++; end
-        check(to < 2000000, "loader ready");
-        repeat (10) @(negedge clk_sys);
+        wait_ready();
 
         // ---- status
         if ($test$plusargs("debug"))
@@ -412,9 +429,7 @@ module tb_loader;
         $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                   crc, words, layout, flags, hit, err, len_st);
         $fdisplay(outf, "slots %03X", slot_st);
-        c = 32'hFFFFFFFF;
-        for (int i = 0; i < int'(words); i++) begin aux_rd(17'(i), v); c = crc_word(c, v); end
-        $fdisplay(outf, "image %08X", ~c);
+        image_crc("image");
         if (floaded[4]) begin
             c = 32'hFFFFFFFF;
             for (int i = 0; i < 12288; i++) begin aux_rd(17'h10000 + 17'(i), v); c = crc_word(c, v); end
@@ -504,6 +519,29 @@ module tb_loader;
             check(len_valid, "len_valid again after the second all complete");
             $fdisplay(outf, "hazard busy %0d ready %0d", busy_seen, ready);
             for (int i = 19; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssh %0d %08X", i, ssq); end
+        end
+
+        // ---- reload: another cartridge, same session
+        if ($test$plusargs("cart2=")) begin
+            read_file(0, "cart2");
+            reqadj = 0;
+            lenadj = 0;
+            notable = 0;
+            void'($value$plusargs("notable2=%d", notable));
+            host_cmd(16'h0010, 32'd0, 32'd0);
+            if (dtfirst != 0) send_table();
+            send_slot(0);
+            if (dtfirst == 0) send_table();
+            host_cmd(16'h008F, 32'd0, 32'd0);
+            host_cmd(16'h0011, 32'd0, 32'd0);
+            wait_ready();
+            $fdisplay(outf, "reload status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
+                      crc, words, layout, flags, hit, err, len_st);
+            $fdisplay(outf, "reload slots %03X", slot_st);
+            image_crc("reload image");
+            for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "rss %0d %08X", i, ssq); end
+            machine_reset();
+            space("R");
         end
 
         // ---- bench health

@@ -26,14 +26,18 @@ gives the cartridge's size with 0x0082 too; `apf_datatable` checks the data
 table's length against it, and four extra cases on the 4n+1 synthetic image
 cover it with the data table before and after the files: a 0x0082 size 4
 bytes long (loaded with the table's length, err[4]) and a table without the
-cartridge (the 0x0082 size used). Images are taken from the owner's library
+cartridge (the 0x0082 size used). Two reload cases load that image and
+then, in the same session (no power-on reset), another cartridge with its
+own 0x0082 size: synthetic:b (in the table) and C2063C08 (paged, no table
+entry); the second must be mapped with its own length. Images are taken from the owner's library
 by path and extracted only into `sim/work` for the run; the `forced:` rows
 come from `tools/synth_image.py` (a table CRC, no game data). `--all` then
-builds 13 planted faults (CRC over the padded length, little-endian words,
+builds 15 planted faults (CRC over the padded length, little-endian words,
 page table read one entry off, odd last byte, default map not cut, SRAM
 sampled early, selects kept on machine reset, selects dropped on restore, no
 size check, no length cross-check, no fallback to the 0x0082 size, the
-0x0082 size of any slot, the finish rerun on every "all complete"); each
+0x0082 size of any slot, the finish rerun on every "all complete", a
+reload's byte 0 not arming the finish, only the first 0x0082 size kept); each
 must fail.
 
 `tb_cpu.sv` checks the CP1610 RTL (`src/fpga/core/cp1610.sv`) in

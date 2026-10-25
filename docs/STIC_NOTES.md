@@ -3,7 +3,8 @@
 What the STIC model (`tools/stic.py`, driven by `tools/intv_system.py`) does,
 where each fact comes from, and every place where the sources disagree.
 Sections 1-4 are the backgrounds (build step 4); section 5 is the MOBs and
-their collisions (build step 5, model), section 6 their RTL.
+their collisions (build step 5, model), section 6 their RTL; section 7 is
+jzIntv as a second timing reference (T2 evidence).
 
 Sources (DESIGN.md section 12 for the full list):
 
@@ -105,7 +106,7 @@ documented; the log lists each card's 8 bytes once (D15).
 | # | Topic | Sources | Model |
 |---|---|---|---|
 | T1 | BUSRQ cycles per card row | MAME 110 (stic.h:48); WIKI 114 (DESIGN 2.4, L-WIKI); WIKI STIC_Bus_Request: requested one scanline ahead, released when the row is loaded (= 2 x 57) | request held 114 cycles; the CPU loses 114 minus its latency to the next interruptible boundary (MAME's 110 looks like 114 minus an average latency of 4) |
-| T2 | Does the CPU lose the BUSRQ cycles at all in MAME? | MAME subtracts 12 x 110 + 42 (+ 110 when VDR = 0) with `adjust_icount` in the vblank interrupt (intv_m.cpp:668, 680), but `adjust_icount` acts only while the CPU is executing (diexec.h:159) and the vblank callback runs from a timer between time slices; MAME's traces show every instruction at its own cycle count and about 14,934.7 CPU cycles between vblanks (docs/CPU_NOTES.md "MAME lockstep"; step-4 traces: Beamrider 200 frames, no gap anywhere) | mode `mame` steals nothing (to follow MAME's traces); mode `stic` steals as the hardware should |
+| T2 | Does the CPU lose the BUSRQ cycles at all in MAME? | MAME subtracts 12 x 110 + 42 (+ 110 when VDR = 0) with `adjust_icount` in the vblank interrupt (intv_m.cpp:668, 680), but `adjust_icount` acts only while the CPU is executing (diexec.h:159) and the vblank callback runs from a timer between time slices; MAME's traces show every instruction at its own cycle count and about 14,934.7 CPU cycles between vblanks (docs/CPU_NOTES.md "MAME lockstep"; step-4 traces: Beamrider 200 frames, no gap anywhere) | mode `mame` steals nothing (to follow MAME's traces); mode `stic` steals as the hardware should; jzIntv, run as a black box, steals them and mostly follows mode `stic` where it parts from MAME (section 7) |
 | T3 | Extra row fetch with VDR = 0 | MAME +110 cycles (intv_m.cpp:678-681); S9 14,934 - 13,518 = 1,416, i.e. +54 over VDR > 0 (interrupts.txt:126-128); GI80 p.5-10: SR2 "thirteen or fourteen times per picture frame depending on picture offset" | a 13th request when it fits before the frame end (VDR = 0 only): about +110, as MAME |
 | T4 | Frame BUSRQ | MAME 42 cycles "just after end of vblank and before first row fetch (approximate)" (stic.h:49); no other source gives a figure; GI80's 13/14 SR2 per frame fits 12/13 row fetches plus one | 42-cycle request at 3,790 when the display is enabled |
 | T5 | When rows are copied | MAME's row timers fire at vblank + 3,891 + 114 x VDR + 802 x r *real* time (intv_m.cpp:672-675): the stolen cycles are taken off a real-time delay, so row 11 lands at 12,713 instead of 3,933 + 11 x 912 = 13,965 | `stic`: 3,933 + 114 x VDR + 912 x r (the BUSAK cycle); `mame`: MAME's times. Visible only when a program writes BACKTAB during the display |
@@ -759,3 +760,148 @@ RTL-against-MAME gate (which would need the RTL to run MAME's timing).
 
 **Gates** (lane `mob-rtl`; results in its NOTES.md; the step-5 review
 fixes in lane `mob-fix`): see `sim/tb/README.md`.
+
+
+## 7 jzIntv as a second timing reference (T2 evidence)
+
+MAME never takes the STIC's BUSRQ cycles from the CPU (T2), so it cannot
+say whether mode `stic`'s pictures, where they part from MAME's (sections
+3, 5.4 and 6), are what an emulator that does take them shows. jzIntv
+(jzintv-20200712, built with `tools/refs/build_jzintv.sh`, run as a black
+box only; its sources are never read) does take them. With
+`tools/refs/jzintv_frames.py` (2026-10-25) it ran the 10 MOB games of 5.4
+and the 7 screens of section 3 from reset, with our mapper's memory map, no
+ECS, no Intellivoice and no controller input, and recorded every frame
+with its movie recorder. Its frame k equals model picture k (Astrosmash's
+title: the colour numbers agree pixel for pixel at offset 0 and at no
+other); it shows the model's picture lines 20-219 and columns 13-172. In
+a game that runs against the frame the match can sit one picture later
+(Sewer Sam: frame k is mode `stic`'s picture k + 1 more often than k), so
+the last column allows a shift of one picture. The
+comparison is every picture from 2 to 704 (MTE201 to 904), against the
+model's modes `stic` and `mame` (mode `mame` is MAME's pictures, 5.4).
+Frames and traces stay outside the repository.
+
+**Pictures.** "Split" is the pictures where mode `stic` and mode `mame`
+differ; "nearer" counts the split pictures where jzIntv's frame is fewer
+pixels from one mode than from the other.
+
+| Game | Split pictures | jzIntv = `stic` | jzIntv = `mame` | Nearer `stic` / `mame` | Median pixels from `stic` / `mame` | All pictures equal within one picture, `stic` / `mame` |
+|---|---|---|---|---|---|---|
+| Astrosmash, Diner, Buzz Bombers | 1, 2, 1 | all | 0 | all / 0 | 0 / 2,296-2,944 | 702-703 / 702-703 of 703 |
+| Dig Dug | 0 | | | | | 703 / 703 |
+| Tower of Doom | 1 (picture 8, D8) | 1 | 0 | 1 / 0 | 0 / 2,352 | 700 / 700 |
+| Sewer Sam | 633 | 326 | 20 | 459 / 26 (148 ties) | 0 / 7,488 | 477 / 92 |
+| TRON Solar Sailer | 81 | 64 | 0 | 81 / 0 | 0 / 1,254 | 675 / 615 |
+| Dracula | 676 | 49 | 1 | 634 / 41 | 124 / 4,530 | 138 / 24 |
+| Dragonfire | 361 | 199 | 72 | 263 / 98 | 0 / 18 | 483 / 362 |
+| Tropical Trouble | 651 | 222 | 44 | 435 / 211 | 150 / 175 | 281 / 91 |
+| Defender | 424 | 107 | 0 | 248 / 176 | 770 / 864 | 384 / 277 |
+| Atlantis | 698 | 11 | 1 | 479 / 216 | 281 / 329 | 17 / 11 |
+| Demon Attack | 690 | 13 | 0 | 455 / 189 | 226 / 282 | 26 / 14 |
+| Ice Trek | 658 | 38 | 33 | 355 / 267 | 1,486 / 1,496 | 76 / 52 |
+| Centipede | 393 (from 308) | 0 | 0 | 342 / 48 | 2,777 / 2,848 | 306 / 306 |
+| MTE201 | 76 | 4 | 7 | 33 / 43 | 1,812 / 1,812 | 578 / 588 of 903 |
+| EXEC, no cartridge | 357 (from 137) | 355 | 0 | 355 / 2 | 0 / 32,000 | (see below) |
+
+A display-off picture counts as equal when jzIntv shows a black playfield
+inside the border where the model fills it with the border colour (D7:
+jzIntv does what S9 describes); this applies to Tower of Doom's pictures 8
+and 9 and the no-cartridge EXEC from picture 349.
+
+Per game, honestly read:
+
+- **All three agree** (nothing in them depends on the CPU's cycle budget):
+  Astrosmash, Diner, Dig Dug, Buzz Bombers, and Tower of Doom except
+  picture 10, where the game turns the display on and changes the border
+  colour (D8, D17): jzIntv's frame 10 is already the model's picture 11
+  apart from the border. In the one or two split pictures of the
+  first four, jzIntv is mode `stic`'s picture. Tower of Doom's picture 8
+  (its first $20 write after cycle 3,789, D8) is blank in jzIntv as in
+  mode `stic`; MAME draws it.
+- **jzIntv follows mode `stic`**, so the difference from MAME is the
+  stolen cycles' effect on the game, which jzIntv shares: Sewer Sam
+  (jzIntv is mode `stic`'s picture in half the split pictures and MAME's
+  in 3%; within one picture 477 of 703 against 92), Solar Sailer (79% exact, never MAME's), Dracula (rarely exact,
+  but a median 124 pixels from mode `stic` against 4,530 from MAME: it
+  plays the same game as mode `stic`, MAME's goes elsewhere), Dragonfire
+  and Tropical Trouble (exact in a third to a half, nearer `stic` 2-2.7
+  to 1).
+- **jzIntv goes its own way, nearer mode `stic`**: Defender, Atlantis and
+  Demon Attack. Few exact pictures (none or one of them MAME's), nearer
+  `stic` 1.4-2.4 to 1, but hundreds of pixels from both.
+- **No reading**: Ice Trek and Centipede (from picture 308 jzIntv is far
+  from both, slightly nearer `stic`), and MTE201 (4 against 7 exact, 33
+  against 43 nearer, equal medians: a tie, leaning to MAME if anything).
+  MTE201 also differs from both modes where they agree (262 pictures,
+  e.g. 358-585: lines 24-35 of the picture in colour 7 where both modes
+  show 3): a drawing difference of jzIntv's, not timing; not chased.
+- **EXEC with no cartridge**: not a timing question. jzIntv, which has the
+  STIC write aliases at $4000 / $8000 / $C000 as our hardware map (D9),
+  shows the EXEC's colour-15 border from picture 80 on (border extension
+  on, display off); the model from 349 (D18), MAME never. The empty-bus
+  reads differ (jzIntv needs a cartridge: ours is one word at $D000), so
+  this backs D18's aliases but not its timeline.
+
+Apart from MTE201's tie, in no game does jzIntv take MAME's side against
+mode `stic`.
+
+**CPU-visible timing.** jzIntv's debugger step log (cycle count per
+instruction, 'B' while the CPU is stopped by BUSRQ) against the model's
+mode `stic` over the same 300,000 steps from reset (`jzintv_frames.py
+stolen`), frames with the display on:
+
+| | jzIntv | Model mode `stic` | MAME |
+|---|---|---|---|
+| BUSRQ requests a frame (VDR 0) | 14 | 14 | none taken (T2) |
+| Cycles lost a frame, mean over 16 screens (range of game means) | 1,317 (1,239-1,373) | 1,432 (1,377-1,490) | 0 |
+| First VBlank after reset | cycle 2,795-2,802 | cycle 0 | not measured here |
+
+Per game, jzIntv / model: Astrosmash 1,239 / 1,439, Atlantis 1,313 /
+1,439, Buzz Bombers 1,315 / 1,443, Centipede 1,244 / 1,377, Defender 1,363
+/ 1,421, Demon Attack 1,319 / 1,424, Diner 1,314 / 1,444, Dig Dug 1,317 /
+1,407, Dracula 1,310 / 1,407, Dragonfire 1,332 / 1,428, Ice Trek 1,319 /
+1,397, MTE201 1,336 / 1,490, Sewer Sam 1,360 / 1,470, Solar Sailer 1,308
+/ 1,464, Tower of Doom 1,373 / 1,433, Tropical Trouble 1,308 / 1,424 (the
+EXEC with no cartridge never enables the display). jzIntv's row stalls are
+shorter (Astrosmash's title: 91-109 cycles against the model's 95-112, and
+the last request of the frame 25 cycles against 108), consistent with a
+request held 110 cycles (MAME's figure, stic.h:48, from S9) where the
+model holds 114 (WIKI; T1, T3).
+
+jzIntv's CPU cycle counts also differ from GI's (S1), MAME's and the
+model's (docs/CPU_NOTES.md; the model matches MAME's traces in lockstep):
+J / JSR / JSRD 13 cycles (12), PULR (MVI@ R6) 12 (11), MVII to R6 or R7
+9 (8), INCR R7 7 (6), ADD to R7 11 (10); every other instruction in the
+Astrosmash, Sewer Sam and Dracula logs costs the same. These add 11-198
+cycles a frame on average in 15 of the screens and 506 in Diner (up to
+1,837), about 135 over the 16. So the CPU's budget a frame is about
+14,934 - 1,317 - 135 = 13,482 cycles in jzIntv, 13,502 in mode `stic` and
+14,935 in MAME: jzIntv sits with mode `stic`, which is why it
+plays the timing-sensitive games as mode `stic` does.
+
+**What this shows and what it does not.** Where mode `stic` parts from
+MAME, a second emulator that takes the BUSRQ cycles parts from MAME the
+same way, exactly in Sewer Sam, Solar Sailer and Tower of Doom's late
+enable, nearly in Dracula, Dragonfire and Tropical Trouble, and never
+takes MAME's side. So those differences are the stolen cycles' effect on
+the games (T2), not a timing error peculiar to our model. It does not
+check the model's exact cycle placement: jzIntv is a third timing (110 /
+114 above, its own instruction counts, its own reset phase) and differs
+from both modes by hundreds of pixels in Atlantis, Demon Attack, Defender,
+Ice Trek and Centipede. A diagnostic that gave the model jzIntv's
+instruction counts, its reset phase, or both, did not bring Sewer Sam
+closer to jzIntv (equal pictures at the best of offsets -1, 0, +1: 452
+without, 289-374 with), so jzIntv's
+residual differences cannot be put on one of these alone. jzIntv is not
+independent of S9 (the same author), and MAME's constants come from S9
+too (stic.h:46), so it adds an emulator, not a source, to T1 and T3; and
+none of this is hardware. The hardware question of T1-T5 stays open (our
+STIC test ROM on a flash cartridge).
+
+Commands (`JZINTV_BIN`, `INTV_BIOS` as in `tools/refs/README.md`; OUT
+outside the repository):
+
+    python3 -I tools/refs/jzintv_frames.py capture GAME.int 705 OUT
+    python3 -I tools/refs/jzintv_frames.py compare GAME.int OUT
+    python3 -I tools/refs/jzintv_frames.py stolen GAME.int 300000 OUT

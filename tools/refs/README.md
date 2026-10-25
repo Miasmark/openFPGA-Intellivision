@@ -12,6 +12,7 @@ outside this repository and is never committed (DESIGN.md section 1).
 | `mame_trace.sh SYS IMAGE FRAMES OUT` | per-instruction CPU trace with every bus read and write and the interrupts, from reset; IMAGE `none` for an empty cartridge slot |
 | `trace_summary.py TRACE...` | parses a trace; prints counts and a sha256 only |
 | `mame_snap.sh SYS IMAGE FRAME OUT` | one PNG snapshot at the end of a frame |
+| `mame_exec_prog.sh PROG FRAMES OUT [WORDS]` | one of our test programs (EXEC-slot image, e.g. sticmob) in place of the EXEC, no cartridge; logs chosen System RAM words every frame |
 | `build_jzintv.sh ZIP DIR` | jzIntv from its official source zip (run only; GPL-2 source never read) |
 | `jzintv_run.sh IMAGE N OUT [flags]` | jzIntv headless for N instructions, then one screenshot |
 

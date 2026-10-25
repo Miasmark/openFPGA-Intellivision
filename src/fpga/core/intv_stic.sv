@@ -232,6 +232,10 @@ module intv_stic #(
     wire logic [5:0] n = a[5:0];
     assign open = vb || !hs;
     wire logic wr_ok = we && open;
+    logic [7:0] c_wr;                         // the CPU writes collision register $18 + i
+    always_comb
+        for (int i = 0; i < 8; i++)
+            c_wr[i] = wr_ok && n == 6'h18 + 6'(i);
 
     always_comb begin
         if (!open)
@@ -605,10 +609,15 @@ module intv_stic #(
                     end
                 end
             end
-            // the frame's end: the gathered bits into $18-$1F (sticky)
+            // the frame's end: the gathered bits into $18-$1F (sticky). A
+            // CPU write to $18-$1F in the same cycle (only possible in a
+            // frame whose display is off, so no bits) is kept: the bits
+            // are ORed into the written word, the model's order (the write,
+            // then the frame's draw; STIC_NOTES 6)
             if (frame_end) begin
                 for (int i = 0; i < 8; i++) begin
-                    r[6'h18 + 6'(i)] <= r[6'h18 + 6'(i)] | (14'(coll_p[i]) & keep(6'h18 + 6'(i)));
+                    r[6'h18 + 6'(i)] <= (c_wr[i] ? wdata[13:0] : r[6'h18 + 6'(i)]) & keep(6'h18 + 6'(i))
+                                        | (14'(coll_p[i]) & keep(6'h18 + 6'(i)));
                     coll_p[i] <= 10'd0;
                 end
                 g_on <= 1'b0;

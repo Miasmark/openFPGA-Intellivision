@@ -499,7 +499,8 @@ trace), collision bits overwritten instead of ORed (Centipede trace). Not
 caught: the bottom border one line late, MAME's stale "on" pixels under a
 delay strip ignored (M4) and MAME's colour-7 "on" bit ignored (M5): no game
 in the set has a MOB there or such a colour-stack value. These need our own
-STIC test ROM (for the RTL bench; MAME can run it as a cartridge too).
+STIC test ROM: since the step-5 review, sticmob run in MAME checks all
+three against MAME itself (section 6, "Our STIC test ROM").
 
 **Hardware rules against MAME.** A diagnostic (lane script, not a gate) redrew every
 enabled picture of the 20 MOB games above, in their mode `mame` runs, with
@@ -530,7 +531,9 @@ The owner's console (no flash cartridge) can settle little here:
   again (MOB games run with the hardware's stolen cycles): not new.
 
 M1-M8 otherwise need our own STIC test ROM on hardware (a flash cartridge),
-as D6, D8 and T1-T10 do.
+as D6, D8 and T1-T10 do. sticmob shows M1, M4 and M5 by its border colour
+(section 6); ECS BASIC is no way round the flash cartridge as far as our
+sources go (section 6).
 
 
 ## 6 MOBs and collisions in the RTL (build step 5)
@@ -587,6 +590,23 @@ end, exactly when the model ORs them in (5.1: the registers are closed
 until then, so the CPU sees the same either way; a dump in the middle of a
 frame shows the same registers as the model's too).
 
+A CPU write to $18-$1F in the frame's last cycle (slot 14,933) falls in
+the same clock as that OR. Our choice: the write is kept and the frame's
+bits are ORed into the written word (the model's order: the write belongs
+to the frame, its draw comes after it). The documents say only that the
+bits stay set until the CPU writes the register (S9 stic.txt:322-327) and
+nothing about a write at the very moment the STIC sets them, so the
+choice is ours; it cannot be seen on hardware either way, because the two
+cannot meet: a frame gathers bits only when its display is enabled, and
+then the registers are closed from the end of the VBlank window to the
+frame's end; in a frame whose display is off they are open all frame but
+there are no bits, and the write simply wins. (Before the step-5 review
+the RTL rewrote all eight registers at every frame's end, so such a
+write in a display-off frame was lost; the bench's systest probe p11 now
+writes $18 in exactly that slot, and the plant
+`coll_frame_end_drops_write` brings the old behaviour back and is
+caught.)
+
 **Pattern addresses.** Card bits 3-10; bits 6-7 count only for a GROM card
 in Color Stack mode (M2); with YRES bit 0 is dropped and rows 8-15 come
 from the odd card (M1); the row is (line - top) >> (2 YSIZ4 + YSIZ2), XOR 7
@@ -601,20 +621,102 @@ port's address has been its own for a clock, so a freeze, save or restore
 may fall in any clk_sys, inside the sweep or inside a line's MOB fetch
 (the bench's rt6, rt7 and rt8).
 
-**Our STIC test ROM** (`sim/testroms/sticmob.asm`, image `sticmob`): 18
+**Our STIC test ROM** (`sim/testroms/sticmob.asm`, image `sticmob`): 22
 scenes, one a frame, each with the collision words S9's rules give for
 it, checked by the program itself in the next VBlank (the fail count in
-System RAM $0303, the border green or red). It covers every size and
-flip, X = 0, invisible MOBs, the order with PRIO (M3, on screen), YRES
-with an odd card (M1), GROM cards 64-255 in both modes (M2, on screen),
-the delay strip (M4), squares colour 7 (M5, CSR0 written with bit 4 set),
-each border edge one pixel / line inside and outside (also with delays and
-border extension), MOBs below and right of the raster, and the bits'
-stickiness. The model in hardware rules passes it (0 fails, 2 passes in 40
-frames); with MAME's rules (`Stic.mob_rules = "mame"`, diagnostic) it
-counts 5 fails: M1 (2), M4 (1), M5 (2). So the ROM, run on a console (with
-a flash cartridge), answers M1, M4 and M5 by the border colour, and M2 and
-M3 on screen (S13 and S1). It runs in the EXEC slot on the bench; as a
-cartridge it would need a different start (not built).
+System RAM $0303, a failed-scene mask in $030A / $030B, the border green,
+yellow or red). It covers every size and flip, X = 0, invisible MOBs, the
+order with PRIO (M3, on screen), YRES with an odd card (M1), GROM cards
+64-255 in both modes (M2, on screen), the delay strip (M4), squares
+colour 7 (M5, CSR0 written with bit 4 set), each border edge one pixel /
+line inside and outside (also with delays and border extension), MOBs
+below and right of the raster, and the bits' stickiness. Since the step-5
+review it also covers (S18-S21) the background-collision area, which the
+RTL tests apart from the sweep's border test: an "on" card pixel on the
+bottom line 215 (with VDR 0 and with VDR 7, the cards moved down) is a
+background collision and on line 216 only a border one; the same for
+column 158 and the 160th column 159; under the extended left and top
+borders (CBR 3) an "on" card pixel in column 7 or line 39 is only a border
+collision, in column 8 or line 40 a background one. And YFLIP with YRES
+(the 16 rows reversed, so the two cards swap halves), MOBs with INTR and
+no VISB colliding, and the sweep's first line 8 (Y = 0, VDR = 0: two MOBs
+that meet only there) and last row (Y = 127, VDR = 7, YRES + YSIZ4 +
+YSIZ2: two MOBs that meet only in picture lines 396-403).
 
-**Gates** (lane `mob-rtl`; results in its NOTES.md): see `sim/tb/README.md`.
+The review's plants for these edges are on the bench (128 plants), with
+one exception: "the sweep ends at line 402" cannot be caught by any
+program, because line 403 is the last of an 8-line pattern row (only
+YRES + YSIZ4 + YSIZ2 with Y = 127 and VDR = 7 reaches it, and then lines
+396-403 are one row): any pixel on 403 is on 396-402 as well, for the
+pairs and for the border test. The plant `coll_sweep_to_395` (the last row
+lost) stands for it and is caught.
+
+The model in hardware rules passes it (0 fails, 2 passes in 46 frames);
+with MAME's rules (`Stic.mob_rules = "mame"`, diagnostic) it counts 5 fails
+a pass: M1 (2, S10), M4 (1, S5), M5 (2, S7). **MAME itself** gives the same:
+`tools/refs/mame_exec_prog.sh` runs the program in MAME in place of the
+EXEC (a rompath copy whose exec.bin is our image; MAME warns about the
+checksum and runs it) and logs its RAM words every frame. Over 100 frames
+MAME counts 23 fails, 5 in each of the 4 whole passes and 3 in the fifth,
+all in S5, S7 and S10 (mask $04A0), and passes every other scene, among them the
+bottom border lines 215 / 216 and the background-area edges of S18-S21. So
+the three model faults that no game caught (5.4: the bottom border one line
+late, M4, M5) now have a check against MAME too, through this program; and
+the border's yellow ("only the scenes where MAME's rules differ failed")
+is what a console that behaves like MAME would show.
+
+So the ROM, run on a console, answers M1, M4 and M5 by the border colour
+(green: S9's rules; yellow: MAME's; red: something else, the mask says
+which scene) and shows M2 and M3 on screen (S13 and S1). It runs in the
+EXEC slot, on the bench and in MAME; a cartridge build (a header and the
+EXEC's start-up instead of our own ISR vector) is not made, and on the
+owner's console it needs a flash cartridge. ECS BASIC as a way round
+that: none of our sources (DESIGN 12: the wiki archive, S9, the service
+manual) documents an ECS BASIC statement that writes an arbitrary address
+(a POKE) or the MOB registers, so we cannot say that it can drive the STIC
+from BASIC; until the owner's ECS BASIC manual shows otherwise, the flash
+cartridge conclusion of DESIGN 13 stands.
+
+**What the step-5 done-test proves for the RTL.** DESIGN 9 step 5: "10
+more games match; STIC test ROM passes". As for step 4 (section 3) the
+match is a chain of two gates that compare different things: the RTL
+equals the model's mode `stic` (the frame gate, `tb_system.py --screens`:
+every picture, row fetch, card row, frame's collision bits and bus cycle
+of the 10 MOB games, 700-900 pictures each), and the model's mode `mame`
+equals MAME (5.4: 762 snapshots, the traces with every collision read).
+The two modes differ in timing (T2, T5: BUSRQ's stolen cycles, row copy
+times) and in the MOB rules M1-M5. The rules were shown not to change any
+picture of these games (5.4, "hardware rules against MAME"). The timing
+was not: whether mode `stic`'s pictures are MAME's pictures in another
+phase was only assumed until the step-5 review. A diagnostic (lane
+script, not a gate) compared every mode-`stic` picture with the MAME
+snapshots at frame offsets -3 to +3:
+
+| Game | Snapshots | Equal at offset 0 | Equal only at another offset | Equal at none | Smallest difference over the offsets, pixels (median, max) |
+|---|---|---|---|---|---|
+| Atlantis | 8 | 0 | 0 | 8 | 276, 370 |
+| Demon Attack | 8 | 0 | 0 | 8 | 220, 309 |
+| MTE201 | 110 | 105 | 5 (+1) | 0 | 0, 0 |
+| Buzz Bombers | 35 | 35 | 0 | 0 | 0, 0 |
+| Centipede | 35 | 15 | 1 (+1) | 19 (from 340) | 106, 731 |
+| Defender | 35 | 14 | 0 | 21 (from 300) | 602, 1,083 |
+| Dracula | 35 | 1 | 0 | 34 | 4,474, 4,586 |
+| Dragonfire | 35 | 18 | 1 (+1) | 16 | 0, 34 |
+| Ice Trek | 35 | 0 | 2 (-1, +2) | 33 | 14,832, 14,867 |
+| Tropical Trouble | 35 | 3 | 1 (-2) | 31 | 143, 235 |
+
+So it is not a phase: in 8 of the 10 games the hardware timing leads the
+game itself somewhere else (other object positions, other screens: Ice
+Trek's pictures differ almost everywhere), as Sewer Sam's did in section
+3. Only MTE201 and Buzz Bombers draw MAME's pictures. That is what the
+stolen cycles do to a game that runs its logic against the frame (T2),
+and which of the two a console draws is the open hardware question T1-T5.
+The reading "RTL = mode `stic`, mode `mame` = MAME" therefore means: the
+RTL draws exactly what our model of the hardware draws, and our model
+under MAME's timing and rules draws exactly what MAME draws; it does not
+mean that the RTL's pictures look like a MAME video of the same game. The
+owner accepts this reading of DESIGN 9's done-test or asks for a direct
+RTL-against-MAME gate (which would need the RTL to run MAME's timing).
+
+**Gates** (lane `mob-rtl`; results in its NOTES.md; the step-5 review
+fixes in lane `mob-fix`): see `sim/tb/README.md`.

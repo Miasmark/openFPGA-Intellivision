@@ -36,7 +36,10 @@
 ;      GRAM read 3790 through $3E00 (closed); then INTRM's end: with an
 ;      edge pending and I clear, EIS so that the next instruction ends in
 ;      slot 3789, after the line has dropped (the request is lost), and in
-;      another frame in slot 3788 (taken: the INTAK is in slot 3789).
+;      another frame in slot 3788 (taken: the INTAK is in slot 3789);
+;      last (step 5), a write to $18 in the last slot of a frame whose
+;      display is off, the cycle in which the STIC ORs the frame's
+;      collision bits into $18-$1F: the write is kept (p11).
 ;      The delays were found with the model (scratch tuner; the comment
 ;      '; @dN' marks each delay block).
 ; Results go to System RAM ($0210 on; a ring at $02C0-$02EF in the loop),
@@ -389,7 +392,7 @@ p9d:   DECR    R2
 p9x:    NOP                     ; ends in slot 3789: not taken
         B       w7
 p10:    DIS
-        MVII    #p_end, R0
+        MVII    #p11, R0
         MVO     R0, $02FD
         MVII    #1240, R2    ; @d10
 p10d:  DECR    R2
@@ -399,6 +402,33 @@ p10d:  DECR    R2
         NOPP                    ; @d10
         EIS
 p10x:   NOP                     ; ends in slot 3788: taken (INTAK in 3789)
+        B       w7
+; A collision register written in a frame's last slot (step 5): with I
+; clear the next frame has no ISR, so its display stays off and the STIC
+; is open all frame. $18 is set to $0006 there, then cleared through the
+; $4000 alias in the frame's last slot (14933), the cycle in which the
+; STIC ORs the frame's collision bits (none) into $18-$1F: the write is
+; kept, and $18 reads $3C00 in the next frame's VBlank (STIC_NOTES 6).
+p11:    DIS
+        MVII    #p_end, R0
+        MVO     R0, $02FD
+        MVII    #$4018, R4      ; $18 through the $4000 alias
+        MVII    #1300, R2    ; @d11
+p11d:  DECR    R2
+        BNEQ    p11d
+        MVII    #$0006, R0
+        MVO     R0, $0018       ; display off: open; $18 = $0006
+        CLRR    R0
+        MVII    #428, R2     ; @d12
+p11e:  DECR    R2
+        BNEQ    p11e
+        NOP                     ; @d12
+        NOP                     ; @d12
+        MVII    #0, R3          ; @d12
+        MVO@    R0, R4          ; slot 14933: $18 = 0
+        MVI     $0018, R1       ; the next frame's VBlank: $3C00
+        MVO     R1, $02F8
+        EIS
         B       w7
 p_end:  DIS
         MVII    #isr_main, R0

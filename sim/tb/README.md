@@ -66,7 +66,9 @@ every step start, every change of the STIC handshake and mode latch with
 its cycle, and the RAMs, STIC and PSG registers, latches and page selects
 at two dumps (cycle 82,670 and the end); every run must match all of it.
 For systest it also checks that the section-7 probes land in their frame
-slots (3788-3791 and INTRM's last sample). Four runs per image: straight,
+slots (3788-3791, INTRM's last sample and, from step 5, a write to $18 in
+a display-off frame's last slot, 14,933, where the STIC ORs in the frame's
+collision bits). Four runs per image: straight,
 and three save/restore round trips (DESIGN 8.4): into a reset machine at
 the last cartridge read (or in VBlank), over the state 20,000 cycles later
 (the run rewinds), and into a reset machine outside VBlank; before every
@@ -147,12 +149,19 @@ line covered by a MOB; for sticmob, rt8 restores into a reset machine at
 the start of the sweep's pairs for the one line where two of its MOBs
 overlap (`sweep_clock` gives the clk_sys); the R lines say where they
 landed. Image
-`sticmob` runs `sim/testroms/sticmob.asm` (40 frames: 18 scenes, two
+`sticmob` runs `sim/testroms/sticmob.asm` (46 frames: 22 scenes, two
 passes), which checks its own collision reads against the hardware rules
 (STICMOB_SELFCHECK: the model's run must end with 0 fails). `--all` adds
 37 MOB plants (flips, sizes, YRES, position, X = 0, order, PRIO, pastel,
 invisible drawn, M1, M2, M4, M5, background, INTR, border edges, pairs, the
 sweep's range, the bits' clear and stickiness, the CPU's clear; state
-port: sweep, sweep masks, line masks, gathered bits). `--screens` adds
+port: sweep, sweep masks, line masks, gathered bits), and from the step-5
+review 17 more: the background-collision area's edges (bottom line, right
+column, left and top edges with border extension), YFLIP with YRES, the
+sweep's first line and last row, pairs needing VISB or ignoring INTR, the
+sweep ignoring its port turn, XFLIP with XSIZE, VDR or HDR ignored for
+MOBs, the border test moved or not moved by HDR, MAME's PRIO-first order,
+and the frame's end dropping a CPU write to $18-$1F (systest p11): 128
+plants in all. `--screens` adds
 the ten MOB games of docs/STIC_NOTES.md 5.4 (700 pictures each, MTE201
 900).

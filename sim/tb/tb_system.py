@@ -112,7 +112,7 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           # step 4: our STIC test (sim/testroms/sticbus.asm), BUSRQ on
           ('sticbus', None, 'sticbus.asm', 24, (0xFF, 0xFF), 'stic'),
           # step 5: our MOB test (sim/testroms/sticmob.asm), BUSRQ on
-          ('sticmob', None, 'sticmob.asm', 40, (0xFF, 0xFF), 'stic'),
+          ('sticmob', None, 'sticmob.asm', 46, (0xFF, 0xFF), 'stic'),
           ('cartram', ('forced', 0xCE8FC699, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic'),
           ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic')]
 # the step-4 frame gate: (name, library file or None, pictures)
@@ -140,7 +140,8 @@ KIND = {'GROM': 0, 'GRAM': 1, 'squares': 2}
 FNV0, FNVP = 0x811C9DC5, 0x01000193
 # systest section 7: (phase, address, frame slot) of each probe
 SECT7 = [('DW', 0x002B, 3788), ('DTB', 0x3850, 3789), ('DTB', 0x002A, 3790), ('DW', 0x3851, 3791),
-         ('DW', 0x3852, 3789), ('DW', 0x0030, 3790), ('DTB', 0x002B, 3789), ('DTB', 0x3E53, 3790)]
+         ('DW', 0x3852, 3789), ('DW', 0x0030, 3790), ('DTB', 0x002B, 3789), ('DTB', 0x3E53, 3790),
+         ('DW', 0x4018, FRAME - 1)]          # p11: $18 written in a display-off frame's last slot
 SECT7_START = 7 * FRAME
 TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
@@ -624,11 +625,11 @@ def rt_runs(exp):
                                      '+rtsub=5', '+rton=20000']))
                 break
     # sticmob: rt8 = reset restore at the start of the sweep's pairs for
-    # picture line 169 of frame 30 (scene S11, second pass), the one line
-    # where MOBs 4 and 5 overlap: the sweep's masks of that line must
+    # picture line 169 of frame 34 (scene S11 of 22, second pass), the one
+    # line where MOBs 4 and 5 overlap: the sweep's masks of that line must
     # come back
     if exp.name == 'sticmob':
-        t = 30 * FRAME * 48 + sweep_clock(169)
+        t = 34 * FRAME * 48 + sweep_clock(169)
         runs.append(('rt8', ['+rt=1', '+rtcyc=%d' % (t // 48), '+rtsub=%d' % (t % 48)]))
     return runs
 
@@ -1008,11 +1009,71 @@ PLANTS = [
     ('coll_border_left_ext_off', 'intv_stic.sv', [("(cbr[0] ? 10'd8 : 10'd0)", "10'd0")], 'sticmob', None),
     ('coll_border_needs_intr_off', 'intv_stic.sv', [("if (u_x[8] && g_bord)", "if (g_bord)")], 'sticmob', None),
     ('coll_no_clear', 'intv_stic.sv', [("                    coll_p[i] <= 10'd0;\n", "")], 'sticmob', None),
-    ('coll_not_sticky', 'intv_stic.sv', [("r[6'h18 + 6'(i)] <= r[6'h18 + 6'(i)] | (14'(coll_p[i]) & keep(6'h18 + 6'(i)));",
-                                          "r[6'h18 + 6'(i)] <= 14'(coll_p[i]) & keep(6'h18 + 6'(i));")],
+    ('coll_not_sticky', 'intv_stic.sv', [("r[6'h18 + 6'(i)] <= (c_wr[i] ? wdata[13:0] : r[6'h18 + 6'(i)]) & keep(6'h18 + 6'(i))",
+                                          "r[6'h18 + 6'(i)] <= (c_wr[i] ? wdata[13:0] : 14'd0) & keep(6'h18 + 6'(i))")],
      'sticmob', None),
+    # the frame's end overwrites a CPU write to $18-$1F in the same cycle
+    # (step-5 review; systest p11)
+    ('coll_frame_end_drops_write', 'intv_stic.sv', [("r[6'h18 + 6'(i)] <= (c_wr[i] ? wdata[13:0] : r[6'h18 + 6'(i)]) & keep(6'h18 + 6'(i))",
+                                                     "r[6'h18 + 6'(i)] <= r[6'h18 + 6'(i)] & keep(6'h18 + 6'(i))")],
+     'systest', None),
     ('coll_cpu_write_kept', 'intv_stic.sv', [("            if (we && open) begin\n                if (n < 6'(NREG))\n",
                                               "            if (we && open) begin\n                if (n < 6'(NREG) && !(n >= 6'h18 && n < 6'h20 && wdata[9:0] == 10'd0))\n")],
+     'sticmob', None),
+    # the step-5 review's plants (sticmob scenes S18-S21 catch the first
+    # seven; the review's 'sweep ends at 402' is equivalent: line 403 is
+    # the last of an 8-line pattern row whose other lines 396-402 the
+    # sweep still covers, so it is replaced by 'ends at 395')
+    ('coll_bg_bottom_m1', 'intv_stic.sv', [
+        ("&& vcnt <= 9'(PF_LINE + 191)",
+         "&& vcnt <= 9'(PF_LINE + 190)")],
+     'sticmob', None),
+    ('coll_bg_right_m1', 'intv_stic.sv', [("&& xp <= 12'sd158;", "&& xp <= 12'sd157;")], 'sticmob', None),
+    ('coll_bg_left_ext_off', 'intv_stic.sv', [
+        ("xp >= $signed({8'd0, cbr[0] ? 4'd8 : 4'd0})",
+         "xp >= $signed({8'd0, 4'd0})")],
+     'sticmob', None),
+    ('coll_bg_top_ext_off', 'intv_stic.sv', [
+        ("vcnt >= (cbr[1] ? 9'(PF_LINE + 16) : 9'(PF_LINE))",
+         "vcnt >= 9'(PF_LINE)")],
+     'sticmob', None),
+    ('mob_yflip_yres_halves', 'intv_stic.sv', [("{u_y[7], 3'b111}", "4'b0111")], 'sticmob', None),
+    ('coll_sweep_from_9', 'intv_stic.sv', [("g_ly <= 9'd8;", "g_ly <= 9'd9;")], 'sticmob', None),
+    ('coll_sweep_to_395', 'intv_stic.sv', [("g_ly == 9'd403;", "g_ly == 9'd395;")], 'sticmob', None),
+    ('coll_pair_needs_visb', 'intv_stic.sv', [
+        ("gm[g_m] <= u_x[8] ? u_mask : 16'd0;",
+         "gm[g_m] <= u_x[8] && u_x[9] ? u_mask : 16'd0;")],
+     'sticmob', None),
+    ('coll_sweep_no_gok', 'intv_stic.sv', [
+        ("                    else if (g_ok) begin\n                        g_ph <= 1'b0;",
+         "                    else begin\n                        g_ph <= 1'b0;")],
+     'sticmob', None),
+    ('coll_pair_no_intr', 'intv_stic.sv', [
+        ("gm[g_m] <= u_x[8] ? u_mask : 16'd0;",
+         'gm[g_m] <= u_mask;')],
+     'sticmob', None),
+    ('mob_xflip_xsize_off', 'intv_stic.sv', [
+        ('expand[k] = xf ? p[k / 2] : p[7 - k / 2];',
+         'expand[k] = p[7 - k / 2];')],
+     'sticmob', None),
+    ('mob_vdr_ignored', 'intv_stic.sv', [("8'd4 + 8'(vdr_l);", "8'd4;")], 'sticmob', None),
+    ('mob_hdr_ignored_draw', 'intv_stic.sv', [
+        ("k = 11'(nx) - 11'(r[i][7:0]) - 11'(hd) - 11'(PF_X0 - 8);",
+         "k = 11'(nx) - 11'(r[i][7:0]) - 11'(PF_X0 - 8);")],
+     'sticmob', None),
+    ('coll_border_left_by_hdr', 'intv_stic.sv', [
+        ("(cbr[0] ? 10'd8 : 10'd0);",
+         "(cbr[0] ? 10'd8 : 10'(hd));")],
+     'sticmob', None),
+    ('coll_border_hdr_ignored', 'intv_stic.sv', [
+        ("wire logic [9:0] u_xs = 10'(u_x[7:0]) + 10'(hd) + 10'(PF_X0 - 8);",
+         "wire logic [9:0] u_xs = 10'(u_x[7:0]) + 10'(PF_X0 - 8);")],
+     'sticmob', None),
+    ('mob_m3_prio_then_order', 'intv_stic.sv', [
+        ("    wire logic [13:0] l_a  = r[{3'b010, l_w}];",
+         "    logic [2:0] l_w2;\n    wire logic [13:0] l_a  = r[{3'b010, l_w2}];"),
+        ("wire logic mob_show = l_hit != 8'd0 && !(l_a[13] && fg_on);",
+         "logic [7:0] l_pr;\n    always_comb for (int i = 0; i < 8; i++) l_pr[i] = r[6'h10 + 6'(i)][13];\n    wire logic [7:0] l_hm = l_hit & ~(fg_on ? l_pr : 8'd0);\n    always_comb begin l_w2 = 3'd0; for (int i = 7; i >= 0; i--) if (l_hm[i]) l_w2 = 3'(i); end\n    wire logic mob_show = l_hm != 8'd0;")],
      'sticmob', None),
     # state port: the new words (the sweep, its masks, the line masks, the
     # gathered bits) left out of the restore

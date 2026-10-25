@@ -9,12 +9,16 @@
 ;   1. reads the eight collision registers $18-$1F (the bits frame f - 1
 ;      gathered) and compares bits 0-9 with the scene's expected words:
 ;      every difference adds 1 to the fail count ($0303; $0305 = the frame
-;      of the last one);
+;      of the last one) and sets the scene's bit in the failed-scene mask
+;      ($030A: S0-S15 in bits 0-15, $030B: S16 on in bits 0-15);
 ;   2. clears $18-$1F, unless the scene says "keep" (stickiness);
 ;   3. sets up the next scene: display enable, Color Stack or
 ;      Foreground/Background mode, HDR, VDR, CBR and the 24 MOB registers;
 ;      after the last scene it starts again ($0306 counts the passes);
-;   4. sets the border colour: green while the fail count is 0, red after.
+;   4. sets the border colour: green while the fail count is 0; yellow when
+;      only S5, S7 and S10 have failed, the scenes where MAME's rules
+;      differ (M4, M5, M1: the STIC behaves as MAME draws it); red when any
+;      other scene has failed.
 ; The expected words follow the hardware rules of docs/STIC_NOTES.md 5
 ; (modes "stic"/"none" of tools/stic.py, S9 stic.txt): where MAME differs
 ; (M1, M4, M5) the scene says so. tb_system.py checks that the model's run
@@ -23,12 +27,14 @@
 ; (with a flash cartridge, later) the border colour gives the answer.
 ;
 ; Background: BACKTAB blank (GRAM card 0, background CSR0 = black) but
-;   row 2 col 5 and row 6 col 0: a solid GRAM card 1 (foreground blue);
+;   row 2 col 5, row 6 cols 0 and 1, row 0 col 15, row 1 col 15, row 8
+;   col 19 and row 11 col 10: a solid GRAM card 1 (foreground blue);
 ;   row 4 col 10: Colored Squares, quadrants 7 / 1 / 2 / 7 (top left, top
 ;   right, bottom left, bottom right; colour 7 is never "on").
 ; GRAM cards: 0 blank, 1 solid, 2 row 6 only, 3 left pixel, 5 right pixel,
 ;   6 row 7 only, 7 left half, 8 right half, 9 a diagonal, 10 and 11 solid
-;   (a YRES pair), 12 blank, 13 an L shape.
+;   (a YRES pair), 12 blank, 13 an L shape, 14 blank and 15 row 7 only (a
+;   YRES pair: its last row only).
 ; Positions (no delays): a MOB at X covers playfield columns X - 8 ..;
 ;   at Y its top is picture line 2 (Y + 4); X = 8 c + 8, Y = 8 r + 8 is
 ;   card col c, row r. Collision area: columns 0-158, lines 24-215 (the
@@ -67,6 +73,24 @@ cmp_l:  MVI@    R5, R0          ; $18 + i
         MVO     R3, $0303
         MVI     $0300, R3
         MVO     R3, $0305
+        MVII    #1, R0          ; the scene's bit in the failed-scene mask
+        MVII    #$030A, R1
+        MVI     $0308, R3       ; the scene compared
+        CMPI    #16, R3
+        BLT     sb_lo
+        SUBI    #16, R3
+        INCR    R1
+sb_lo:  TSTR    R3
+        BEQ     sb_set
+sb_sh:  SLL     R0
+        DECR    R3
+        BNEQ    sb_sh
+sb_set: MVI@    R1, R3
+        ANDR    R0, R3
+        BNEQ    cmp_ok          ; already set
+        MVI@    R1, R3
+        XORR    R0, R3
+        MVO@    R3, R1
 cmp_ok: DECR    R2
         BNEQ    cmp_l
 ; 2. clear them, unless the scene keeps them
@@ -87,6 +111,8 @@ next:   MVI     $0301, R4
         MVI     $0306, R0
         INCR    R0
         MVO     R0, $0306
+        CLRR    R0
+        MVO     R0, $0309       ; scene number 0
 scene:  MVI@    R4, R0          ; flags: 0 FGBG, 1-3 HDR, 4-6 VDR, 7-8 CBR, 9 keep
         MVO     R0, $0307
         MVO     R0, $0020       ; display enable
@@ -117,12 +143,23 @@ mob_l:  SDBD
         MVO     R4, $0304       ; this scene's expected words, for the next frame
         ADDI    #8, R4
         MVO     R4, $0301
+        MVI     $0309, R0       ; and its number
+        MVO     R0, $0308
+        INCR    R0
+        MVO     R0, $0309
 ; 4. the border colour
         MVII    #5, R1          ; green
         MVI     $0303, R0
         TSTR    R0
         BEQ     bord
-        MVII    #2, R1          ; red
+        MVII    #2, R1          ; red: a scene other than S5, S7, S10
+        MVI     $030B, R0
+        TSTR    R0
+        BNEQ    bord
+        MVI     $030A, R0
+        ANDI    #$FB5F, R0      ; all but S5, S7, S10 ($04A0)
+        BNEQ    bord
+        MVII    #6, R1          ; yellow: only MAME's M4, M5, M1
 bord:   MVO     R1, $002C
         PULR    R5
         PULR    R4
@@ -140,6 +177,10 @@ main:   MVII    #$0310, R6      ; stack
         MVO     R0, $0305
         MVO     R0, $0306
         MVO     R0, $0307
+        MVO     R0, $0308
+        MVO     R0, $0309
+        MVO     R0, $030A
+        MVO     R0, $030B
         MVO     R0, $002C       ; border black until the first frame
         MVII    #s_first, R0
         MVO     R0, $0301
@@ -152,10 +193,10 @@ main:   MVII    #$0310, R6      ; stack
         MVO     R1, $002B
         MVII    #$10, R0        ; CSR0: black; bit 4 is not kept (MAME keeps the word and
         MVO     R0, $0028       ; takes its bit 4 as "on" for squares colour 7: M5)
-; GRAM cards 0-13
+; GRAM cards 0-15
         MVII    #gram_d, R4
         MVII    #$3800, R5
-        MVII    #112, R2
+        MVII    #128, R2
 gram_l: MVI@    R4, R0
         MVO@    R0, R5
         DECR    R2
@@ -170,6 +211,11 @@ bt_l:   MVO@    R0, R4
         MVII    #$0809, R0      ; GRAM card 1, foreground 1
         MVO     R0, $022D       ; row 2 col 5
         MVO     R0, $0278       ; row 6 col 0
+        MVO     R0, $0279       ; row 6 col 1
+        MVO     R0, $020F       ; row 0 col 15
+        MVO     R0, $0223       ; row 1 col 15
+        MVO     R0, $02B3       ; row 8 col 19
+        MVO     R0, $02E6       ; row 11 col 10
         MVII    #$368F, R0      ; squares 7 / 1 / 2 / 7
         MVO     R0, $025A       ; row 4 col 10
         EIS
@@ -189,6 +235,8 @@ gram_d: DECLE   $00, $00, $00, $00, $00, $00, $00, $00      ; 0 blank
         DECLE   $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF      ; 11 solid
         DECLE   $00, $00, $00, $00, $00, $00, $00, $00      ; 12 blank (M1: MAME's lower half of 11)
         DECLE   $FF, $80, $80, $80, $00, $00, $00, $00      ; 13 L shape
+        DECLE   $00, $00, $00, $00, $00, $00, $00, $00      ; 14 blank (YRES pair 14, 15)
+        DECLE   $00, $00, $00, $00, $00, $00, $00, $FF      ; 15 row 7
 
 ; Register bits. X: INTR $100, VISB $200, XSIZE $400. Y: YRES $80, YSIZ2
 ; $100, YSIZ4 $200, XFLIP $400, YFLIP $800. A: colour 0-2 + $1000, card
@@ -206,6 +254,7 @@ G9      EQU     $848
 G10     EQU     $850
 G11     EQU     $858
 G13     EQU     $868
+G14     EQU     $870
 
 ; Each scene: flags, X0-X7, Y0-Y7, A0-A7, expected C0-C7.
 s_first:
@@ -334,4 +383,46 @@ s_first:
         BIDECLE 90, 91, 92, 93, 94, 95, 96, 97
         BIDECLE G1 + 0, G1 + 1, G1 + 2, $2000 + G1 + 3, G1 + 4, $1000 + G1 + 5, G1 + 6, G1 + 7
         DECLE   $00E, $01D, $03B, $077, $0EE, $0DC, $0B8, $070
+; S18: the edges of the background-collision area (no delays): the bottom
+; line 215 is in it, 216 is not (MOBs 0, 1 on the solid card at row 11 col
+; 10); column 158 is in it, the 160th column 159 is not (MOBs 2, 3 on the
+; solid card at row 8 col 19). Outside the area an "on" card pixel is only
+; a border collision.
+        DECLE   0
+        BIDECLE 88 + IV, 88 + IV, 159 + IV, 160 + IV, 0, 0, 0, 0
+        BIDECLE 100, 101, 72, 76, 0, 0, 0, 0
+        BIDECLE G6 + 1, G2 + 2, G5 + 3, G5 + 4, 0, 0, 0, 0
+        DECLE   $100, $200, $100, $200, 0, 0, 0, 0
+; S19: border extension (CBR 3) over "on" card pixels: column 7 (MOB 0, the
+; solid card at row 6 col 0, hidden under the extended left border) is a
+; border collision only, column 8 (MOB 1, row 6 col 1) a background one;
+; line 39 (MOB 2, row 0 col 15, hidden under the extended top border) a
+; border collision only, line 40 (MOB 3, row 1 col 15) a background one
+        DECLE   $180
+        BIDECLE 8 + IV, 16 + IV, 128 + IV, 128 + IV, 0, 0, 0, 0
+        BIDECLE 56, 56, 12, 13, 0, 0, 0, 0
+        BIDECLE G5 + 1, G3 + 2, G6 + 3, G2 + 4, 0, 0, 0, 0
+        DECLE   $200, $100, $200, $100, 0, 0, 0, 0
+; S20: YRES with YFLIP reverses all 16 rows, so the two cards swap halves:
+; MOB 0 (cards 6 and 7) has its full row (card 6 row 7) on its line 8,
+; where MOB 1's only line (card 2 row 6) meets it right of its left half
+; (flipping each card in place would leave card 7's left half there: no
+; collision). MOBs 2 and 3 have INTR without VISB and collide. MOBs 4 and
+; 5 (Y = 0, VDR = 0: from the sweep's first line, 8) overlap only on that
+; line (the L's top row), and touch the border
+        DECLE   0
+        BIDECLE 60 + IV, 64 + IV, 100 + $100, 104 + $100, 40 + IV, 44 + IV, 0, 0
+        BIDECLE 20 + $880, 21, 60, 60, 0, 0, 0, 0
+        BIDECLE G6 + 1, G2 + 2, G1 + 3, G1 + 4, G13 + 5, G13 + 6, 0, 0
+        DECLE   $002, $001, $008, $004, $220, $210, 0, 0
+; S21: VDR 7: the bottom line 215 with the cards moved down (MOBs 0, 1 on
+; row 11 col 10, now lines 214-229: only 215 counts as background); MOBs 6
+; and 7 (Y = 127, YRES + YSIZ4 + YSIZ2: picture lines 276-403, the sweep's
+; last) overlap only in their last row, lines 396-403 (MOB 7: cards 14 and
+; 15, the last row only)
+        DECLE   7 << 4
+        BIDECLE 88 + IV, 88 + IV, 0, 0, 0, 0, 50 + IV, 54 + IV
+        BIDECLE 93, 94, 0, 0, 0, 0, 127 + $380, 127 + $380
+        BIDECLE G6 + 1, G2 + 2, 0, 0, 0, 0, G10 + 6, G14 + 7
+        DECLE   $100, $200, 0, 0, 0, 0, $280, $240
 s_end:

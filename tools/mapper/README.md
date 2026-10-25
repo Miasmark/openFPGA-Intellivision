@@ -109,8 +109,14 @@ Lifter, King of the Mountain, Magic Carousel, Space Shuttle, Super Chef,
 Ms. Pac-Man, Demonstration Cartridge - Green). The rule is conservative:
 DESIGN decision 10 keeps the ECS off for ROM at $7000 and $E000, so until
 build step 9 the core treats ECS_RISK like ECS_OFF. The split lets step 9
-relax ECS_RISK after owner check 15.6 (does Centipede or Dig Dug run with the
-ECS attached) without regenerating the table.
+relax ECS_RISK without regenerating the table. The evidence for that has to
+come from MAME, not from the owner's unit: MAME `ecs.cpp:145-150` (the
+$E000 read passes to the cartridge while the ECS page for $E000 is 0)
+and a black-box run of an ECS_RISK title (for example Chop Lifter or Space
+Shuttle, ROM at $D000-$EFFF) with the ECS attached in MAME or jzIntv at step
+9. Owner check DESIGN 15 item 6 (does Centipede or Dig Dug run with the ECS)
+bears only on ECS_OFF: both titles are in the hard class (ROM at $7000), and
+DESIGN 15.1 records that the owner has neither cart.
 
 **Layouts** `src/fpga/core/tables/cart_layouts.{mif,hex}`: 32 page entries of
 16 bits per layout, one per 2K-word page; address = layout id x 32 + (CPU

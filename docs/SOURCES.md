@@ -57,8 +57,10 @@ and line.
 | Code | Source | License / status | How used |
 |---|---|---|---|
 | APF | Analogue developer documentation and the openFPGA core template | Analogue's terms | core template, bridge, host commands (save states 0x00A0/0x00A4, 0x00B0), core definition files |
-| AGG | agg23's analogue-pocket-utils (`data_loader`, `sound_i2s`) and his openFPGA cores (NES, SNES, Tamagotchi, Game & Watch) | utils and Tamagotchi: MIT | utils used with their notice; save-state behaviour learned from his cores, state-bus pattern from Tamagotchi (MIT) |
-| 7800 | openFPGA-7800 (github.com/Miasmark/openFPGA-7800), same author | MIT for own files, listed GPL-3.0 parts | Pocket wrapper conventions, packaging, `sim/check/hygiene.sh` (adapted). No GPL part of it is used here |
+| AGG | agg23's analogue-pocket-utils (`data_loader`, `sound_i2s`, `sync_fifo`) and his openFPGA cores (NES, SNES, Tamagotchi, Game & Watch) | utils and Tamagotchi: MIT | utils vendored unmodified with their notice (THIRD_PARTY_NOTICES.md); save-state behaviour learned from his cores, state-bus pattern from Tamagotchi (MIT) |
+| 7800 | openFPGA-7800 (github.com/Miasmark/openFPGA-7800), same author | MIT for own files, listed GPL-3.0 parts | Pocket wrapper conventions, the template's `core_top.v` plumbing and qsf, packaging, `sim/check/hygiene.sh` (adapted). No GPL part of it is used here |
+| 2600 | openFPGA-2600, same author | MIT for own files | `sim/check/apf_json_check.py`'s table of Analogue's documented limits, `tools/package.sh` (adapted) |
+| SPIRIT | Spiritualized's Intellivision core 1.0.2 (2022, release zip) | closed binary | its platform id `intv` and platform fields only; nothing else is used |
 
 ## Project notes
 

@@ -1,0 +1,75 @@
+{
+  "data": {
+    "magic": "APF_VER_1",
+    "data_slots": [
+      {
+        "name": "Cartridge",
+        "id": "0x100",
+        "required": true,
+        "parameters": "0x109",
+        "extensions": ["int", "bin", "rom", "itv"],
+        "size_maximum": "0x100000",
+        "address": "0x00000000"
+      },
+      {
+        "name": "Cartridge CFG",
+        "id": "0x101",
+        "required": false,
+        "parameters": "0x109",
+        "extensions": ["cfg"],
+        "size_maximum": "0x4000",
+        "address": "0x01000000"
+      },
+      {
+        "name": "EXEC",
+        "id": "0x102",
+        "required": true,
+        "filename": "exec.bin",
+        "parameters": "0x88",
+        "extensions": ["bin"],
+        "size_maximum": "0x2000",
+        "address": "0x02000000"
+      },
+      {
+        "name": "GROM",
+        "id": "0x103",
+        "required": true,
+        "filename": "grom.bin",
+        "parameters": "0x88",
+        "extensions": ["bin"],
+        "size_maximum": "0x800",
+        "address": "0x03000000"
+      },
+      {
+        "name": "ECS ROM",
+        "id": "0x104",
+        "required": false,
+        "filename": "ecs.bin",
+        "parameters": "0x88",
+        "extensions": ["bin"],
+        "size_maximum": "0x6000",
+        "address": "0x04000000"
+      },
+      {
+        "name": "Intellivoice",
+        "id": "0x105",
+        "required": false,
+        "filename": "ivoice.bin",
+        "parameters": "0x88",
+        "extensions": ["bin"],
+        "size_maximum": "0x800",
+        "address": "0x05000000"
+      },
+      {
+        "name": "JLP flash",
+        "id": "0x106",
+        "required": false,
+        "parameters": "0x84",
+        "nonvolatile": true,
+        "extensions": ["sav"],
+        "size_maximum": "0x10000",
+        "address": "0x20000000"
+      }
+    ]
+  }
+}

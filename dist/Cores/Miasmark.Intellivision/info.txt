@@ -1,0 +1,19 @@
+Mattel Intellivision for Analogue Pocket
+A clean-room core, written from Mattel's and General Instrument's
+documents, with save states designed in. Work in progress: this build
+shows a test pattern only.
+
+System ROMs (yours to supply, in /Assets/intv/common/):
+  exec.bin     EXEC ROM, 8,192 bytes (required)
+  grom.bin     GROM, 2,048 bytes (required)
+  ecs.bin      ECS ROM, 24,576 bytes (optional, for ECS games)
+  ivoice.bin   Intellivoice SP0256-012 ROM, 2,048 bytes (optional)
+
+Cartridges: .int / .bin / .rom / .itv, with an optional .cfg.
+
+The test pattern's bottom row shows one block per file: cartridge,
+config, EXEC, GROM, ECS, Intellivoice. Green = loaded, right size;
+yellow = loaded, other size; red = required and missing; grey = optional
+and missing.
+
+Licenses: see the licenses/ folder (MIT, with third-party notices).

@@ -6,8 +6,11 @@ Entertainment Computer System (ECS), the Intellivoice and JLP cartridges, load
 cartridge images directly (raw `.int`/`.bin`, `.bin` + `.cfg`, Intellicart
 `.rom`), and support save states and sleep from its first release.
 
-**Status: in development.** Nothing runs yet. The plan is
+**Status: in development.** Build step 1 (the Pocket skeleton) is done: the
+core shows a test pattern at 59.92 Hz and loads the data slots. The plan is
 [docs/DESIGN.md](docs/DESIGN.md); section 9 gives the build order.
+[docs/DEVELOPING.md](docs/DEVELOPING.md) says how to build, simulate and
+package it.
 
 ## Clean room
 
@@ -33,20 +36,22 @@ The core needs the console's own ROMs, supplied by the user:
 | `ecs.bin` | ECS ROM, 24,576 bytes | for ECS titles |
 | `ivoice.bin` | Intellivoice SP0256-012 ROM, 2,048 bytes | for Intellivoice titles |
 
-The slot layout is still a proposal (DESIGN.md section 5.6).
+They go in `/Assets/intv/common/` on the SD card (DESIGN.md section 5.6).
 
 ## License
 
 The project's own code is under the MIT License ([LICENSE](LICENSE)).
-Third-party parts keep their own licenses; see [docs/SOURCES.md](docs/SOURCES.md).
+Third-party parts keep their own licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [docs/SOURCES.md](docs/SOURCES.md).
 
 ## Repository layout
 
-- `docs/`: the design and the source list.
+- `docs/`: the design, the source list and the developer notes.
 - `tools/`: Python tools (assembler, CPU and mapper models, table
   generators); see `tools/README.md`.
 - `sim/`: simulation, test ROM sources and checks; see `sim/README.md`.
-- `src/fpga/`: the core, from build step 1 on.
+- `src/fpga/`: the core (Quartus project).
+- `dist/`: the SD card layout of a release.
 
 Before each commit: `sim/check/hygiene.sh --names <list>` (the names list is
 kept outside the repository).

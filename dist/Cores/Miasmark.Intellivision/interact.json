@@ -1,0 +1,31 @@
+{
+  "interact": {
+    "magic": "APF_VER_1",
+    "variables": [
+      {
+        "name": "Reset",
+        "id": 1,
+        "type": "action",
+        "enabled": true,
+        "address": "0x10000200",
+        "value": 1
+      },
+      {
+        "name": "Border",
+        "id": 2,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x10000204",
+        "defaultval": 1,
+        "mask": "0xFFFFFFFE",
+        "options": [
+          { "value": 1, "name": "Show" },
+          { "value": 0, "name": "Hide (playfield only)" }
+        ]
+      }
+    ],
+    "messages": []
+  }
+}

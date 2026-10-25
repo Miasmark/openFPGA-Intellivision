@@ -1,0 +1,20 @@
+# Intellivision core: file list. The macros and the device settings are in
+# ap_core.qsf.
+
+# Pocket glue: Analogue's template (core_top.v, core_bridge_cmd.v) and the
+# PLL (generated).
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) core_top.v]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) core_bridge_cmd.v]
+set_global_assignment -name QIP_FILE [file join $::quartus(qip_path) pll/pll_core.qip]
+
+# agg23's analogue-pocket-utils (MIT), unmodified
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) ../pocket_utils/data_loader.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) ../pocket_utils/sync_fifo.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) ../pocket_utils/sound_i2s.sv]
+
+# This project (MIT)
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_timing.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_palette.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) pocket_video.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) test_pattern.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) slot_stub.sv]

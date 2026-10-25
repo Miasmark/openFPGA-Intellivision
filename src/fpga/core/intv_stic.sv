@@ -24,10 +24,9 @@
 //
 // Frame (CPU cycles from the frame start, slot 0 = vcnt 0; 57 a line):
 //   - end of the VBlank window: at the ce that ends slot VB_CYCLES - 1 the
-//     STIC takes the frame's display enable (the handshake), vertical
-//     delay and border colour, after the CPU's accesses up to that slot
-//     (en_l, vdr_l, bcr_l). A $20 write later in the frame leaves it blank
-//     (STIC_NOTES D8, our choice).
+//     STIC takes the frame's display enable (the handshake) and vertical
+//     delay, after the CPU's accesses up to that slot (en_l, vdr_l). A $20
+//     write later in the frame leaves it blank (STIC_NOTES D8, our choice).
 //   - BUSRQ (to the CPU, when busrq_en): 42 cycles from VB_CYCLES (MAME
 //     stic.h:49), then for every card row r two whole lines from line
 //     68 + 2 VDR + 16 r while they fit in the frame (12 rows, 13 when VDR
@@ -68,12 +67,13 @@
 //       (S9 stic.txt:334-471; wiki STIC; MAME stic.cpp:648-775.)
 //   - the line buffer is read as the line is shown; bit 7 of the pattern
 //     byte is the leftmost pixel, and each card pixel row is two lines.
-//   - the border colour shown switches to bcr_l at line 67 (before that a
-//     line shows the frame before's), so that every line from 67 on shows
-//     the colour of the frame it belongs to.
-// The display registers (CSR, HDR, CBR, the mode) are read live: they are
-// closed to the CPU from the end of the VBlank window when the display is
-// enabled, and unused when it is not.
+//   - every border pixel shows the border colour register ($2C) as it is
+//     when the pixel is registered: a write in CPU cycle t (written at the
+//     ce that ends it) shows from pixel clock 4 t + 5 on (STIC_NOTES D17).
+// The display registers (CSR, HDR, CBR, the border colour, the mode) are
+// read live: they are closed to the CPU from the end of the VBlank window
+// when the display is enabled, and the CPU may change the border colour
+// at any time when it is not.
 //
 // Clock enables: ce (the CPU cycle), ce_pix (the STIC's pixel clock; both
 // only while the machine is live), live (every clk_sys the machine runs).
@@ -85,8 +85,7 @@
 // Save state (DESIGN.md 4.3; ss_rdata 0 unless addressed; write only while
 // the machine is frozen):
 //   SS_ID   words $00-$32 registers (the kept bits), $33 [0] csmode,
-//           [1] handshake; $34 [0] en_l, [3:1] vdr_l, [7:4] bcr_l,
-//           [11:8] bcr_d; $35 [8:0] FIFO address counter, [9] fetch armed,
+//           [1] handshake; $34 [0] en_l, [3:1] vdr_l; $35 [8:0] FIFO address counter, [9] fetch armed,
 //           [10] copy running, [15:11] copy word, [16] copy phase;
 //           $36 [1:0] colour-stack position, [3:2] its value at the card
 //           row's start, [7:4] the colour of the next pixel
@@ -107,7 +106,6 @@ module intv_stic #(
     parameter int         PF_LINE   = 70,     // first playfield line (vcnt)
     parameter int         REQ_LINE  = 68,     // row 0 BUSRQ line with VDR = 0
     parameter int         FRAME_RQ  = 42,     // frame BUSRQ cycles (MAME stic.h:49)
-    parameter int         BD_LINE   = 67,     // the border colour switches here
     parameter int         E0        = 8,      // pixel clock of the first card built
     parameter logic [7:0] SS_ID     = 8'h04,
     parameter logic [7:0] SS_ROW    = 8'h0C,
@@ -207,6 +205,7 @@ module intv_stic #(
     assign csr[2] = r[6'h2A][3:0];
     assign csr[3] = r[6'h2B][3:0];
     wire logic [2:0] hd  = r[6'h30][2:0];
+    wire logic [3:0] bcr = r[6'h2C][3:0];
     wire logic [1:0] cbr = r[6'h32][1:0];
 
     // -------------------------------------------------------- frame position
@@ -218,10 +217,8 @@ module intv_stic #(
     // the frame's latches, taken at the end of the VBlank window
     logic       en_l = 1'b0;
     logic [2:0] vdr_l = 3'd0;
-    logic [3:0] bcr_l = 4'd0, bcr_d = 4'd0;
     wire logic       hs_eff  = hs || (wr_ok && n == 6'h20);
     wire logic [2:0] vdr_eff = wr_ok && n == 6'h31 ? wdata[2:0] : r[6'h31][2:0];
-    wire logic [3:0] bcr_eff = wr_ok && n == 6'h2C ? wdata[3:0] : r[6'h2C][3:0];
     wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);
 
     // ------------------------------------------------------------- BUSRQ
@@ -328,7 +325,7 @@ module intv_stic #(
             for (int i = 0; i < NREG; i++) r[i] <= 14'd0;
             hs <= 1'b0;
             csmode <= 1'b0;
-            {en_l, vdr_l, bcr_l, bcr_d} <= 12'd0;
+            {en_l, vdr_l} <= 4'd0;
             {cp_arm, cp_on, cp_ph} <= 3'd0;
             {cs, cs_row} <= 4'd0;
             pix <= 4'd0;
@@ -337,7 +334,7 @@ module intv_stic #(
                 r[ss_w[5:0]] <= ss_wdata[13:0] & keep(ss_w[5:0]);
             else unique case (ss_w)
                 8'h33: {hs, csmode} <= ss_wdata[1:0];
-                8'h34: {bcr_d, bcr_l, vdr_l, en_l} <= ss_wdata[11:0];
+                8'h34: {vdr_l, en_l} <= ss_wdata[3:0];
                 8'h35: {cp_ph, cp_j, cp_on, cp_arm, cnt} <= ss_wdata[16:0];
                 8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];
                 default: ;
@@ -361,10 +358,7 @@ module intv_stic #(
             if (win_end) begin
                 en_l  <= hs_eff;
                 vdr_l <= vdr_eff;
-                bcr_l <= bcr_eff;
             end
-            if (ce_pix && vcnt == 9'(BD_LINE - 1) && hcnt == 9'(H_TOTAL - 1))
-                bcr_d <= bcr_l;
 
             // row fetch
             if (intak)
@@ -403,7 +397,7 @@ module intv_stic #(
 
             // pixels
             if (ce_pix)
-                pix <= pf_line && pf_x ? pf_c : bcr_d;
+                pix <= pf_line && pf_x ? pf_c : bcr;
         end
     end
 
@@ -414,7 +408,7 @@ module intv_stic #(
                 ss_rdata = {18'd0, r[ss_w[5:0]]};
             else unique case (ss_w)
                 8'h33: ss_rdata = {30'd0, hs, csmode};
-                8'h34: ss_rdata = {20'd0, bcr_d, bcr_l, vdr_l, en_l};
+                8'h34: ss_rdata = {28'd0, vdr_l, en_l};
                 8'h35: ss_rdata = {15'd0, cp_ph, cp_j, cp_on, cp_arm, cnt};
                 8'h36: ss_rdata = {24'd0, pix, cs_row, cs};
                 default: ;

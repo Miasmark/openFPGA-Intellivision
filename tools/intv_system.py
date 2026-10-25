@@ -337,7 +337,8 @@ class SystemBus:
             self.cart.write(a, value)
 
     def _stic_write(self, n, value, cycle):
-        self.vid.write(n, value, self.timing.frame(self._t(cycle)), self.stic_open(cycle))
+        t = self._t(cycle)
+        self.vid.write(n, value, self.timing.frame(t), self.stic_open(cycle), t)
 
     def state(self, cycle):
         return {"scratch": list(self.scratch), "sysram": list(self.sysram),
@@ -571,7 +572,7 @@ def run_pictures(bus, cpu, last, mame_clock=False, max_cycles=None):
     the start of frame n: MAME's snapshot at its n-th frame). With
     mame_clock the model's cycle count runs on MAME's clock."""
     events = collections.Counter()
-    while bus.vid.next_frame <= last:
+    while bus.vid.last_drawn < last:
         ev = cpu.step()
         events[ev.kind] += 1
         if mame_clock:
@@ -619,7 +620,7 @@ def main():
         done = [0]
 
         def show(n, pic, info):
-            st = bus.vid.stats[-1]
+            st = info["stats"]
             print("picture %d: display %s, VDR %d, BUSRQ %d stolen %d cycles, rows loaded %d, "
                   "PC $%04X" % (n, "on" if st["enabled"] else "off", st["vdr"],
                                 st["requests"], st["stolen"], st["loaded"], cpu.r[7]))

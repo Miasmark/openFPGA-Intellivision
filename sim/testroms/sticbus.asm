@@ -25,7 +25,17 @@
 ;     cycles) between delays that change every pass: a row request that
 ;     comes early in a block is acknowledged after its fetch cycle, so that
 ;     row is missed and the row buffer shows the row before (STIC_NOTES
-;     T10).
+;     T10);
+;   - the row-load deadline, exactly: the ISR of frame f = 8 and f = 16
+;     returns into a one-instruction loop (sloop), whose phase the BUSRQs of
+;     that frame fix, so the next interrupt comes at a known cycle; the ISR
+;     of f = 9 then returns into dla and that of f = 17 into dlb: a fixed
+;     delay, then 12 shifts and a branch. The CPU cannot stop after a
+;     shift, so it acknowledges the row request that came during the
+;     shifts at the end of the branch: exactly the fetch cycle R + 57 of
+;     row 0 in dla (frame 10, VDR 4: the row loads) and R + 58 in dlb
+;     (frame 19, VDR 0: the row is missed). The constants are tuned with
+;     the model; tb_system checks that both happen (STICBUS_DEADLINE).
 ; SPDX-License-Identifier: MIT
 
         ROMW    10
@@ -90,6 +100,26 @@ isr_bt: MOVR    R0, R4          ; one BACKTAB word changed
         MVI@    R4, R1
         ADDI    #$0123, R1
         MVO@    R1, R4
+        CMPI    #8, R0          ; the deadline tests: where the ISR returns to
+        BEQ     isr_sync
+        CMPI    #16, R0
+        BEQ     isr_sync
+        CMPI    #9, R0
+        BEQ     isr_dla
+        CMPI    #17, R0
+        BNEQ    isr_out
+        MVII    #dlb, R1
+        B       isr_ret
+isr_sync:
+        MVII    #sloop, R1
+        B       isr_ret
+isr_dla:
+        MVII    #dla, R1
+isr_ret:
+        MOVR    R6, R4          ; the interrupt's return address, under R0 R1 R4
+        SUBI    #4, R4
+        MVO@    R1, R4
+isr_out:
         PULR    R4
         PULR    R1
         PULR    R0
@@ -170,3 +200,32 @@ del:    DECR    R2
         SLL     R0
         SLL     R0
         B       loop
+
+; the deadline tests (see the header)
+sloop:  B       sloop
+dla:    MVII    #247, R2        ; tuned: the block ends at a row's R + 57
+dla_d:  DECR    R2
+        BNEQ    dla_d
+        NOP
+        NOP
+        NOP
+        BNEQ    dla             ; not taken (7 cycles)
+        B       dl_blk
+dlb:    MVII    #217, R2        ; tuned: the block ends at a row's R + 58
+dlb_d:  DECR    R2
+        BNEQ    dlb_d
+        NOP
+        MVII    #0, R1
+dl_blk: SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+        SLL     R0
+dl_end: B       loop

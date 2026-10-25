@@ -85,11 +85,10 @@ def model_pictures(cart, pictures, mode, bios_dir=None, want_info=False):
     def grab(n, pic, info):
         if n in pictures:
             mask = bytearray(sticm.W * sticm.H)
-            for x0, y0, x1, y1 in bus.vid.mob_boxes():
+            # MOB boxes and stats as they were when the frame ended
+            for x0, y0, x1, y1 in info["mob_boxes"]:
                 for y in range(y0, y1):
                     mask[y * sticm.W + x0:y * sticm.W + x1] = b"\x01" * (x1 - x0)
-            info = dict(info)
-            info["stats"] = dict(bus.vid.stats[-1])
             out[n] = (pic, mask, info)
     bus.vid.keep_frames = set()
     bus.vid.on_frame = grab

@@ -75,6 +75,7 @@ sys.path.insert(0, os.path.join(ROOT, 'tools', 'mapper'))
 import as1610               # noqa: E402
 import synth_image          # noqa: E402
 import intv_system as isys  # noqa: E402
+import stic                 # noqa: E402
 import intvcart as m        # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
@@ -150,6 +151,12 @@ def capture(bus):
     def on_frame(n, pic, info):
         pics[n] = bytes(pic)
         sinfo[n] = stic_expect(info)
+        # BUSAK against the row's fetch cycle R + 57 (sticbus's deadline cases)
+        for r, rel, ok, _ in info['fetches']:
+            if rel is not None and r < 13:
+                fc = stic.ROW0_REQ + 2 * stic.LINE * info['vdr'] + stic.ROW_PERIOD * r + stic.LINE
+                bus.deadline.append((n, r, rel - fc, ok))
+    bus.deadline = []
     bus.vid.keep_frames = set()
     bus.vid.on_frame = on_frame
     return pics, sinfo
@@ -762,7 +769,15 @@ PLANTS = [
                                           "d[3:0] == 4'd2 && hcnt[8:2] == 7'(CPL - 1);")], 'astro_nobusrq', None),
     ('enable_live', 'intv_stic.sv', [("wire logic pf_line = en_l &&", "wire logic pf_line = hs &&")],
      'sticbus', None),
-    ('border_switch_late', 'intv_stic.sv', [("parameter int         BD_LINE   = 67,", "parameter int         BD_LINE   = 68,")],
+    # the border colour: a cycle late, or latched per frame at the window end (D17)
+    ('border_cycle_late', 'intv_stic.sv', [("    wire logic [3:0] bcr = r[6'h2C][3:0];",
+                                            "    logic [3:0] bcr = 4'd0;\n    always_ff @(posedge clk) if (ce) bcr <= r[6'h2C][3:0];")],
+     'sticbus', None),
+    ('border_frame_latch', 'intv_stic.sv', [("    wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);",
+                                             "    wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);\n"
+                                             "    logic [3:0] bcr_fl = 4'd0;\n"
+                                             "    always_ff @(posedge clk) if (win_end) bcr_fl <= r[6'h2C][3:0];"),
+                                            ("pix <= pf_line && pf_x ? pf_c : bcr;", "pix <= pf_line && pf_x ? pf_c : bcr_fl;")],
      'astrosmash', None),
     ('missed_row_loads', 'intv_stic.sv', [("if (!busrq_en || busak) begin", "if (1'b1) begin")], 'sticbus', None),
     ('counter_no_stop', 'intv_stic.sv', [("if (cnt < 9'(SYSW))", "if (1'b1)")], 'sticbus', None),
@@ -779,7 +794,7 @@ PLANTS = [
      'astrosmash', ['rt5']),
     ('ss_copy_lost', 'intv_stic.sv', [("8'h35: {cp_ph, cp_j, cp_on, cp_arm, cnt} <= ss_wdata[16:0];",
                                        "8'h35: cnt <= ss_wdata[8:0];")], 'astrosmash', ['rt4']),
-    ('ss_latches_lost', 'intv_stic.sv', [("8'h34: {bcr_d, bcr_l, vdr_l, en_l} <= ss_wdata[11:0];", "8'h34: ;")],
+    ('ss_latches_lost', 'intv_stic.sv', [("8'h34: {vdr_l, en_l} <= ss_wdata[3:0];", "8'h34: ;")],
      'astrosmash', ['rt4']),
     ('ss_pix_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];", "8'h36: {cs_row, cs} <= ss_wdata[3:0];")],
      'astrosmash', ['rt3']),
@@ -789,6 +804,45 @@ PLANTS = [
      'cartram', None),
     ('cart_write_low', 'intv_bus.sv', [("                    cart_wdata <= dout;",
                                         "                    cart_wdata <= {8'h00, dout[7:0]};")], 'cartpaged', None),
+    # the step-4 review's plants (2026-10-25), kept for their coverage
+    ('pastel_fg_dropped', 'intv_stic.sv', [("e_fg   = {w[12], w[2:0]};", "e_fg   = {1'b0, w[2:0]};")], 'sticbus', None),
+    ('fgbg_bg_12_13_swapped', 'intv_stic.sv', [("e_bg   = {w[12], w[13], w[10], w[9]};",
+                                                "e_bg   = {w[13], w[12], w[10], w[9]};")], 'sticbus', None),
+    ('squares_c7_direct', 'intv_stic.sv', [("sqc = c == 3'd7 ? top : {1'b0, c};", "sqc = {1'b0, c};")], 'sticbus', None),
+    ('squares_q3_bit2', 'intv_stic.sv', [("e_bg   = sqc(py[2] ? {w[13], w[10:9]} : w[5:3], csr[cs_use]);",
+                                          "e_bg   = sqc(py[2] ? {1'b0, w[10:9]} : w[5:3], csr[cs_use]);")], 'sticbus', None),
+    ('column_160_shown', 'intv_stic.sv', [("&& xp < 12'sd159;", "&& xp < 12'sd160;")], 'sticbus', None),
+    ('left_ext_off', 'intv_stic.sv', [("cbr[0] ? 4'd8 : {1'b0, hd}", "{1'b0, hd}")], 'sticbus', None),
+    ('pixel_order_reversed', 'intv_stic.sv', [("lb_q[4'd15 - {1'b0, xx[2:0]}]", "lb_q[4'd8 + {1'b0, xx[2:0]}]")],
+     'sticbus', None),
+    ('frame_busrq_always', 'intv_stic.sv', [("&& (slot_n == 16'(VB_CYCLES) ? hs_eff : en_l);", ";")], 'nocart', None),
+    ('row13_dropped', 'intv_stic.sv', [("wire logic row_rq   = en_l && d >= 0 && d[3:1] == 3'd0;",
+                                        "wire logic row_rq   = en_l && d >= 0 && d < 11'sd192 && d[3:1] == 3'd0;"),
+                                       ("wire logic fetch_n  = en_l && d >= 0 &&",
+                                        "wire logic fetch_n  = en_l && d >= 0 && d < 11'sd192 &&")], 'astrosmash', None),
+    ('cs_grom_64', 'intv_stic.sv', [("assign grom_addr = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
+                                     "assign grom_addr = {2'b00, w[8:3], py};")], 'astrosmash', None),
+    ('squares_advance', 'intv_stic.sv', [("            e_bits = 8'hF0;\n",
+                                          "            e_bits = 8'hF0;\n            cs_new = cs_use + {1'b0, w[13]};\n")],
+     'sticbus', None),
+    ('top_ext_moved_by_vdr', 'intv_stic.sv', [("!(cbr[1] && vcnt < 9'(PF_LINE + 16))",
+                                               "!(cbr[1] && vcnt < 9'(PF_LINE + 16) + {5'd0, vdr_l, 1'b0})")],
+     'sticbus', None),
+    ('counter_steps_missed', 'intv_stic.sv', [("                        cp_ph <= 1'b0;\n                    end\n",
+                                               "                        cp_ph <= 1'b0;\n                    end else if (cnt < 9'(SYSW))\n"
+                                               "                        cnt <= cnt + 9'd20;\n")], 'sticbus', None),
+    # the row-load deadline: BUSAK checked one cycle early, one late (sticbus dlb), two late
+    ('fetch_deadline_m1', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
+                                            "d[3:0] == 4'd0 && hcnt[8:2] == 7'(CPL - 2);")], 'sticbus', None),
+    ('fetch_deadline_p1', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
+                                            "d[3:0] == 4'd1 && hcnt[8:2] == 7'd0;")], 'sticbus', None),
+    ('fetch_deadline_p2', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
+                                            "d[3:0] == 4'd1 && hcnt[8:2] == 7'd1;")], 'sticbus', None),
+    ('ss_cs_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];", "8'h36: pix <= ss_wdata[7:4];")],
+     'sticbus', ['rt4', 'rt5']),
+    ('ss_cs_row_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];",
+                                         "8'h36: {pix, cs} <= {ss_wdata[7:4], ss_wdata[1:0]};")],
+     'sticbus', ['rt4', 'rt5']),
 ]
 
 
@@ -861,6 +915,15 @@ def main():
                       sum(1 for x in e.bus.vid.stats if x['enabled']),
                       sum(1 for g, _ in e.sinfo.values() for f in g if f[1]),
                       sum(1 for g, _ in e.sinfo.values() for f in g if not f[1])))
+            if prog == 'sticbus.asm':
+                # the row-load deadline: BUSAK exactly at R + 57 loads, at R + 58 misses
+                dl = [(d, ok) for _, _, d, ok in e.bus.deadline]
+                miss = [x for x in ((0, True), (1, False)) if x not in dl]
+                print('  sticbus deadline: BUSAK at R + 57 (loaded) %d, at R + 58 (missed) %d%s' % (
+                    dl.count((0, True)), dl.count((1, False)),
+                    '' if not miss else ' FAIL: missing %s' % miss))
+                if miss or any((d <= 0) != ok for d, ok in dl):
+                    fails.append('STICBUS_DEADLINE')
             if prog == 'systest.asm':
                 p7 = check_sect7(e, pr.symbols)
                 print('  systest section 7: %s' % ('every probe in its slot' if not p7 else '; '.join(p7)))

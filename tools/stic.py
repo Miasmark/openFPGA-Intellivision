@@ -74,14 +74,15 @@ Timing (cycles = CPU cycles from the frame start = SR1 / VBlank start)
 Pictures in modes "stic" and "none" (the RTL, src/fpga/core/intv_stic.sv;
 build step 4) differ from mode "mame" in what decides a frame's picture,
 because the RTL draws line by line and cannot look ahead:
-  - the display enable and the border colour are taken at the end of the
-    VBlank window (after the CPU's accesses in cycles 0-3789), not at the
-    frame's end: a $20 write after cycle 3,789 leaves that frame blank
-    (STIC_NOTES D8), and a border colour written later in a blank frame
-    shows from the next frame on;
-  - picture rows 0-20 (raster lines 46-66, before the window ends) show the
-    previous frame's border colour; the RTL switches its border colour at
-    line 67 (picture row 21);
+  - the display enable is taken at the end of the VBlank window (after
+    the CPU's accesses in cycles 0-3789), not at the frame's end: a $20
+    write after cycle 3,789 leaves that frame blank (STIC_NOTES D8);
+  - every border pixel shows register $2C as it is when the pixel is
+    drawn (STIC_NOTES D17): a write in CPU cycle t (timing cycles) shows
+    from pixel position 4 t + 5 on (pixel clocks from the frame start, 228
+    a line; BCR_PIX), so a write in VBlank changes the border in the
+    middle of a picture. A picture is therefore complete only at line 24
+    of the next frame, when the model hands it out (pending);
   - the other registers, GRAM and the colour-stack mode are read during the
     display, where they are closed to the CPU when the display is enabled,
     so they equal the values at the frame's end that draw() uses.
@@ -92,13 +93,18 @@ The FIFO's address counter stops once it reaches the end of System RAM
 INTAK in modes "stic" and "none", at every vblank in mode "mame".
 """
 
+import bisect
+
 FRAME = 14934            # CPU cycles per frame (57 x 262; DESIGN 2.4)
 VBLANK = 3790            # INTRM / bus-copy window (MAME stic.h:50)
 LINE = 57                # CPU cycles per scanline (MAME stic.h:47)
 CARD_ROWS, CARD_COLS = 12, 20
 FRAME_BUSRQ = 42         # MAME stic.h:49 ("approximate")
 SYSRAM_WORDS = 352
-PREV_BORDER_ROWS = 21    # RTL picture rows 0-20 show the previous border (see above)
+BCR_PIX = 5              # a $2C write in cycle t shows from pixel clock 4 t + 5 (see above)
+HPIX = 4 * LINE          # 228 pixel clocks a line
+PIC_LINE0, PIC_X0 = 46, 24   # picture (0, 0) = raster line 46, pixel clock 24
+BORDER = 16              # draw(): marks a border pixel, filled in later
 ROW0_REQ = 3876          # row 0 BUSRQ: FIRST_FETCH (MAME stic.h:51) - 1 line
 ROW_PERIOD = 16 * LINE   # 912: one card row = 16 scanlines
 ROW_HOLD = 2 * LINE      # 114: request line + fetch line (wiki)
@@ -126,6 +132,10 @@ STIC_DEF[HDR] = STIC_DEF[VDR] = (0x3FF8, 0x0007)
 STIC_DEF[CBR] = (0x3FFC, 0x0003)
 
 MODES = ("none", "stic", "mame")
+# A picture's last pixel (line 23 of the next frame, pixel clock 212) is
+# position 4 x start + 285 x 228 + 212; writes from cycle start + PIC_DONE
+# on show only after it.
+PIC_DONE = -(-((PIC_LINE0 + H - 1) * HPIX + PIC_X0 + W - 1 - BCR_PIX + 1) // 4)
 
 
 class Stic:
@@ -147,7 +157,9 @@ class Stic:
         self.rows = [None] * (CARD_ROWS + 1)
         self.next_frame = bus.timing.first
         self.stats = []                 # per frame (see _finish)
-        self.prev_bcr = 0               # modes stic/none: border of the frame before
+        self.bcr_log = [(-1, 0)]        # modes stic/none: ($2C pixel position, colour)
+        self.pending = []               # pictures waiting for their last border line
+        self.last_drawn = bus.timing.first   # the last picture handed out
         self.reset()
 
     def reset(self):
@@ -177,9 +189,12 @@ class Stic:
         if open_:
             self.csmode = 1
 
-    def write(self, n, value, frame, open_):
+    def write(self, n, value, frame, open_, t=None):
+        """CPU write of register n in timing cycle t (t: modes stic/none)."""
         if not open_:
             return
+        if n == BCR and self.mode != "mame":
+            self.bcr_log.append((4 * t + BCR_PIX, value & 0xF))
         if n == STIC_DER:
             self.hs_frame = frame
         elif n == STIC_GMR:
@@ -234,6 +249,8 @@ class Stic:
         if self.mode == "mame" and not boundary:
             return
         tm = self.bus.timing
+        while self.pending and self.pending[0][0] <= t:
+            self._hand_out(*self.pending.pop(0)[1:])
         while True:
             cur = self.cur
             if cur is not None:
@@ -291,7 +308,6 @@ class Stic:
         cur = self.cur
         cur["defer"] = False
         cur["en"] = self.handshake(cur["k"])    # modes stic/none: the picture's enable
-        cur["bcr"] = self.regs[BCR] & 0xF       # and border colour
         if not cur["en"]:
             return
         vdr = self.regs[VDR]
@@ -336,7 +352,7 @@ class Stic:
         enabled = self.handshake(k)
         border = None
         if self.mode != "mame":
-            enabled, border = cur["en"], cur["bcr"]
+            enabled, border = cur["en"], BORDER
         stolen = 0
         for i, (kind, req, end, fetch) in enumerate(cur["sched"]):
             a = cur["ack"].get(i)
@@ -345,24 +361,65 @@ class Stic:
         self.stats.append({"n": n, "enabled": enabled, "vdr": cur["vdr"], "stolen": stolen,
                            "requests": len(cur["sched"]),
                            "loaded": sum(1 for f in cur["fetches"] if f[2])})
-        prev_bcr = self.prev_bcr
-        if self.mode != "mame":
-            self.prev_bcr = border
         want = self.keep_frames is None or n in self.keep_frames
         if not (want or self.on_frame is not None):
+            if self.mode == "mame":
+                self.last_drawn = n
+            else:
+                self.pending.append((cur["start"] + PIC_DONE, n, None, None, None))
             return
         rows = [r if r is not None else list(self.fifo) for r in self.rows]
         pic, fg, cards = self.draw(enabled, rows, border)
+        info = {"n": n, "start": cur["start"], "enabled": enabled, "vdr": cur["vdr"],
+                "csmode": self.csmode, "fetches": cur["fetches"], "stolen": stolen,
+                "cards": cards, "fg": fg, "rows": rows,
+                "stats": dict(self.stats[-1]), "mob_boxes": self.mob_boxes()}
+        if self.mode == "mame":
+            self._hand_out(n, pic, info, want)
+        else:
+            # border pixels wait for $2C up to the picture's last line
+            self.pending.append((cur["start"] + PIC_DONE, n, pic, info, want))
+
+    def _hand_out(self, n, pic, info, want):
+        """Picture n is complete: fill its border pixels (modes stic/none)
+        and hand it out."""
+        self.last_drawn = n
+        if pic is None:
+            return
         if self.mode != "mame":
-            n0 = PREV_BORDER_ROWS * W
-            pic[:n0] = bytes([prev_bcr]) * n0
+            self._fill_border(pic, info["start"])
         if want:
             self.frames.append((n, pic))
         if self.on_frame is not None:
-            info = {"n": n, "start": cur["start"], "enabled": enabled, "vdr": cur["vdr"],
-                    "csmode": self.csmode, "fetches": cur["fetches"], "stolen": stolen,
-                    "cards": cards, "fg": fg, "rows": rows}
             self.on_frame(n, pic, info)
+
+    def _fill_border(self, pic, start):
+        """Replace the BORDER marks of a picture whose frame started at
+        timing cycle `start` with $2C as it was at each pixel."""
+        log = self.bcr_log
+        base = 4 * start + PIC_LINE0 * HPIX + PIC_X0
+        # drop changes no picture still needs (keep the one in force)
+        i = bisect.bisect_right(log, (base, 99)) - 1
+        if i > 0:
+            del log[:i]
+        mark = bytes([BORDER])
+        j = 0
+        for y in range(H):
+            p0 = base + y * HPIX
+            while j + 1 < len(log) and log[j + 1][0] <= p0:
+                j += 1
+            row = pic[y * W:(y + 1) * W]
+            if mark not in row:
+                continue
+            if j + 1 >= len(log) or log[j + 1][0] > p0 + W - 1:
+                pic[y * W:(y + 1) * W] = row.replace(mark, bytes([log[j][1]]))
+                continue
+            jj = j
+            for x in range(W):
+                while jj + 1 < len(log) and log[jj + 1][0] <= p0 + x:
+                    jj += 1
+                if row[x] == BORDER:
+                    pic[y * W + x] = log[jj][1]
 
     def draw(self, enabled, rows, border=None):
         """(picture, foreground mask, card fetch log) from the registers,

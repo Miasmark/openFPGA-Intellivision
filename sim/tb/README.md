@@ -102,18 +102,28 @@ line); the bench saves and restores its own picture capture with the
 state. Image `sticbus` runs our `sim/testroms/sticbus.asm` (24 frames,
 BUSRQ on): pseudo-random BACKTAB and GRAM (every card kind), delays,
 border extensions, Color Stack and FGBG frames, blank frames with a late
-border colour, a display enabled after the window (blank, STIC_NOTES D8),
-a frame without INTAK (the FIFO counter past System RAM) and shift blocks
-that make the CPU miss row fetches. `--all` adds 23 STIC plants
-(colour-stack advance, restart and row start, vertical and horizontal
-delay one short, top border extension, BUSRQ three lines a row, frame
-BUSRQ 43 cycles, GRAM / GROM select swapped, FGBG GROM with 256 cards,
-squares off, squares quadrants 1 and 2 swapped, FIFO counter not cleared
-by INTAK or not stopped, missed rows loaded anyway, fetch a line late,
-display enable read live, border colour switching a line late; state
-port: row buffer, line buffer, copy state, the frame's latches and the
-next pixel lost), some of them on the frame gate's games (`('screen',
-name, pictures)`).
+border colour (it shows from that pixel on: STIC_NOTES D17), a display
+enabled after the window (blank, STIC_NOTES D8), a frame without INTAK
+(the FIFO counter past System RAM), shift blocks that make the CPU miss
+row fetches, and the row-load deadline exactly: BUSAK at R + 57 (the row
+loads) and at R + 58 (missed); the bench fails (STICBUS_DEADLINE) unless
+the model shows both. `--all` adds 41 STIC plants (colour-stack advance,
+restart and row start, vertical and horizontal delay one short, top
+border extension, BUSRQ three lines a row, frame BUSRQ 43 cycles, GRAM /
+GROM select swapped, FGBG GROM with 256 cards, squares off, squares
+quadrants 1 and 2 swapped, FIFO counter not cleared by INTAK or not
+stopped, missed rows loaded anyway, fetch a line late, display enable
+read live, border colour a CPU cycle late or latched per frame; the
+step-4 review's: pastel foreground dropped, FGBG background bits 12/13
+swapped, squares colour 7 shown direct, squares quadrant 3 bit 2 dropped,
+160th column shown, left extension ignored, pixel order reversed, frame
+BUSRQ always on, 13th row fetch dropped, Color Stack GROM limited to 64
+cards, stack advance on squares cards, top extension moved by VDR,
+counter stepping on missed rows, row-load deadline a cycle early, a cycle
+late or two late; state port: row buffer, line buffer, copy state, the
+frame's latches, the next pixel, the colour-stack position or its row
+start lost), some of them on the frame gate's games (`('screen', name,
+pictures)`).
 
 `--screens` is step 4's frame gate (DESIGN 9 step 4; SCREENS): the EXEC
 without a cartridge (600 pictures) and with Astrosmash (its title screen,

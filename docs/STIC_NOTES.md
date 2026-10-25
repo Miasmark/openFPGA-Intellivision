@@ -74,7 +74,7 @@ mode `stic` (the hardware model):
 | row fetch r BUSRQ | request from R = 3,876 + 114 x VDR + 912 x r for 114 cycles, while R + 114 <= 14,934 (12 rows; 13 when VDR = 0) | WIKI STIC_Bus_Request (one scanline of warning, then the fetch line); MAME stic.h:51 (first fetch 3,933 = R + 57); GI80 p.5-10 |
 | row r copied | at the CPU's BUSAK if that comes by R + 57 (the fetch line); else the FIFO keeps the previous row | WIKI STIC_Bus_Request; GI80 p.5-18 |
 | FIFO address counter | 0 at INTAK, +20 per loaded row | GI80 p.5-18 |
-| frame drawn | at the next frame start, with the registers, GRAM and colour-stack mode of that moment and the rows loaded during the frame | registers and GRAM are closed during the display when it is enabled, so this equals drawing line by line |
+| frame drawn | at the next frame start, with the registers, GRAM and colour-stack mode of that moment and the rows loaded during the frame; border pixels from $2C as it was at each pixel (D17), so the picture is complete at line 24 of the next frame | registers and GRAM are closed during the display when it is enabled, so this equals drawing line by line |
 
 The CPU sees BUSRQ through `SystemBus.busrq`: it stops at its next
 interruptible boundary and is held until the request ends (cp1610.py, S1
@@ -124,7 +124,7 @@ documented; the log lists each card's 8 bytes once (D15).
 | D6 | Colour of the strip uncovered by a horizontal/vertical delay | S9: the object field outside the 20 x 12 cards "is filled in with the background color, as defined by the given display mode" (stic.txt:121-125, 150-154); MAME draws the border colour over it (stic.cpp:1104, 1106: the left/top border boxes are 13 + HDR / 12 + VDR wide) | border colour (MAME). Not covered by a MAME match that can tell them apart; settle with our own STIC test ROM on hardware |
 | D7 | Picture when the display is not enabled | S9: "the display will blank" (interrupts.txt:74-76); MAME fills the frame with the border colour (stic.cpp:1132-1135) | border colour (MAME); hardware colour unknown (black is as likely) |
 | D8 | When a write to $20 enables the display | S9 and WIKI: during VBlank period 1; MAME: any write while the STIC is open, including during the display of a frame that is not enabled (the handshake is clear, so the registers are open) | MAME (step 3). In mode `stic` the BUSRQ schedule is fixed at cycle 3,790, so a frame enabled later fetches no rows and shows the FIFO's last row |
-| D9 | Mode select through $4021/$8021/$C021 | an access to any alias reaches the STIC (WIKI Bus_Copy; DESIGN 2.6); MAME maps the STIC at $0000-$003F only | aliases switch the mode (step 3) |
+| D9 | Mode select through $4021/$8021/$C021 | an access to any alias reaches the STIC (WIKI Bus_Copy; DESIGN 2.6); MAME maps the STIC at $0000-$003F only | aliases switch the mode (step 3); the EXEC with no cartridge writes them (D18) |
 | D10 | GRAM at reset | MAME clears the first 64 bytes of GRAM on every reset (stic.cpp:487-491); RAM keeps its contents through a reset on hardware (no source says otherwise) | GRAM kept (power-on: zero) |
 | D11 | 13th row fetch (VDR = 0) | GI80/S9 imply it; MAME fetches 12 rows | `stic`: loads System RAM $02F0-$0303 into the FIFO (counter at 240), never shown |
 | D12 | Unmasked colour-stack value in Colored Squares | MAME uses the whole stored register value for colour 7 (stic.cpp:684: `m_stic_registers[]` holds the unmasked write); its palette maps it back to colour & 15 (intv.cpp:92-119) | 4-bit register value; same pixels |
@@ -132,6 +132,8 @@ documented; the log lists each card's 8 bytes once (D15).
 | D14 | Picture framing | GI80: object grid 167 x 105 (NTSC) of which 159 x 96 visible; MAME overscan 13/17/12/12 "approximate" (stic.h:39-44) | MAME's framing for the comparison; RTL to decide |
 | D15 | Pattern reads | GI80 p.5-11: BAR/DTB on the graphics bus per card; how often per card row is not given; MAME reads all 8 bytes when it draws | bus log lists 8 bytes per card per frame |
 | D16 | STIC state decay without interrupts | S9 interrupts.txt:181-183 (registers "lose their state after a few frames"); no mechanism given | not modelled (DESIGN 13.6) |
+| D17 | When a border colour write shows | The STIC raises the VBlank interrupt "just as it begins to draw the solid border at the bottom of the screen" (WIKI VBlank_Interrupt), so the lower border and the top border lines are drawn inside the VBlank window, while $2C is open to the CPU; no source says the STIC latches the border colour once a frame. MAME draws the whole frame at its vblank with one value (stic.cpp:1102-1108; intv_m.cpp:683) | modes `stic`/`none` and the RTL: every border pixel shows $2C as it is when the pixel is drawn; a write in CPU cycle t shows from pixel clock 4 t + 5 of the frame (the register is written at the ce that ends the cycle, the pixel is registered one pixel clock ahead). So a change the interrupt routine makes early in VBlank already shows in the lower border of the picture before (Tower of Doom picture 10, Sewer Sam picture 11), where MAME shows it from the next picture. Until the step-4 review the RTL latched the colour at the window end and showed picture rows 0-20 (lines 46-66) in the frame before's colour; no source supported that band. Hardware test: our STIC test ROM writing $2C at known VBlank cycles (needs a flash cartridge); watching only, partly: a 240 fps video of the TV in the first second after RESET with Tower of Doom (border brown from picture 7, black from picture 10): with the live register the last brown picture's lowest border lines are already black, with MAME's rule the whole picture is brown (overscan may hide those lines) |
+| D18 | The EXEC with no cartridge writes the STIC's write aliases | Model run, hardware map (EXEC read with `tools/cp1610.py`'s disassembler; the owner's file, not in the repository): at frame 2 the EXEC unpacks a GRAM-picture routine into System RAM $0210-$02E7 and from then on calls it every frame or two. Its list of cards comes from where the missing cartridge's header leads: it reads the list from $0000 on (the STIC's own registers, then the empty $0040-$00FF range), never meets an end mark, and stores 8 words a card upward from $3800: GRAM, GRAM's aliases $3A00-$3FFF, then $4000-$403F from frame 133, $8000-$803F from frame 347 and $C000-$C03F from frame 535. With the write aliases of DESIGN 2.6 (D9) these reach the STIC registers, $4020 / $8020 / $C020 (display enable) and $402C / $802C / $C02C (border) among them. MAME's map has no aliases and reads unmapped addresses as 0, so MAME stays black | modes `stic`/`none` and the RTL (hardware map), pictures predicted to 1,300: black; picture 137 (2.3 s) one frame of coloured cards; 349 (5.8 s) one such frame, then the whole screen colour 15 (MAME's palette: purple; a display-off frame shows the border colour, D7) until picture 724 (12.1 s), one more frame of cards, then black again. Hardware test: the owner's console with no cartridge and no ECS, watched for 25 s: a steady black screen means no aliases at $4000 / $8000 / $C000 (or that the EXEC reads differently there); single flashes mean the display-enable alias works; the screen turning a colour at about 6 s also answers D7 (a display-off frame shows the border colour). On the Pocket the cartridge is required, so 0.0.2 meets this only with a cartridge image that maps nothing at $5000 |
 
 ### Method notes (not source conflicts)
 
@@ -168,7 +170,7 @@ DESIGN 9 step 4: "EXEC title screen and 5 games' frame CRCs match MAME
 (`stic_frames.py compare`, mode `mame`), not as CRCs. Snapshots, frames
 and traces come from the owner's BIOS and games and stay outside the
 repository (`~/daria_work/intv/stic/{snaps,frames,traces}`), never
-committed. Result 2026-10-25: **pass**.
+committed. Result 2026-10-25 (mode `mame`; re-run after D17, unchanged): **pass**.
 
 | Screen | What it exercises | MAME snapshots compared (all match) | MAME trace compared (`mame --timing computed`) |
 |---|---|---|---|
@@ -195,11 +197,43 @@ collisions read back: MAME sets collision bits the model does not have, and
 the games then run differently; Atlantis reads $001B = $3E00 at frame 8),
 and the MTE201 test cartridge (it tests MOBs and collisions).
 
-**Hardware mode.** In mode `stic` (BUSRQ on, 14,934-cycle frames) the
-EXEC, Tower of Doom, Diner and Dig Dug snapshots above still match. Sewer
-Sam does not: it rewrites BACKTAB during the display, so the row fetch
-times (T5) and the CPU's lost cycles (T2) change what it shows and, later,
-its game state. Stolen cycles per frame in mode `stic`, 300 frames each:
+**What this done-test proves for the RTL.** The pixel-exact match above
+is the model's mode `mame`, which the RTL does not run. The RTL equals
+the model's mode `stic` (the hardware model: BUSRQ on, 14,934-cycle
+frames, the hardware memory map, the RTL's picture semantics of section
+4): the frame gate (`tb_system.py --screens`, section 4) compares every
+picture, row fetch, card row and bus cycle of the RTL with mode `stic`
+on the same 7 screens, 600-700 pictures each. So the RTL meets "frames
+match MAME" through the model: RTL = mode `stic`, and mode `mame` = MAME;
+the two modes differ only where the hardware and MAME differ, and every
+such difference on the required screens is listed and explained below.
+There is no direct RTL-against-MAME gate; the owner accepts this reading
+of DESIGN 9's done-test or asks for one.
+
+**Hardware mode against MAME.** Mode `stic` against the same MAME
+snapshots (2026-10-25, after D17; lane scripts outside the repository):
+
+| Screen | Snapshots matching | The others, and why |
+|---|---|---|
+| EXEC, no cartridge | 5 of 7 (60-300) | 400 and 600: the whole picture is colour 15, MAME's 0. From frame 133 the EXEC's writes reach $4000-$403F, the STIC's write alias in the hardware map (D18, D9); MAME has no aliases there |
+| EXEC title screen (Astrosmash) | 8 of 8 | |
+| Tower of Doom | 11 of 13 | 9 (picture 8): its first $20 write comes after cycle 3,789, so the frame stays blank (D8; MAME draws it): 2,352 playfield pixels. 11 (picture 10): the next frame's interrupt routine changes the border colour at line 4, so the bottom 20 lines of the picture's lower border already show the new colour (D17; MAME draws the whole frame at its vblank): 3,655 pixels |
+| Diner | 33 of 33 | |
+| Dig Dug | 8 of 8 | |
+| Sewer Sam | 2 of 13 (9, 10) | 12: the lower border band, as Tower of Doom's (D17, 567 pixels). 23-55: Sewer Sam rewrites BACKTAB during the display, so the row copy times decide the picture (T5: the model copies at the fetch cycle, MAME at its real-time row timers) and the stolen cycles (T2) move when it rewrites: 1,008-4,464 pixels in the cards at x = 13. 60-300: 7,488 pixels in every snapshot: the CPU loses about 1,470 cycles a frame to BUSRQ (T2), which MAME never takes, and the game's picture runs out of step with MAME's |
+| TRON Solar Sailer | 2 of 13 (100, 624) | 19 and 648-700: 64-6,916 pixels. With BUSRQ off they shrink to 4-800 pixels at 6 of these snapshots (row copy times, T5); the rest comes from the stolen cycles (T2), which move the game's timing |
+
+The causes of the Sewer Sam and Solar Sailer differences were separated
+with two diagnostic runs (not gates): with BUSRQ off (mode `none`, rows
+still copied at the hardware fetch cycles) Sewer Sam matches at 9, 10, 55,
+120 and 300 and differs by 240-2,594 pixels elsewhere (T5 only), and
+Solar Sailer matches at 6 of 13 and differs by 4-800 pixels elsewhere; with
+MAME's memory map forced into mode `stic` or `none` the results do not
+change, so the map plays no part in these two games. Which of the two
+pictures a real console shows is the hardware question of T1-T5 (our own
+STIC test ROM; not answerable without a flash cartridge).
+
+Stolen cycles per frame in mode `stic`, 300 frames each:
 
 | Game | VDR | Requests (frame + rows) | Mean (min-max) stolen | MAME intended | S9 |
 |---|---|---|---|---|---|
@@ -247,13 +281,13 @@ position is the raster's, `intv_timing`):
 
 | What | When | Notes |
 |---|---|---|
-| frame latches: display enable, VDR, border colour | the ce that ends cycle 3,789, after that cycle's write | the model's `window_end` |
+| frame latches: display enable, VDR | the ce that ends cycle 3,789, after that cycle's write | the model's `window_end` |
 | frame BUSRQ | 3,790-3,831 when enabled | T4 |
 | row r BUSRQ | lines 68 + 2 VDR + 16 r and the next, while they fit (12 rows, 13 with VDR = 0) | T1, T3 |
 | row r copy | the start of line 69 + 2 VDR + 16 r, if BUSAK is low in that cycle (or BUSRQ is off): 20 words from System RAM's port B, two clk_sys a word, done 41 clk_sys after the cycle starts (the CPU's next write could come at 48) | T10: all or nothing |
 | card engine | pixel clocks 8-27 of line L build line L + 1 into a two-bank line buffer, one card a pixel clock: row-buffer word, GROM / GRAM byte, colours, stack | |
 | picture | line buffer shown from pixel clock 37 (playfield x 0) of lines 70-261; border elsewhere | D14 below |
-| border colour shown | switches at line 67 | |
+| border pixels | register $2C live: a write in cycle t shows from pixel clock 4 t + 5 | D17 |
 
 **Picture semantics.** The RTL draws line by line, so a frame's picture
 cannot depend on what the CPU does after it is shown. Where MAME's
@@ -263,9 +297,11 @@ modes `stic` / `none`) takes:
 - the display enable at the end of the VBlank window: a $20 write after
   cycle 3,789 leaves that frame blank (D8; MAME draws it). This is the
   first enabled frame of most games (one picture);
-- the border colour of a blank frame at the end of the window;
-- picture rows 0-20 (raster lines 46-66, before the window ends) in the
-  border colour of the frame before;
+- the border colour live, pixel by pixel (D17): a write in VBlank shows
+  from that pixel on, in the lower border of the picture before (picture
+  rows 216-239 are lines 0-23 of the next frame) and in its top border;
+  in a blank frame the CPU may change it anywhere. The model therefore
+  hands a picture out only at line 24 of the next frame;
 - CSR, HDR, CBR, the mode and GRAM live: closed to the CPU from cycle
   3,790 when the display is enabled, unused when it is not.
 
@@ -288,7 +324,7 @@ port B; the bench logs the card rows at their first line, as the model's
 card log gives them.
 
 **State.** STIC id $04, 55 words: the registers, {handshake, mode}, the
-frame latches (enable, VDR, border colour, the border shown), the fetch
+frame latches (enable, VDR), the fetch
 state (FIFO counter, armed, copy running, word, phase), the colour-stack
 position and its value at the card row's start, the next pixel's colour;
 $0C the row buffer (20 words), $0D the line buffer (64). The row and

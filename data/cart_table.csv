@@ -1,0 +1,247 @@
+crc32,layout,flags,flag_names,size_words,source,status,name,map
+00BE8BBA,3,00,,1000,mame:intv,mame,astrosmsm,5000-5FFF
+01EFA214,7,00,,2000,mame:intv,mame,spina,5000-6FFF
+02919024,5,40,estimated,2000,extra,prefix,demoblue,5000-67FF
+03E9E62E,3,00,,1000,mame:intv,mame,tennis,5000-5FFF
+0458A491,5,00,,1800,mame:intv,mame,rdealer,5000-67FF
+0487675C,7,00,,2000,mame:intv,mame,demored,5000-6FFF
+04977992,5,00,,1800,mame:intv,mame,lnc,5000-67FF
+07FB9435,15,02,voice,3000,mame:intv,mame,tronss,5000-6FFF D000-DFFF
+095638C0,14,44,ram+estimated,5801,extra,prefix,trchalng,5000-6FFF 9000-AFFF RAM8 D000-D7FF (1024 cells, mirrored)
+0B50A367,15,01,ecs,3000,mame:intvecs,mame,mrbasic,5000-6FFF D000-DFFF
+0BF464C6,13,00,,4000,mame:intv,mame,csspgolf,5000-6FFF 9000-AFFF
+0E4920C1,23,41,ecs+estimated,4000,extra,sibling,jumble,5000-6FFF D000-DFFF F000-FFFF
+10D64E48,15,40,estimated,3000,extra,sibling,allstar,5000-6FFF D000-DFFF
+11C3BCFA,7,00,,2000,mame:intv,mame,adventur,5000-6FFF
+11FB9974,7,00,,2000,mame:intv,mame,missionx,5000-6FFF
+13EE56F1,13,00,,4000,mame:intv,mame,diner,5000-6FFF 9000-AFFF
+13FF363C,2,00,,2000,mame:intv,mame,atlantis,4800-67FF
+156A5645,3,40,estimated,1000,extra,sibling,traction,5000-5FFF
+159AF7F7,20,20,ecs_off,4000,mame:intv,mame,digdug,5000-6FFF 7000-7FFF 9000-9FFF
+15C65DC5,7,00,,2000,mame:intv,mame,zaxxon,5000-6FFF
+15D9D27A,23,00,,4000,mame:intv,mame,worldcup,5000-6FFF D000-DFFF F000-FFFF
+15E88FCE,7,00,,2000,mame:intv,mame,swordsas,5000-6FFF
+169E3584,3,00,,1000,mame:intv,mame,bowling,5000-5FFF
+16BFB8EB,13,00,,4000,mame:intv,mame,decathln,5000-6FFF 9000-AFFF
+16C3B62F,7,00,,2000,mame:intv,mame,addtot,5000-6FFF
+19360442,7,00,,2000,mame:intv,mame,llight1,5000-6FFF
+1AC989E2,3,00,,1000,mame:intv,mame,traction,5000-5FFF
+1EA1763F,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+1ECDD51B,4,00,,1500,mame:intv,mame,todd,5000-64FF
+1F584A69,3,00,,1000,mame:intv,mame,takeover,5000-5FFF
+20ACE89D,3,00,,1000,mame:intv,mame,hheggs,5000-5FFF
+22A1F245,3,40,estimated,1000,extra,sibling,traction,5000-5FFF
+23DC808D,13,00,,4000,mame:intv,mame,scarfing,5000-6FFF 9000-AFFF
+243B0812,7,00,,2000,mame:intv,mame,rrubble,5000-6FFF
+24B667B9,3,00,,1000,mame:intv,mame,wwhomper,5000-5FFF
+275F3512,7,00,,2000,mame:intv,mame,turbo,5000-6FFF
+291AC826,3,00,,1000,mame:intv,mame,gridshk,5000-5FFF
+2A05EF87,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+2A1E0C1C,7,40,estimated,2000,extra,sibling,buzbombr,5000-6FFF
+2A4C761D,7,00,,2000,mame:intv,mame,shark,5000-6FFF
+2A77A2FA,13,00,,4000,mame:intv,mame,mycastle,5000-6FFF 9000-AFFF
+2B856EBC,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+2C5FD5FA,7,00,,2000,mame:intv,mame,lfun1,5000-6FFF
+2C668249,3,00,,1000,mame:intv,mame,airstrk,5000-5FFF
+2DEACD15,3,00,,1000,mame:intv,mame,stampede,5000-5FFF
+2E449C2F,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+30E2819B,15,01,ecs,3000,mame:intvecs,mame,flintkf,5000-6FFF D000-DFFF
+32076E9D,13,00,,4000,mame:intv,mame,spftball,5000-6FFF 9000-AFFF
+32162105,7,40,estimated,2000,extra,sibling,lfun2,5000-6FFF
+32697B72,15,02,voice,3000,mame:intv,mame,bombsqd,5000-6FFF D000-DFFF
+3289C8BA,13,00,,4000,mame:intv,mame,commando,5000-6FFF 9000-AFFF
+36E1D858,3,00,,1000,mame:intv,mame,checkers,5000-5FFF
+37222762,3,00,,1000,mame:intv,mame,frogbog,5000-5FFF
+3784DC52,7,02,voice,2000,mame:intv,mame,sspartan,5000-6FFF
+3825C25B,9,04,ram,2000,mame:intv,mame,landbttl,5000-6FFF RAM8 D000-D7FF
+39D3B895,3,00,,1000,mame:intv,mame,spacehwk,5000-5FFF
+3B636837,21,20,ecs_off,8000,mame:intv,mame-unsupported:no,mspacman,5000-6FFF 8800-B7FF D000-FFFF
+3B99B889,7,00,,2000,mame:intv,mame,dfactor,5000-6FFF
+3D9949EA,7,00,,2000,mame:intv,mame,subhunt,5000-6FFF
+4221EDE7,7,00,,2000,mame:intv,mame,fathom,5000-6FFF
+43806375,7,00,,2000,mame:intv,mame,btime,5000-6FFF
+43870908,3,00,,1000,mame:intv,mame,carnival,5000-5FFF
+4422868E,17,20,ecs_off,4000,mame:intv,mame,kingotm,5000-6FFF D000-EFFF
+44519F2D,3,40,estimated,1000,extra,sibling,traction,5000-5FFF
+447DF6F9,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+4542D593,7,02,voice,2000,mame:intv,mame,spacecnt,5000-6FFF
+4728C3BD,12,00,,2000,mame:intv,mame,blowouta,5000-5FFF D000-DFFF
+47AA7977,7,00,,2000,mame:intv,mame,safecrkr,5000-6FFF
+47FDD8A8,16,20,ecs_off,3800,mame:intv,mame,choplift,5000-6FFF D000-E7FF
+4830F720,3,00,,1000,mame:intv,mame,hhtrick,5000-5FFF
+48D74D3C,3,00,,1000,mame:intv,mame,roulette,5000-5FFF
+4B23A757,10,20,ecs_off,3000,mame:intv,mame,congo,5000-7FFF
+4B35D11D,7,40,estimated,2000,extra,sibling,lfun2,5000-6FFF
+4B88FA8E,7,40,estimated,2000,extra,sibling,spacecad,5000-6FFF
+4B8C5932,3,00,,1000,mame:intv,mame,htrails,5000-5FFF
+4B91CF16,3,00,,1000,mame:intv,mame,football,5000-5FFF
+4CC46A04,17,20,ecs_off,4000,mame:intv,mame,ctennis,5000-6FFF D000-EFFF
+4E1F2EB5,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+4F3E3F69,7,00,,2000,mame:intv,mame,icetrek,5000-6FFF
+515E1D7E,13,00,,4000,mame:intv,mame,wrestlng,5000-6FFF 9000-AFFF
+51B82EB7,23,00,,4000,mame:intv,mame,ssoccer,5000-6FFF D000-DFFF F000-FFFF
+54A3FC11,3,00,,1000,mame:intv,mame,mathfun,5000-5FFF
+55E5862A,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+573B9B6D,23,00,,4000,mame:intv,mame,masters,5000-6FFF D000-DFFF F000-FFFF
+598662F2,3,00,,1000,mame:intv,mame,mtrap,5000-5FFF
+59F5FA32,13,00,,4000,mame:intv,mame-unsupported:no,tv_mmaze,5000-6FFF 9000-AFFF
+5A144835,7,00,,2000,mame:intv,mame,advtron,5000-6FFF
+5A4CE519,7,00,,2000,mame:intv,mame,minotaur2,5000-6FFF
+5C7E9848,7,00,,2000,mame:intv,mame,lnc2,5000-6FFF
+5E6A8CD8,2,00,,2000,mame:intv,mame,demonatk,4800-67FF
+5EE2CC2A,7,00,,2000,mame:intv,mame,novablst,5000-6FFF
+5F6E1AF6,7,00,,2000,mame:intv,mame,motox,5000-6FFF
+604611C0,3,00,,1000,mame:intv,mame,poker,5000-5FFF
+632F6ADF,7,00,,2000,mame:intv,mame,lfun2,5000-6FFF
+662E2812,7,40,estimated,2000,extra,sibling,lfun1,5000-6FFF
+66D396C0,23,00,,4000,mame:intv,mame,stonix,5000-6FFF D000-DFFF F000-FFFF
+6746607B,7,00,,2000,mame:intv,mame-unsupported:no,minotaur11,5000-6FFF
+6802B191,13,00,,4000,mame:intv,mame,pool,5000-6FFF 9000-AFFF
+6A02C7E8,15,00,,3000,mame:intv,mame,demoint,5000-6FFF D000-DFFF
+6B5EA9C4,7,00,,2000,mame:intv,mame,mmskiing,5000-6FFF
+6B6E80EE,7,00,,2000,mame:intv,mame,locomotn,5000-6FFF
+6DF61A9F,7,00,,2000,mame:intv,mame,dkongjr,5000-6FFF
+6E0882E7,23,00,,4000,mame:intv,mame,sgr,5000-6FFF D000-DFFF F000-FFFF
+6E4E8EB4,10,20,ecs_off,3000,mame:intv,mame,pacmana,5000-7FFF
+6E94ED37,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+6EFA67B2,7,00,,2000,mame:intv,mame,venture,5000-6FFF
+6F23A741,7,00,,2000,mame:intv,mame,tropical,5000-6FFF
+6F91FBC1,3,00,,1000,mame:intv,mame,armorbtl,5000-5FFF
+6FA698B3,7,00,,2000,mame:intv,mame,tutankhm,5000-6FFF
+714ECD51,13,00,,4000,mame:intv,mame-unsupported:no,tv_shape,5000-6FFF 9000-AFFF
+7217CA7B,28,20,ecs_off,1000,mame:intv,mame,imitc,7000-7FFF
+72E11FCA,3,00,,1000,mame:intv,mame,starstrk,5000-5FFF
+7334CD44,3,00,,1000,mame:intv,mame,nstalker,5000-5FFF
+734F3260,7,00,,2000,mame:intv,mame,truckin,5000-6FFF
+7473916D,3,00,,1000,mame:intv,mame,rrubble1,5000-5FFF
+752B73DD,23,00,,4000,mame:intv,mame,yogi,5000-6FFF D000-DFFF F000-FFFF
+752FD927,8,04,ram,2000,mame:intv,mame,chess,5000-6FFF RAM8 D000-D7FF (1024 cells, mirrored)
+75D6A509,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+75EE64F6,7,00,,2000,mame:intv,mame-unsupported:no,llight2,5000-6FFF
+76564A13,3,00,,1000,mame:intv,mame,hockey,5000-5FFF
+7755ED3C,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+7899E5BA,5,00,,1800,mame:intv,mame,istar,5000-67FF
+7A558CF5,7,00,,2000,mame:intv,mame,tronmat,5000-6FFF
+7C32C9B8,7,00,,2000,mame:intv,mame,scobra,5000-6FFF
+800B572F,13,00,,4000,mame:intv,mame,slamdunk,5000-6FFF 9000-AFFF
+81E7FB8C,3,00,,1000,mame:intv,mame,basketbl,5000-5FFF
+84BEDCC1,7,00,,2000,mame:intv,mame,dracula,5000-6FFF
+851F3CCB,7,00,,2000,mame:intv,mame,illusion,5000-6FFF
+867F1941,7,00,,2000,mame:intv,mame,rockybw,5000-6FFF
+869B4372,12,00,,2000,mame:intv,mame,blowout,5000-5FFF D000-DFFF
+8910C37A,7,00,,2000,mame:intv,mame,riveraid,5000-6FFF
+89941219,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+8AD19AB3,15,02,voice,3000,mame:intv,mame,b17bomb,5000-6FFF D000-DFFF
+8C9819A2,7,00,,2000,mame:intv,mame,koolaidm,5000-6FFF
+8F48030F,15,40,estimated,3000,extra,sibling,vectron,5000-6FFF D000-DFFF
+8F959A6E,3,00,,1000,mame:intv,mame,snafu,5000-5FFF
+94096229,6,00,,1F00,mame:intv,mame,minehunta,5000-6EFF
+95335132,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+95466AD3,7,00,,2000,mame:intv,mame,riveraidp,5000-6FFF
+95F97C59,14,04,ram,4000,mame:intv,mame,trchalng,5000-6FFF 9000-AFFF RAM8 D000-D7FF (1024 cells, mirrored)
+96E000EB,7,40,estimated,2000,extra,sibling,lfun2,5000-6FFF
+975AE6DF,7,40,estimated,2000,extra,sibling,thinicep,5000-6FFF
+97653606,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+999CCEED,23,00,,4000,mame:intv,mame,bnj,5000-6FFF D000-DFFF F000-FFFF
+99AE29A9,3,00,,1000,mame:intv,mame,seabattl,5000-5FFF
+9C75EFCC,3,00,,1000,mame:intv,mame,pitfall,5000-5FFF
+9D4355AA,5,00,,1800,mame:intv,mame,add,5000-67FF
+9D57498F,15,01,ecs,3000,mame:intvecs,mame,mindstrk,5000-6FFF D000-DFFF
+9DB7197E,18,20,ecs_off,4100,mame:intv,mame-unsupported:no,kingotmf,5000-6FFF D000-F0FF
+9F85015B,3,00,,1000,mame:intv,mame,brickout,5000-5FFF
+A12C27E1,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+A13F143D,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+A21C31C3,10,20,ecs_off,3000,mame:intv,mame,pacman,5000-7FFF
+A3147630,3,00,,1000,mame:intv,mame,hlights,5000-5FFF
+A3ACD160,17,20,ecs_off,4000,mame:intv,mame,demogrn,5000-6FFF D000-EFFF
+A4A20354,15,00,,3000,mame:intv,mame,vectron,5000-6FFF D000-DFFF
+A5E28783,3,00,,1000,mame:intv,mame,rrubble2,5000-5FFF
+A60E25FC,3,00,,1000,mame:intv,mame,backgamm,5000-5FFF
+A63AA3D8,12,40,estimated,2000,extra,jumps,Party Line - Blow Out (Proto),5000-5FFF D000-DFFF
+A6840736,7,00,,2000,mame:intv,mame,ladybug,5000-6FFF
+A7032B62,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+A95021FC,13,00,,4000,mame:intv,mame,vball,5000-6FFF 9000-AFFF
+A9F1D874,7,00,,2000,mame:intv,mame,minehunt,5000-6FFF
+AB87C16F,3,00,,1000,mame:intv,mame,boxing,5000-5FFF
+AF8718A1,3,00,,1000,mame:intv,mame,drgnfire,5000-5FFF
+AF9005A8,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+B021ED7B,22,00,,6000,mame:intv,mame,hvrfor3d,5000-6FFF 9000-BFFF D000-DFFF
+B03F739B,7,00,,2000,mame:intv,mame,blockrun,5000-6FFF
+B25B22CB,17,62,voice+ecs_off+estimated,4000,extra,sibling,magic,5000-6FFF D000-EFFF
+B35C1101,3,00,,1000,mame:intv,mame,autorace,5000-5FFF
+B4287B95,7,00,,2000,mame:intv,mame,llight,5000-6FFF
+B45633CF,15,00,,3000,mame:intv,mame,allstar,5000-6FFF D000-DFFF
+B472C719,24,00,,6000,mame:intv,mame,addtom,5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
+B5C7F25D,3,00,,1000,mame:intv,mame,horserac,5000-5FFF
+B6589E67,19,20,ecs_off,5000,mame:intv,mame,suprchef,5000-6FFF D000-FFFF
+B6A3D4DE,7,00,,2000,mame:intv,mame,hardhat,5000-6FFF
+B745C1CA,13,00,,4000,mame:intv,mame,mbuggies,5000-6FFF 9000-AFFF
+B8AE7E3B,7,40,estimated,2000,extra,sibling,lfun2,5000-6FFF
+B91488E2,7,00,,2000,mame:intv,mame,4tris,5000-6FFF
+BA68FF28,7,00,,2000,mame:intv,mame,slapshot,5000-6FFF
+BAB638F2,7,00,,2000,mame:intv,mame,masters2,5000-6FFF
+BB175383,23,00,,4000,mame:intv,mame,spatrol,5000-6FFF D000-DFFF F000-FFFF
+BB939881,13,00,,4000,mame:intv,mame,polepos,5000-6FFF 9000-AFFF
+BD731E3C,7,00,,2000,mame:intv,mame,minotaur,5000-6FFF
+BD8A6569,11,20,ecs_off,2000,mame:intv,mame,mte201,5000-5FFF 7000-7FFF
+BE4D7996,24,40,estimated,6000,extra,jumps,Super NFL Football (Proto),5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
+BEF0B0C7,15,41,ecs+estimated,3000,extra,hsi,Mr. BASIC Meets Bits 'N Bytes,5000-6FFF D000-DFFF
+BF4D0E9B,7,00,,2000,mame:intv,mame,dfactorp,5000-6FFF
+C047D487,2,00,,2000,mame:intv,mame,beauty,4800-67FF
+C1F1CA74,23,00,,4000,mame:intv,mame,thcastle,5000-6FFF D000-DFFF F000-FFFF
+C2063C08,26,0B,ecs+voice+paged,6000,mame:intvecs,mame,wsmlbase,5000-6FFF D000-EFFF F000-FFFF F000-FFFF/p1
+C30F61C0,3,00,,1000,mame:intv,mame,dkong,5000-5FFF
+C51464E0,7,00,,2000,mame:intv,mame,popeye,5000-6FFF
+C7BB1B0E,3,00,,1000,mame:intv,mame,reversi,5000-5FFF
+C83EEA4C,11,60,ecs_off+estimated,2001,extra,prefix,mte201,5000-5FFF 7000-7FFF
+C99E7554,5,00,,1800,mame:intv,mame,demoblue,5000-67FF
+C9EAACAB,3,00,,1000,mame:intv,mame,wordfun,5000-5FFF
+CA447BBD,3,00,,1000,mame:intv,mame,trondd,5000-5FFF
+CDC14ED8,3,40,estimated,1000,extra,hsi,Deadly Dogs (Beta),5000-5FFF
+CE8FC699,25,05,ecs+ram,6000,mame:intvecs,mame,factory,5000-6FFF 9000-AFFF D000-DFFF F000-FFFF RAM8 8800-8FFF
+D0F83698,3,00,,1000,mame:intv,mame,astrosmsc,5000-5FFF
+D1D352A0,24,00,,6000,mame:intv,mame,towerofd,5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
+D27495E9,3,00,,1000,mame:intv,mame,frogger,5000-5FFF
+D5363B8C,27,20,ecs_off,2000,mame:intv,mame,centiped,6000-7FFF
+D5B0135A,3,00,,1000,mame:intv,mame,esb,5000-5FFF
+D6495910,7,00,,2000,mame:intv,mame,thinicep,5000-6FFF
+D6A2062B,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+D7C5849C,15,00,,3000,mame:intv,mame,pinball,5000-6FFF D000-DFFF
+D8C9856A,7,00,,2000,mame:intv,mame,qbert,5000-6FFF
+D8F99AA2,10,20,ecs_off,3000,mame:intv,mame,defender,5000-7FFF
+DAB36628,3,00,,1000,mame:intv,mame,baseball,5000-5FFF
+DBAB54CA,3,00,,1000,mame:intv,mame,soccer,5000-5FFF
+DBCA82C5,7,00,,2000,mame:intv,mame,gftgold,5000-6FFF
+DCF4B15D,5,40,estimated,2000,extra,prefix,rdealer,5000-67FF
+DD7717AC,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+E00D1399,5,40,estimated,2000,extra,prefix,lnc,5000-67FF
+E0F0D3DA,7,00,,2000,mame:intv,mame,sewersam,5000-6FFF
+E1EE408F,3,00,,1000,mame:intv,mame,crazycln,5000-5FFF
+E221808C,3,00,,1000,mame:intv,mame,hhsanta,5000-5FFF
+E5D1A8D2,23,01,ecs,4000,mame:intvecs,mame,jumble,5000-6FFF D000-DFFF F000-FFFF
+E73A1E6A,13,00,,4000,mame:intv,mame,soccer2,5000-6FFF 9000-AFFF
+E806AD91,2,00,,2000,mame:intv,mame,msurgeon,4800-67FF
+E8B8EBA5,3,00,,1000,mame:intv,mame,spacearm,5000-5FFF
+E98B9163,17,22,voice+ecs_off,4000,mame:intv,mame,sshuttle,5000-6FFF D000-EFFF
+E9E3F60D,7,01,ecs,2000,mame:intvecs,mame,scooby,5000-6FFF
+EAF650CC,7,00,,2000,mame:intv,mame,beamridr,5000-6FFF
+EE5F1BE2,15,01,ecs,3000,mame:intvecs,mame,jetsons,5000-6FFF D000-DFFF
+EEA9AC19,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
+EF1BEC41,24,00,,6000,mame:intv,mame-unsupported:partial,dkongarc,5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
+F0583EFC,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+F093E801,3,00,,1000,mame:intv,mame,skiing,5000-5FFF
+F1ED7D27,7,00,,2000,mame:intv,mame,wwater,5000-6FFF
+F3AE29EA,7,40,estimated,2000,extra,sibling,lfun1,5000-6FFF
+F3B0C759,17,22,voice+ecs_off,4000,mame:intv,mame,magic,5000-6FFF D000-EFFF
+F3DF94E0,23,00,,4000,mame:intv,mame,thinice,5000-6FFF D000-DFFF F000-FFFF
+F400A953,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+F8B1F2B7,5,40,estimated,2000,extra,prefix,add,5000-67FF
+F8EF3E5A,7,00,,2000,mame:intv,mame,spacecad,5000-6FFF
+F95504E0,3,00,,1000,mame:intv,mame,spacebtl,5000-5FFF
+F9E0789E,3,00,,1000,mame:intv,mame,utopia,5000-5FFF
+FA492BBD,7,00,,2000,mame:intv,mame,buzbombr,5000-6FFF
+FAB2992C,3,00,,1000,mame:intv,mame,astrosms,5000-5FFF
+FF68AA22,15,01,ecs,3000,mame:intvecs,mame,melody,5000-6FFF D000-DFFF
+FF7CB79E,3,00,,1000,mame:intv,mame,shrpshot,5000-5FFF
+FF83FF80,22,00,,6000,mame:intv,mame,hvrforce,5000-6FFF 9000-BFFF D000-DFFF
+FF87FAEC,3,00,,1000,mame:intv,mame,golf,5000-5FFF

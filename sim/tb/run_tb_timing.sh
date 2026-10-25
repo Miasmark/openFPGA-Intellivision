@@ -3,7 +3,7 @@
 #   sim/tb/run_tb_timing.sh [plusargs...]   one run, e.g. +border=0 +vidph=5
 #   sim/tb/run_tb_timing.sh --all            the step-1 gate: border 0 and 1 at
 #                                            clk_vid phases 0, 5 and 11, then
-#                                            six planted faults the bench
+#                                            eight planted faults the bench
 #                                            must catch
 # VERILATOR (default: verilator on PATH) picks the binary; WORK (default
 # sim/work/tb_timing) the build directory. On the owner's VM, run it in a
@@ -71,6 +71,10 @@ plant raster_run intv_timing.sv "        end else begin          // the raster n
 plant nophase intv_timing.sv "    assign live    = run && {vcnt, hcnt, sub} == mpos;" "    assign live    = run;"
 # the picture not blanked while frozen
 plant noblank pocket_video.sv "p_rgb <= blank ? 24'd0 : pal_rgb;" "p_rgb <= pal_rgb;"
+# an out-of-frame state word accepted: the machine would never resume
+plant ss_nocheck intv_timing.sv "else if (ss_we && ss_hit && ss_ok)" "else if (ss_we && ss_hit)"
+# live ignores sub: caught by the restore and by the skewed VBlank freeze
+plant live_nosub intv_timing.sv "    assign live    = run && {vcnt, hcnt, sub} == mpos;" "    assign live    = run && {vcnt, hcnt} == mpos[21:4];"
 
 echo "TB_TIMING_ALL $([ $rc = 0 ] && echo pass || echo FAIL)"
 exit $rc

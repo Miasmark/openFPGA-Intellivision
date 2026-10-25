@@ -13,7 +13,9 @@
 #
 # derive_pll_clocks names the outputs
 # ic|pll|altera_pll_i|cyclonev_pll|counter[n].output_counter|divclk
-# (the fit's STA report); the wildcard takes all four.
+# (the fit's STA report). The wildcard takes counters 0, 2 and 3 now;
+# counter 1 (clk_mem) is unused in step 1, so Quartus removes it, and the
+# wildcard takes it too once it is used.
 
 set core_clks {ic|pll|altera_pll_i|*|divclk}
 

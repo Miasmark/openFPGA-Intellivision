@@ -46,9 +46,10 @@
 // the raster reaches the loaded position, so a restore keeps the video
 // sync continuous too. ss_rdata is 0 unless this module is addressed, so
 // ports can be OR-combined. The caller (ss_ctl, step 7) writes only while
-// the machine is frozen, and only positions inside the frame: one outside
-// it (hcnt >= H_TOTAL, ...) is never reached and the machine would not
-// resume.
+// the machine is frozen. A word outside the frame (sub >= SUB_TOTAL,
+// hcnt >= H_TOTAL or vcnt >= V_TOTAL, say from a corrupt or foreign state
+// file) would never be reached and the machine would never resume, so such
+// a write is ignored: mpos keeps its value.
 //   word 0: [3:0] sub (clk_sys within the pixel), [12:4] hcnt, [21:13] vcnt
 //
 // SPDX-License-Identifier: MIT
@@ -98,6 +99,9 @@ module intv_timing #(
     wire logic sub_end  = sub == 4'(SUB_TOTAL - 1);
     wire logic line_end = hcnt == 9'(H_TOTAL - 1);
     wire logic ss_hit   = ss_addr[15:8] == SS_ID && ss_addr[7:0] == 8'd0;
+    wire logic ss_ok    = {1'b0, ss_wdata[3:0]} < 5'(SUB_TOTAL)
+                       && ss_wdata[12:4] < 9'(H_TOTAL)
+                       && ss_wdata[21:13] < 9'(V_TOTAL);
 
     // the raster's next position
     wire logic [3:0] sub_n  = sub_end ? 4'd0 : sub + 4'd1;
@@ -126,7 +130,7 @@ module intv_timing #(
     always_ff @(posedge clk) begin
         if (reset)
             mpos <= 22'd0;
-        else if (ss_we && ss_hit)
+        else if (ss_we && ss_hit && ss_ok)    // out-of-frame words ignored
             mpos <= ss_wdata[21:0];
         else if (live)
             mpos <= {vcnt_n, hcnt_n, sub_n};

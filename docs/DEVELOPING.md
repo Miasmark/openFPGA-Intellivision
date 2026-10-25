@@ -112,17 +112,18 @@ phases, 59.92275 Hz between the Pocket's VS pulses, 262 HS pulses, HS to HS
 always 228 pixel clocks and DE always at the same distance after HS, the
 active window of each scaler mode (160 x 192, 167 x 210), the slot index
 after each line, the test pattern's pixels, and the state port. The machine
-is frozen 40 lines from mid-frame and 300 lines from VBlank, restored to
+is frozen 40 lines from mid-frame and 300 lines from VBlank (the second at
+a nonzero sub), refuses three out-of-frame state words, is restored to
 another position, and a saved word is restored into a second instance whose
 raster is at another phase: the raster (and so HS / VS / DE) runs on
 unchanged throughout, the picture is black while the machine is frozen,
 the machine resumes on exactly its saved clk_sys and loses whole frames
 only, and the restored copy replays the same machine enables for a frame.
-`--all` runs both scaler modes at three `clk_vid` phases and then six
+`--all` runs both scaler modes at three `clk_vid` phases and then eight
 planted faults (263 lines, a wrong palette entry, a state word that loses
 a counter, the raster stopped by the freeze, the machine resuming at once
-instead of at its position, no blanking while frozen), each of which must
-fail.
+instead of at its position, no blanking while frozen, an out-of-frame
+state word accepted, live ignoring sub), each of which must fail.
 
 ## Checks
 

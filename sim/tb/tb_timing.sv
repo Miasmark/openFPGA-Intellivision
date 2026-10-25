@@ -2,8 +2,10 @@
 // video windows and the Pocket video port, and intv_timing's state port.
 //
 // The raster must never stop: the run freezes the machine (DESIGN.md 4.2)
-// twice, 40 lines from mid-frame and 300 lines from VBlank, then a state
-// restore loads another machine position, and a saved word is restored
+// twice, 40 lines from mid-frame and 300 lines from VBlank (the second
+// 5 clk_sys into a pixel, so at a nonzero sub), then a state restore
+// refuses three out-of-frame words and loads another machine position, and
+// a saved word is restored
 // into a second instance whose raster is at another phase. Through all of
 // it HS, VS and DE must stay exact (228 pixel clocks per line, 262 lines,
 // 59.92 Hz), the picture is black in frames where the machine is frozen,
@@ -289,11 +291,15 @@ module tb_timing;
     // Freeze the machine for nlines lines, then run: the state word holds,
     // no machine enable, the machine resumes on exactly the saved position
     // and has lost exactly `lost` whole frames.
-    task automatic freeze_for(input int nlines, input int lost, input string what);
+    task automatic freeze_for(input int nlines, input int lost, input string what,
+                              input int skew = 0);
         longint d0, d1;
         logic [31:0] w;
         bit still = 1, no_ce = 1;
         int n = 0;
+        // skew clk_sys more before the freeze: the saved position then has
+        // a nonzero sub
+        repeat (skew) @(negedge clk_sys);
         d0 = tot_pix - tot_stic;
         run = 1'b0;
         @(negedge clk_sys);
@@ -334,7 +340,7 @@ module tb_timing;
         freeze_for(40, 1, "mid-frame");
         repeat (12 * 228 * 100) @(negedge clk_sys);
         wait_pos(10, 33);
-        freeze_for(300, 2, "VBlank");
+        freeze_for(300, 2, "VBlank", 5);
 
         // Restore: frozen in VBlank, another machine position loaded.
         begin
@@ -344,6 +350,22 @@ module tb_timing;
             wait_pos(20, 50);
             run = 1'b0;
             repeat (12 * 228 * 10) @(negedge clk_sys);
+            // out-of-frame words are refused: the held word stays
+            begin
+                logic [31:0] w0 = ss_rdata;
+                logic [31:0] bad [3] = '{{10'd0, 9'd5, 9'd77, 4'd12},
+                                         {10'd0, 9'd5, 9'd228, 4'd4},
+                                         {10'd0, 9'd262, 9'd77, 4'd4}};
+                bit kept = 1;
+                foreach (bad[i]) begin
+                    ss_wdata = bad[i];
+                    ss_we = 1'b1;
+                    @(negedge clk_sys);
+                    ss_we = 1'b0;
+                    kept &= ss_rdata == w0;
+                end
+                check(kept, $sformatf("restore: out-of-frame words (sub 12, pixel 228, line 262) refused, word stays %08x", w0));
+            end
             ss_wdata = w4;
             ss_we = 1'b1;
             @(negedge clk_sys);

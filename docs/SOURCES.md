@@ -48,7 +48,7 @@ and line.
 | MAME | MAME: mattel/intv.cpp, intv.h, stic.h, stic.cpp; devices/cpu/cp1610; devices/sound/ay8910, sp0256; bus/intv/ecs.cpp, voice.cpp, slot.cpp, rom.h (github.com/mamedev/mame) | BSD-3-Clause | read and cited for facts; run as a black box (an intv-only build) for comparison; palette with its notice |
 | MAME hash | MAME hash/intv.xml, intvecs.xml | CC0-1.0 | per-segment CRCs and load addresses for the CRC map table, read by our own generator |
 | MAME hsi | MAME hash/intv.hsi | BSD-3-Clause | cross-check only (known errors; DESIGN.md 5.2) |
-| S9 | jzIntv 20200712 documents: as1600.txt, bincfg.h, id_tag.txt, jlp.c header, interrupts.txt, psg.txt, stic.txt, intellicart.txt, ecs.html | GPL-2.0-or-later; read as specifications only | CFG, Intellicart `.rom` and JLP formats; timing figures (MAME's STIC constants derive from these, so the two count as one source) |
+| S9 | jzIntv 20200712 documents: as1600.txt, bincfg.h, id_tag.txt, jlp.c header, interrupts.txt, psg.txt, stic.txt, intellicart.txt, ecs.html, jzintv/cp_1610.txt (CPU remarks, see CPU_NOTES.md) | GPL-2.0-or-later; read as specifications only | CFG, Intellicart `.rom` and JLP formats; timing figures (MAME's STIC constants derive from these, so the two count as one source) |
 | S9-names | jzIntv `name_list.c` | public domain | ECS and Intellivoice flags per CRC |
 | jzIntv | the jzIntv program | GPL-2.0-or-later | run as a black box only (traces, frames, audio, PAL); outputs treated as game data |
 

@@ -77,11 +77,66 @@ for n, expect in [(0x1000, '5000-5FFF'), (0x1800, '5000-67FF'), (0x3000, '5000-6
              for a0, w, o, p in m.default_layout(n).segs for i, a in enumerate(range(a0, a0 + w)))
     check(ok, 'default page table %X words' % n)
 
-# The CRC table is sorted, has no duplicate CRC and every layout id exists
+# The CRC table is sorted end to end (padding CRC FFFFFFFF, layout 0), has no duplicate
+# CRC and every layout id exists
 crcs = [e >> 32 for e in tab.crc if (e >> 24) & 0xFF]
-check(crcs == sorted(set(crcs)), 'CRC table sorted and unique')
+used = len(crcs)
+check(crcs == sorted(set(crcs)) and 0xFFFFFFFF not in crcs, 'CRC table entries sorted and unique')
+check(len(tab.crc) == 256 and all(e == m.CRC_PAD_ENTRY for e in tab.crc[used:]), 'padding is CRC FFFFFFFF, layout 0')
+check([e >> 32 for e in tab.crc] == sorted(e >> 32 for e in tab.crc), 'whole table sorted (binary search valid)')
 check(all(((e >> 24) & 0xFF) < len(tab.pages) for e in tab.crc), 'layout ids in range')
 check(tab.lookup(0x12345678, 0x1000)[3] is False, 'unknown CRC misses')
+# Linear scan and binary search agree on every entry, on misses between entries and on FFFFFFFF
+probes = crcs + [c + 1 for c in crcs] + [0, 0xFFFFFFFF] + [rng.randrange(1 << 32) for _ in range(500)]
+check(all(tab.find(c) == tab.find(c, 'binary') for c in probes), 'linear and binary lookup agree')
+check(all(tab.find(c, 'binary') == i for i, c in enumerate(crcs)), 'binary search finds every entry')
+check(tab.find(0xFFFFFFFF, 'binary') is None and tab.find(0xFFFFFFFF) is None, 'padding is never a hit')
+# Negative: the old zero padding breaks the binary search (why the padding is FFFFFFFF)
+zt = im.Tables.__new__(im.Tables)
+zt.crc, zt.pages = tab.crc[:used] + [0] * (256 - used), tab.pages
+check(any(zt.find(c, 'binary') is None for c in crcs), 'zero padding would break binary search (negative)')
+
+# The loader: CRC over exactly the data-table length, words = ceil(len/2), whatever the
+# bridge pads the last 32-bit word with. Lengths 4n, 4n+1, 4n+2 (MTE201 alt, Triple
+# Challenge), 4n+3.
+for n in (0x4000, 0x4001, 0x4002, 0xB002, 0x4003):
+    data = bytes(rng.randrange(256) for _ in range(n))
+    strobes = m.bridge_strobes(data, 0x00)
+    check(len(strobes) % 4 == 0 and len(strobes) >= n, 'bridge strobes whole words (%d bytes)' % n)
+    table = m.datatable({0x100: n, 0x101: 0, 0x102: 0x2000})
+    check(m.datatable_size(table) == n, 'data table size of slot 0x100')
+    for pad in (0x00, 0xFF, 0xA5):
+        crc, w = m.loader_load(m.bridge_strobes(data, pad), m.datatable_size(table))
+        check(crc == zlib.crc32(data) and w == m.bytes_to_words(data) and len(w) == -(-n // 2),
+              'loader CRC/words over the file length only (%d bytes, pad %02X)' % (n, pad))
+    if n % 4:
+        # Negative: a CRC over every strobe (counting the pad) is not the file's CRC
+        check(zlib.crc32(strobes) != zlib.crc32(data), 'strobe-count CRC differs for %d bytes (negative)' % n)
+    # Lookup with an entry for this image, as the generator writes it (size = ceil(len/2) words)
+    t2 = im.Tables.__new__(im.Tables)
+    ent = (zlib.crc32(data) << 32) | (5 << 24) | (-(-(-(-n // 2)) // 256))
+    t2.crc, t2.pages = [ent] + [m.CRC_PAD_ENTRY] * 255, tab.pages
+    crc, w = m.load_through_loader(data)
+    for meth in ('linear', 'binary'):
+        lid, fl, ok, hit = t2.lookup(crc, len(w), meth)
+        check(hit and ok and lid == 5, 'synthetic %d-byte image hits its entry (%s)' % (n, meth))
+        if n % 4:
+            check(not t2.lookup(zlib.crc32(strobes), len(strobes) // 2, meth)[3],
+                  'strobe-count CRC misses the entry (%d bytes, negative, %s)' % (n, meth))
+
+# ECS conflict classes: hard ($7000, ECS RAM) and paged ($2000, $E000)
+for segs, rams, expect in [([(0x5000, 0x2000, 0, 0)], [], 0),
+                           ([(0x5000, 0x3000, 0, 0)], [], m.FLAG_ECS_OFF),                 # $5000-$7FFF
+                           ([(0x4000, 0x800, 0, 0)], [], m.FLAG_ECS_OFF),                  # ECS RAM range
+                           ([(0x5000, 0x1000, 0, 0)], [(0x4000, 0x400, 8)], m.FLAG_ECS_OFF),
+                           ([(0x5000, 0x2000, 0, 0), (0xD000, 0x2000, 0x2000, 0)], [], m.FLAG_ECS_RISK),
+                           ([(0x2000, 0x1000, 0, 0)], [], m.FLAG_ECS_RISK),
+                           ([(0x5000, 0x1000, 0, 0)], [(0xE000, 0x800, 16)], m.FLAG_ECS_RISK),
+                           ([(0x6000, 0x2000, 0, 0), (0xE000, 0x1000, 0x2000, 0)], [], m.FLAG_ECS_OFF | m.FLAG_ECS_RISK),
+                           ([(0x4800, 0x800, 0, 0), (0x8000, 0x1000, 0x800, 0)], [], 0)]:
+    lay = m.Layout(segs, rams)
+    check(m.ecs_conflict(lay) == expect, 'ECS class %s' % lay.text())
+    check(m.layout_flags(lay, m.FLAG_ECS) & (m.FLAG_ECS_OFF | m.FLAG_ECS_RISK) == 0, 'ECS title: no conflict flag')
 
 # The checked-in tables match what the generator makes from data/
 r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'tools', 'gen_crc_table.py'), '--check'],

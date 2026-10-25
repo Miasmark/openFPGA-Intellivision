@@ -25,7 +25,7 @@ Bump 'n' Jump (USA).zip,999CCEED,4000,proven,23,00,-,5000-6FFF D000-DFFF F000-FF
 "Buzz Bombers (USA, Europe).zip",FA492BBD,2000,proven,7,00,-,5000-6FFF,CF343DC9,every MAME part CRC and the total size match,
 "Carnival (USA, Europe).zip",43870908,1000,proven,3,00,-,5000-5FFF,590DA6DC,every MAME part CRC and the total size match,
 Centipede (USA).zip,D5363B8C,2000,proven,27,20,ecs_off,6000-7FFF,CBA1A479,every MAME part CRC and the total size match,
-Championship Tennis (Europe).zip,4CC46A04,4000,proven,17,20,ecs_off,5000-6FFF D000-EFFF,11D85E84,every MAME part CRC and the total size match,
+Championship Tennis (Europe).zip,4CC46A04,4000,proven,17,80,ecs_risk,5000-6FFF D000-EFFF,11D85E84,every MAME part CRC and the total size match,
 "Checkers ~ Draughts (USA, Europe).zip",36E1D858,1000,proven,3,00,-,5000-5FFF,5ED67716,every MAME part CRC and the total size match,
 Chip Shot - Super Pro Golf (USA).zip,0BF464C6,4000,proven,13,00,-,5000-6FFF 9000-AFFF,4F5499AC,every MAME part CRC and the total size match,
 Commando (USA).zip,3289C8BA,4000,proven,13,00,-,5000-6FFF 9000-AFFF,DA3474DB,every MAME part CRC and the total size match,
@@ -37,7 +37,7 @@ Deep Pockets - Super Pro Pool & Billiards (USA) (Proto).zip,6802B191,4000,proven
 Defender (USA).zip,D8F99AA2,3000,proven,10,20,ecs_off,5000-7FFF,CB9D2F74,every MAME part CRC and the total size match,
 "Demon Attack (USA, Europe).zip",5E6A8CD8,2000,proven,2,00,-,4800-67FF,DFD2869D,every MAME part CRC and the total size match,
 Demonstration Cartridge - Blue (USA).zip,02919024,2000,derived-prefix,5,40,estimated,5000-67FF,C4A26115,MAME demoblue parts match the first 3000 bytes; 1000 bytes beyond,image has more data than MAME's regions; whether the extra is on the cart
-Demonstration Cartridge - Green (USA).zip,A3ACD160,4000,proven,17,20,ecs_off,5000-6FFF D000-EFFF,B35D8344,every MAME part CRC and the total size match,
+Demonstration Cartridge - Green (USA).zip,A3ACD160,4000,proven,17,80,ecs_risk,5000-6FFF D000-EFFF,B35D8344,every MAME part CRC and the total size match,
 Demonstration Cartridge - Red (USA).zip,0487675C,2000,proven,7,00,-,5000-6FFF,4DE81D9A,every MAME part CRC and the total size match,
 Dig Dug (USA).zip,159AF7F7,4000,proven,20,20,ecs_off,5000-6FFF 7000-7FFF 9000-9FFF,F6A6E1A0,every MAME part CRC and the total size match,
 Diner (USA).zip,13EE56F1,4000,proven,13,00,-,5000-6FFF 9000-AFFF,3AB36E97,every MAME part CRC and the total size match,
@@ -68,7 +68,7 @@ IMI Test Cartridge (USA).zip,7217CA7B,1000,proven,28,20,ecs_off,7000-7FFF,B37F3F
 Illusions (USA) (Proto).zip,851F3CCB,2000,proven,7,00,-,5000-6FFF,F61DD167,every MAME part CRC and the total size match,
 International Demonstration Cartridge (World).zip,6A02C7E8,3000,proven,15,00,-,5000-6FFF D000-DFFF,80BDC4D0,every MAME part CRC and the total size match,
 "Jetsons' Ways with Words, The (USA).zip",EE5F1BE2,3000,proven,15,01,ecs,5000-6FFF D000-DFFF,381A8682,every MAME part CRC and the total size match,
-King of the Mountain (USA) (Proto).zip,4422868E,4000,proven,17,20,ecs_off,5000-6FFF D000-EFFF,3C09B7BF,every MAME part CRC and the total size match,
+King of the Mountain (USA) (Proto).zip,4422868E,4000,proven,17,80,ecs_risk,5000-6FFF D000-EFFF,3C09B7BF,every MAME part CRC and the total size match,
 Kool-Aid Man (USA).zip,8C9819A2,2000,proven,7,00,-,5000-6FFF,9707A75A,every MAME part CRC and the total size match,
 "Lady Bug (USA, Europe).zip",A6840736,2000,proven,7,00,-,5000-6FFF,2F3305D1,every MAME part CRC and the total size match,
 Land Battle (USA) (Proto).zip,3825C25B,2000,proven,9,04,ram,5000-6FFF RAM8 D000-D7FF,63F954AC,every MAME part CRC and the total size match,
@@ -81,8 +81,8 @@ League of Light (USA) (Proto).zip,B4287B95,2000,proven,7,00,-,5000-6FFF,114A4A4A
 "Lock 'N' Chase (USA, Europe).zip",E00D1399,2000,derived-prefix,5,40,estimated,5000-67FF,891CE9F4,MAME lnc parts match the first 3000 bytes; 1000 bytes beyond,image has more data than MAME's regions; whether the extra is on the cart
 Loco-Motion (USA).zip,6B6E80EE,2000,proven,7,00,-,5000-6FFF,BB700566,every MAME part CRC and the total size match,
 MTE201 Intellivision Test Cartridge (USA).zip,C83EEA4C,2001,derived-prefix,11,60,ecs_off+estimated,5000-5FFF 7000-7FFF,A48A1B93,MAME mte201 parts match the first 4000 bytes; 2 bytes beyond,image has more data than MAME's regions; whether the extra is on the cart
-Magic Carousel (USA) (Proto) (Alt 1).zip,B25B22CB,4000,derived-sibling,17,62,voice+ecs_off+estimated,5000-6FFF D000-EFFF,DB9A0E88,equal to magic: 99.8% 100.0%,no list entry for this exact image; map taken from a near-identical proven image
-Magic Carousel (USA) (Proto).zip,F3B0C759,4000,proven,17,22,voice+ecs_off,5000-6FFF D000-EFFF,90CE866F,every MAME part CRC and the total size match,
+Magic Carousel (USA) (Proto) (Alt 1).zip,B25B22CB,4000,derived-sibling,17,C2,voice+estimated+ecs_risk,5000-6FFF D000-EFFF,DB9A0E88,equal to magic: 99.8% 100.0%,no list entry for this exact image; map taken from a near-identical proven image
+Magic Carousel (USA) (Proto).zip,F3B0C759,4000,proven,17,82,voice+ecs_risk,5000-6FFF D000-EFFF,90CE866F,every MAME part CRC and the total size match,
 Major League Baseball ~ Big League Baseball ~ Baseball (World).zip,DAB36628,1000,proven,3,00,-,5000-5FFF,FB99A594,every MAME part CRC and the total size match,
 "Masters of the Universe - The Power of He-Man (USA, Europe).zip",573B9B6D,4000,proven,23,00,-,5000-6FFF D000-DFFF F000-FFFF,DFFA7832,every MAME part CRC and the total size match,
 Math Master (USA).zip,662E2812,2000,derived-sibling,7,40,estimated,5000-6FFF,F61FA027,equal to lfun1: 99.8%,no list entry for this exact image; map taken from a near-identical proven image

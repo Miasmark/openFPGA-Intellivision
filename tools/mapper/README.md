@@ -54,15 +54,39 @@ Rules the generator applies to MAME's lists, all from MAME's own loader
 
 ## Output formats
 
-**CRC table** `src/fpga/core/tables/cart_crc.{mif,hex}`: 256 entries x 64 bits,
-sorted by CRC, zero entries after the last one (layout 0 = no entry). 246 used.
+**CRC table** `src/fpga/core/tables/cart_crc.{mif,hex}`: 256 entries x 64 bits.
+246 used, sorted by CRC; the 10 unused entries are padding with CRC `FFFFFFFF`
+and layout 0 (no entry), so the table is sorted end to end. Both lookups work
+and give the same answer: a linear scan that stops at the first layout 0 (256
+clocks at most), or a binary search (8 probes) that counts a hit only when the
+CRC matches and the layout is not 0. No real entry may have CRC `FFFFFFFF`
+(the generator refuses one). `selftest.py` checks that both searches agree on
+every entry and on misses.
 
 | Bits | Field |
 |---|---|
-| 63:32 | CRC32 of the image file (zlib CRC32, what the loader computes while streaming) |
+| 63:32 | CRC32 of exactly the file's bytes (zlib CRC32), as the loader computes it while streaming; see "The loader's CRC and length" below |
 | 31:24 | layout id |
 | 23:16 | flags |
-| 15:0 | image size in 256-word units, rounded up (0 = do not check) |
+| 15:0 | image size in 256-word units, rounded up: ceil(words / 256), words = ceil(bytes / 2) (0 = do not check) |
+
+**The loader's CRC and length.** The APF bridge delivers a file in whole
+32-bit words, and `data_loader` (OUTPUT_WORD_SIZE=1) emits all four bytes of
+every word, so a file whose length is not a multiple of 4 arrives with 1-3 pad
+bytes after its end. The loader must not count strobes. It takes the file
+length from the data table entry the host writes for the cartridge slot
+(slot id 0x100; the size is the word after the id, word 2 x index + 1),
+updates the CRC only for byte offsets below that length, and sets the image
+length to words = ceil(length / 2); an odd last byte is the high byte of the
+last word, with the low byte 0. Two of the owner's images are 4n+2 bytes and
+would miss the table with a strobe-count CRC: MTE201 alt (`C83EEA4C`, 16,386
+bytes) and Triple Challenge (`095638C0`, 45,058 bytes; it would also lose its
+8-bit RAM at $D000). Build step 2's done-test must include both.
+`intvcart.load_through_loader` models this path (bridge strobes padded to
+32 bits, data table, length-gated CRC and words). `intv_mapper.py` loads every
+image through it and fails if the CRC or the words differ from the file;
+`selftest.py` runs synthetic 4n, 4n+1, 4n+2 and 4n+3 byte images through it
+with three pad values and checks that a strobe-count CRC would miss.
 
 | Flag | Name | Set when |
 |---|---|---|
@@ -71,8 +95,22 @@ sorted by CRC, zero entries after the last one (layout 0 = no entry). 246 used.
 | 0x04 | RAM | the layout has cartridge RAM |
 | 0x08 | PAGED | the layout has ECS-style pages |
 | 0x10 | JLP | reserved: no table source marks JLP (CFG only, step 8/11) |
-| 0x20 | ECS_OFF | not an ECS title, and cartridge ROM or RAM sits where the ECS maps its own: ROM $2000-$2FFF, $7000-$7FFF, $E000-$EFFF, RAM $4000-$47FF (jzIntv `doc/tech/ecs.html`; MAME `intv_m.cpp:616-622`) |
+| 0x20 | ECS_OFF | hard conflict: not an ECS title, and cartridge ROM or RAM overlaps $7000-$7FFF (ECS ROM page 0, there at reset) or the ECS RAM $4000-$47FF |
 | 0x40 | ESTIMATED | the layout is ours (`cart_extra.csv`), or only `name_list.c` knows the CRC |
+| 0x80 | ECS_RISK | paged conflict: not an ECS title, and cartridge ROM or RAM overlaps $2000-$2FFF or $E000-$EFFF, where the ECS ROM is page 1: absent at reset, there once the ECS selects page 1 |
+
+ECS sources: jzIntv `doc/tech/ecs.html` (ECS ROM $2000 page 1, $7000 page 0,
+$E000 page 1; RAM $4000-$47FF) and MAME `intv_m.cpp:616-622`. A title can carry
+both conflict flags. ECS titles carry neither (WSMLB has cartridge ROM at
+$E000 and runs with the ECS). In the table ECS_OFF marks Centipede,
+Dig Dug, Congo Bongo, Defender, both Pac-Man, IMI and MTE201 test carts (ROM
+at $7000); ECS_RISK marks the $D000-$EFFF titles (Championship Tennis, Chop
+Lifter, King of the Mountain, Magic Carousel, Space Shuttle, Super Chef,
+Ms. Pac-Man, Demonstration Cartridge - Green). The rule is conservative:
+DESIGN decision 10 keeps the ECS off for ROM at $7000 and $E000, so until
+build step 9 the core treats ECS_RISK like ECS_OFF. The split lets step 9
+relax ECS_RISK after owner check 15.6 (does Centipede or Dig Dug run with the
+ECS attached) without regenerating the table.
 
 **Layouts** `src/fpga/core/tables/cart_layouts.{mif,hex}`: 32 page entries of
 16 bits per layout, one per 2K-word page; address = layout id x 32 + (CPU
@@ -104,8 +142,9 @@ gives the right layout for 129. No jzIntv heuristics are used.
 
 `CartModel` is the cartridge side of the bus, built from the image and the 32
 page entries, exactly as the RTL will hold them. `intv_mapper.py` reads the
-`.hex` files the RTL loads, looks the CRC up linearly as the loader may, and
-answers reads through the page table.
+`.hex` files the RTL loads, takes the image through the loader model
+(32-bit bridge strobes, data table length), looks the CRC up both linearly and
+by binary search (they must agree), and answers reads through the page table.
 
 - ECS-style paging: writing $xA5y to $xFFF selects page y of the 4K range
   $x000 (jzIntv `doc/tech/ecs.html`); all ranges reset to page 0. A paged
@@ -138,7 +177,11 @@ owner's library.
 
 Every image maps; for each, the page table was checked against the layout's
 own segments word for word. The check fails on any mismatch (tested by
-corrupting one page entry: 13 images failed).
+corrupting one page entry: 13 images failed). It also fails when the loader
+model's CRC or words differ from the file, when the linear and binary lookups
+disagree, or when a CRC that is in the table misses (tested 2026-10-25: a
+loader that CRCs every strobe fails exactly MTE201 alt and Triple Challenge;
+zero padding fails 5 images on the binary search).
 
 What each of the 26 unproven images is missing:
 

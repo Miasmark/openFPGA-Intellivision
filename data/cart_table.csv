@@ -55,19 +55,19 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 3784DC52,7,02,voice,2000,mame:intv,mame,sspartan,5000-6FFF
 3825C25B,9,04,ram,2000,mame:intv,mame,landbttl,5000-6FFF RAM8 D000-D7FF
 39D3B895,3,00,,1000,mame:intv,mame,spacehwk,5000-5FFF
-3B636837,21,20,ecs_off,8000,mame:intv,mame-unsupported:no,mspacman,5000-6FFF 8800-B7FF D000-FFFF
+3B636837,21,80,ecs_risk,8000,mame:intv,mame-unsupported:no,mspacman,5000-6FFF 8800-B7FF D000-FFFF
 3B99B889,7,00,,2000,mame:intv,mame,dfactor,5000-6FFF
 3D9949EA,7,00,,2000,mame:intv,mame,subhunt,5000-6FFF
 4221EDE7,7,00,,2000,mame:intv,mame,fathom,5000-6FFF
 43806375,7,00,,2000,mame:intv,mame,btime,5000-6FFF
 43870908,3,00,,1000,mame:intv,mame,carnival,5000-5FFF
-4422868E,17,20,ecs_off,4000,mame:intv,mame,kingotm,5000-6FFF D000-EFFF
+4422868E,17,80,ecs_risk,4000,mame:intv,mame,kingotm,5000-6FFF D000-EFFF
 44519F2D,3,40,estimated,1000,extra,sibling,traction,5000-5FFF
 447DF6F9,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
 4542D593,7,02,voice,2000,mame:intv,mame,spacecnt,5000-6FFF
 4728C3BD,12,00,,2000,mame:intv,mame,blowouta,5000-5FFF D000-DFFF
 47AA7977,7,00,,2000,mame:intv,mame,safecrkr,5000-6FFF
-47FDD8A8,16,20,ecs_off,3800,mame:intv,mame,choplift,5000-6FFF D000-E7FF
+47FDD8A8,16,80,ecs_risk,3800,mame:intv,mame,choplift,5000-6FFF D000-E7FF
 4830F720,3,00,,1000,mame:intv,mame,hhtrick,5000-5FFF
 48D74D3C,3,00,,1000,mame:intv,mame,roulette,5000-5FFF
 4B23A757,10,20,ecs_off,3000,mame:intv,mame,congo,5000-7FFF
@@ -75,7 +75,7 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 4B88FA8E,7,40,estimated,2000,extra,sibling,spacecad,5000-6FFF
 4B8C5932,3,00,,1000,mame:intv,mame,htrails,5000-5FFF
 4B91CF16,3,00,,1000,mame:intv,mame,football,5000-5FFF
-4CC46A04,17,20,ecs_off,4000,mame:intv,mame,ctennis,5000-6FFF D000-EFFF
+4CC46A04,17,80,ecs_risk,4000,mame:intv,mame,ctennis,5000-6FFF D000-EFFF
 4E1F2EB5,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
 4F3E3F69,7,00,,2000,mame:intv,mame,icetrek,5000-6FFF
 515E1D7E,13,00,,4000,mame:intv,mame,wrestlng,5000-6FFF 9000-AFFF
@@ -147,13 +147,13 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 9C75EFCC,3,00,,1000,mame:intv,mame,pitfall,5000-5FFF
 9D4355AA,5,00,,1800,mame:intv,mame,add,5000-67FF
 9D57498F,15,01,ecs,3000,mame:intvecs,mame,mindstrk,5000-6FFF D000-DFFF
-9DB7197E,18,20,ecs_off,4100,mame:intv,mame-unsupported:no,kingotmf,5000-6FFF D000-F0FF
+9DB7197E,18,80,ecs_risk,4100,mame:intv,mame-unsupported:no,kingotmf,5000-6FFF D000-F0FF
 9F85015B,3,00,,1000,mame:intv,mame,brickout,5000-5FFF
 A12C27E1,1,43,ecs+voice+estimated,0,name_list,flags-only,,default map (cut at image length)
 A13F143D,1,42,voice+estimated,0,name_list,flags-only,,default map (cut at image length)
 A21C31C3,10,20,ecs_off,3000,mame:intv,mame,pacman,5000-7FFF
 A3147630,3,00,,1000,mame:intv,mame,hlights,5000-5FFF
-A3ACD160,17,20,ecs_off,4000,mame:intv,mame,demogrn,5000-6FFF D000-EFFF
+A3ACD160,17,80,ecs_risk,4000,mame:intv,mame,demogrn,5000-6FFF D000-EFFF
 A4A20354,15,00,,3000,mame:intv,mame,vectron,5000-6FFF D000-DFFF
 A5E28783,3,00,,1000,mame:intv,mame,rrubble2,5000-5FFF
 A60E25FC,3,00,,1000,mame:intv,mame,backgamm,5000-5FFF
@@ -167,13 +167,13 @@ AF8718A1,3,00,,1000,mame:intv,mame,drgnfire,5000-5FFF
 AF9005A8,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
 B021ED7B,22,00,,6000,mame:intv,mame,hvrfor3d,5000-6FFF 9000-BFFF D000-DFFF
 B03F739B,7,00,,2000,mame:intv,mame,blockrun,5000-6FFF
-B25B22CB,17,62,voice+ecs_off+estimated,4000,extra,sibling,magic,5000-6FFF D000-EFFF
+B25B22CB,17,C2,voice+estimated+ecs_risk,4000,extra,sibling,magic,5000-6FFF D000-EFFF
 B35C1101,3,00,,1000,mame:intv,mame,autorace,5000-5FFF
 B4287B95,7,00,,2000,mame:intv,mame,llight,5000-6FFF
 B45633CF,15,00,,3000,mame:intv,mame,allstar,5000-6FFF D000-DFFF
 B472C719,24,00,,6000,mame:intv,mame,addtom,5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
 B5C7F25D,3,00,,1000,mame:intv,mame,horserac,5000-5FFF
-B6589E67,19,20,ecs_off,5000,mame:intv,mame,suprchef,5000-6FFF D000-FFFF
+B6589E67,19,80,ecs_risk,5000,mame:intv,mame,suprchef,5000-6FFF D000-FFFF
 B6A3D4DE,7,00,,2000,mame:intv,mame,hardhat,5000-6FFF
 B745C1CA,13,00,,4000,mame:intv,mame,mbuggies,5000-6FFF 9000-AFFF
 B8AE7E3B,7,40,estimated,2000,extra,sibling,lfun2,5000-6FFF
@@ -222,7 +222,7 @@ E5D1A8D2,23,01,ecs,4000,mame:intvecs,mame,jumble,5000-6FFF D000-DFFF F000-FFFF
 E73A1E6A,13,00,,4000,mame:intv,mame,soccer2,5000-6FFF 9000-AFFF
 E806AD91,2,00,,2000,mame:intv,mame,msurgeon,4800-67FF
 E8B8EBA5,3,00,,1000,mame:intv,mame,spacearm,5000-5FFF
-E98B9163,17,22,voice+ecs_off,4000,mame:intv,mame,sshuttle,5000-6FFF D000-EFFF
+E98B9163,17,82,voice+ecs_risk,4000,mame:intv,mame,sshuttle,5000-6FFF D000-EFFF
 E9E3F60D,7,01,ecs,2000,mame:intvecs,mame,scooby,5000-6FFF
 EAF650CC,7,00,,2000,mame:intv,mame,beamridr,5000-6FFF
 EE5F1BE2,15,01,ecs,3000,mame:intvecs,mame,jetsons,5000-6FFF D000-DFFF
@@ -232,7 +232,7 @@ F0583EFC,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image le
 F093E801,3,00,,1000,mame:intv,mame,skiing,5000-5FFF
 F1ED7D27,7,00,,2000,mame:intv,mame,wwater,5000-6FFF
 F3AE29EA,7,40,estimated,2000,extra,sibling,lfun1,5000-6FFF
-F3B0C759,17,22,voice+ecs_off,4000,mame:intv,mame,magic,5000-6FFF D000-EFFF
+F3B0C759,17,82,voice+ecs_risk,4000,mame:intv,mame,magic,5000-6FFF D000-EFFF
 F3DF94E0,23,00,,4000,mame:intv,mame,thinice,5000-6FFF D000-DFFF F000-FFFF
 F400A953,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
 F8B1F2B7,5,40,estimated,2000,extra,prefix,add,5000-67FF

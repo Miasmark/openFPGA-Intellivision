@@ -4,8 +4,9 @@
 """Intellivision mapper model: the memory map the core presents for a cartridge image.
 
 It works the way the RTL loader and cart module will (docs/DESIGN.md 5.2, module 11/12):
-CRC32 over the file -> look the CRC up in src/fpga/core/tables/cart_crc.hex -> layout id
--> 32 page entries from cart_layouts.hex -> every CPU read goes through the page table.
+CRC32 over exactly the file length (data table size, not the 32-bit bridge strobes)
+-> look the CRC up in src/fpga/core/tables/cart_crc.hex -> layout id -> 32 page entries
+from cart_layouts.hex -> every CPU read goes through the page table.
 An unknown CRC gets layout 1 (the default map) cut at the image length.
 
 Commands (images are read in place, from a file or a .zip; nothing is copied):
@@ -51,28 +52,51 @@ class Tables:
         lw = read_hex(os.path.join(t, 'cart_layouts.hex'))
         self.pages = [lw[i:i + m.NPAGES] for i in range(0, len(lw), m.NPAGES)]
 
-    def lookup(self, crc, words):
-        """(layout id, flags, size check ok) as the loader will compute them.
+    def find(self, crc, method='linear'):
+        """Index of crc's entry in the CRC table, or None.
 
-        Linear search, as the RTL may do it: 256 entries take 256 clocks after the last byte.
+        The table is sorted end to end (padding is CRC FFFFFFFF with layout 0), so the RTL
+        may scan it linearly (256 clocks, stop at layout 0) or binary-search it (8 probes).
+        Both are modelled; they must agree.
         """
-        for e in self.crc:
-            lid = (e >> 24) & 0xFF
-            if lid == m.LAYOUT_INVALID:
-                break
-            if e >> 32 == crc:
-                size256 = e & 0xFFFF
-                ok = size256 == 0 or size256 == -(-words // 256)
-                return lid, (e >> 16) & 0xFF, ok, True
-        return m.LAYOUT_DEFAULT, m.FLAG_ESTIMATED, True, False
+        if method == 'linear':
+            for i, e in enumerate(self.crc):
+                if (e >> 24) & 0xFF == m.LAYOUT_INVALID:
+                    return None
+                if e >> 32 == crc:
+                    return i
+            return None
+        lo, hi = 0, len(self.crc)          # first index whose CRC >= crc
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self.crc[mid] >> 32 < crc:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo < len(self.crc) and self.crc[lo] >> 32 == crc and (self.crc[lo] >> 24) & 0xFF != m.LAYOUT_INVALID:
+            return lo
+        return None
+
+    def lookup(self, crc, words, method='linear'):
+        """(layout id, flags, size check ok, hit) as the loader will compute them.
+
+        words = ceil(file length / 2), the length taken from the data table.
+        """
+        i = self.find(crc, method)
+        if i is None:
+            return m.LAYOUT_DEFAULT, m.FLAG_ESTIMATED, True, False
+        e = self.crc[i]
+        size256 = e & 0xFFFF
+        ok = size256 == 0 or size256 == -(-words // 256)
+        return (e >> 24) & 0xFF, (e >> 16) & 0xFF, ok, True
 
     def model(self, words, crc):
         lid, flags, ok, hit = self.lookup(crc, len(words))
         if not ok:     # size disagrees: treat as unknown
             lid, flags, hit = m.LAYOUT_DEFAULT, m.FLAG_ESTIMATED, False
         cart = m.model_for(words, lid, self.pages)
-        if lid == m.LAYOUT_DEFAULT and m.ecs_conflict(m.default_layout(len(words))) and not flags & m.FLAG_ECS:
-            flags |= m.FLAG_ECS_OFF
+        if lid == m.LAYOUT_DEFAULT and not flags & m.FLAG_ECS:
+            flags |= m.ecs_conflict(m.default_layout(len(words)))
         return cart, lid, flags, hit
 
 
@@ -93,8 +117,12 @@ def page_text(v):
 
 
 def load(path):
+    """The image as the core's loader receives it (bridge strobes + data table length)."""
     data = m.load_image_bytes(path)
-    return data, m.bytes_to_words(data), m.crc32(data)
+    crc, words = m.load_through_loader(data)
+    if crc != m.crc32(data) or words != m.bytes_to_words(data):
+        sys.exit('%s: loader model disagrees with the file (CRC %08X, file %08X)' % (path, crc, m.crc32(data)))
+    return data, words, crc
 
 
 def cmd_map(a, tab):
@@ -192,7 +220,10 @@ def cmd_check(a, tab):
     for f in files:
         data = m.load_image_bytes(os.path.join(a.dir, f))
         imgs[f] = data
-    crc_of = {f: m.crc32(d) for f, d in imgs.items()}
+    crc_of = {}
+    loaded = {}
+    for f, d in imgs.items():
+        crc_of[f], loaded[f] = m.load_through_loader(d)   # CRC as the core computes it
     words_by_name = {}
     for f, d in imgs.items():
         r = bycrc.get(crc_of[f])
@@ -204,10 +235,13 @@ def cmd_check(a, tab):
     for f in files:
         data = imgs[f]
         crc = crc_of[f]
-        words = m.bytes_to_words(data)
+        words = loaded[f]
         cart, lid, flags, hit = tab.model(words, crc)
         row = bycrc.get(crc)
         status, proof = 'unknown', ''
+        loader_bad = crc != m.crc32(data) or words != m.bytes_to_words(data)
+        if tab.lookup(crc, len(words), 'binary') != tab.lookup(crc, len(words)):
+            loader_bad = True
         if row and row['source'].startswith('mame'):
             ok, n = region_proof(data, sl[row['name']])
             status = 'proven' if ok else 'FAILED'
@@ -253,6 +287,12 @@ def cmd_check(a, tab):
             if exp != got:
                 status = 'FAILED'
                 proof += '; page table disagrees with the layout'
+        if loader_bad:
+            status = 'FAILED'
+            proof += '; loader CRC/words differ from the file, or the two table searches disagree'
+        if row and row['source'] != 'name_list' and not hit:
+            status = 'FAILED'
+            proof += '; CRC is in the table but the lookup missed'
         if status == 'FAILED':
             fails += 1
         count[status] = count.get(status, 0) + 1

@@ -42,21 +42,31 @@ FLAG_VOICE = 0x02      # enable the Intellivoice on Auto
 FLAG_RAM = 0x04        # cartridge RAM present (the page table says where)
 FLAG_PAGED = 0x08      # ECS-style paged ROM in the cartridge
 FLAG_JLP = 0x10        # JLP (none of the table sources marks one; CFG only for now)
-FLAG_ECS_OFF = 0x20    # ECS must stay off: cartridge ROM/RAM where the ECS maps its own
+FLAG_ECS_OFF = 0x20    # hard ECS conflict: cart ROM at $7000-$7FFF (ECS ROM visible at reset)
+                       # or cart ROM/RAM in ECS RAM $4000-$47FF
 FLAG_ESTIMATED = 0x40  # layout is our own derivation, not MAME's region map
+FLAG_ECS_RISK = 0x80   # paged ECS conflict: cart ROM/RAM at $2000-$2FFF or $E000-$EFFF, where the
+                       # ECS ROM is page 1 (absent at reset, there once the ECS selects page 1)
 FLAG_NAMES = {FLAG_ECS: 'ecs', FLAG_VOICE: 'voice', FLAG_RAM: 'ram', FLAG_PAGED: 'paged',
-              FLAG_JLP: 'jlp', FLAG_ECS_OFF: 'ecs_off', FLAG_ESTIMATED: 'estimated'}
+              FLAG_JLP: 'jlp', FLAG_ECS_OFF: 'ecs_off', FLAG_ESTIMATED: 'estimated', FLAG_ECS_RISK: 'ecs_risk'}
 
 # Page entry (16 bits), one per 2K-word page of the CPU address space
 KIND_NONE, KIND_ROM, KIND_RAM16, KIND_RAM8 = 0, 1, 2, 3
 KIND_NAMES = {KIND_NONE: '-', KIND_ROM: 'ROM', KIND_RAM16: 'RAM16', KIND_RAM8: 'RAM8'}
 
 LAYOUT_INVALID = 0     # entry 0: no layout (table padding)
+
+# CRC table padding: CRC FFFFFFFF, layout 0, so the table is sorted end to end and both a
+# linear scan (stop at layout 0) and a binary search work (tools/mapper/README.md)
+CRC_PAD_ENTRY = 0xFFFFFFFF << 32
 LAYOUT_DEFAULT = 1     # unknown CRC: our default map, cut at the image length
 
-# Address ranges the ECS uses for itself (jzIntv doc/tech/ecs.html; MAME intv_m.cpp:616-622)
-ECS_ROM_RANGES = [(0x2000, 0x2FFF), (0x7000, 0x7FFF), (0xE000, 0xEFFF)]
+# Address ranges the ECS uses for itself (jzIntv doc/tech/ecs.html; MAME intv_m.cpp:616-622).
+# The ECS ROM is $7000 page 0 (there at reset), $2000 and $E000 page 1 (there only after the
+# ECS selects page 1); ECS RAM $4000-$47FF is always there.
+ECS_HARD_ROM_RANGES = [(0x7000, 0x7FFF)]
 ECS_RAM_RANGE = (0x4000, 0x47FF)
+ECS_PAGED_ROM_RANGES = [(0x2000, 0x2FFF), (0xE000, 0xEFFF)]
 
 
 def page_entry(kind, offset=0, paged=False, npages=1, ram_size_code=0):
@@ -291,14 +301,24 @@ def merge_segs(segs):
 
 
 def ecs_conflict(layout):
-    """True if cartridge ROM or RAM sits where the ECS maps its ROM or RAM."""
+    """ECS conflict flags of a layout: FLAG_ECS_OFF, FLAG_ECS_RISK, both or 0.
+
+    ECS_OFF (hard): cartridge ROM or RAM overlaps $7000-$7FFF (ECS ROM page 0, there at
+    reset) or the ECS RAM $4000-$47FF. ECS_RISK (paged): it overlaps $2000-$2FFF or
+    $E000-$EFFF, where the ECS ROM is page 1 and appears once the ECS selects that page.
+    """
     spans = [(a, a + w - 1) for a, w, o, p in layout.segs if p == 0]
     spans += [(a, a + max(c, PAGE_WORDS) - 1) for a, c, w in layout.rams]
-    for lo, hi in spans:
-        for rlo, rhi in ECS_ROM_RANGES + [ECS_RAM_RANGE]:
-            if lo <= rhi and rlo <= hi:
-                return True
-    return False
+
+    def hit(ranges):
+        return any(lo <= rhi and rlo <= hi for lo, hi in spans for rlo, rhi in ranges)
+
+    flags = 0
+    if hit(ECS_HARD_ROM_RANGES + [ECS_RAM_RANGE]):
+        flags |= FLAG_ECS_OFF
+    if hit(ECS_PAGED_ROM_RANGES):
+        flags |= FLAG_ECS_RISK
+    return flags
 
 
 # ---------------------------------------------------------------------------------------
@@ -405,8 +425,8 @@ def layout_flags(layout, flags):
         flags |= FLAG_RAM
     if any(p for a, w, o, p in layout.segs):
         flags |= FLAG_PAGED
-    if not flags & FLAG_ECS and ecs_conflict(layout):
-        flags |= FLAG_ECS_OFF
+    if not flags & FLAG_ECS:
+        flags |= ecs_conflict(layout)
     return flags
 
 
@@ -454,6 +474,87 @@ def load_image_bytes(path):
             return zf.read(imgs[0])
     with open(path, 'rb') as f:
         return f.read(2 * 1024 * 1024 + 1)
+
+
+# ---------------------------------------------------------------------------------------
+# The core's cart loader, as the RTL will be (DESIGN 5.2, module 12)
+# ---------------------------------------------------------------------------------------
+#
+# The APF bridge delivers a file in whole 32-bit words, and data_loader (OUTPUT_WORD_SIZE=1)
+# emits every byte of every word, so a file whose length is not a multiple of 4 arrives with
+# 1-3 pad bytes after its end. The loader therefore never counts strobes: it takes the file
+# length from the data table entry the host writes for the cartridge slot (id 0x100, the
+# size is the word after the id: word 2*index+1), CRCs exactly that many bytes, and the
+# image is ceil(length/2) words (an odd last byte is the high byte, the low byte 0).
+
+CART_SLOT_ID = 0x100
+
+
+def bridge_strobes(data, pad=0xA5):
+    """The byte strobes data_loader gives for a file: the file, padded to whole 32-bit words.
+
+    The pad value is whatever the bridge word held; any value must give the same result.
+    """
+    return bytes(data) + bytes([pad & 0xFF]) * (-len(data) % 4)
+
+
+def datatable(sizes):
+    """The data table the host writes: {slot id: size in bytes} -> words id0, size0, id1, ..."""
+    out = []
+    for sid, size in sizes.items():
+        out += [sid, size]
+    return out
+
+
+def datatable_size(table, slot_id=CART_SLOT_ID):
+    """Size of a slot from the data table: the word after the slot id (word 2*index+1)."""
+    for i in range(0, len(table) - 1, 2):
+        if table[i] == slot_id:
+            return table[i + 1]
+    raise KeyError('slot %X not in the data table' % slot_id)
+
+
+def loader_load(strobes, length):
+    """What the loader keeps from the strobes: (CRC32, image words).
+
+    Byte n of the stream is used only while n < length; strobes after that are bridge
+    padding and change neither the CRC nor the image.
+    """
+    crc = 0xFFFFFFFF
+    words = [0] * (-(-length // 2))
+    for n, b in enumerate(strobes):
+        if n >= length:
+            break
+        crc = _crc_byte(crc, b)
+        if n & 1:
+            words[n >> 1] |= b
+        else:
+            words[n >> 1] = b << 8
+    return crc ^ 0xFFFFFFFF, words
+
+
+def _crc_table():
+    t = []
+    for i in range(256):
+        c = i
+        for _ in range(8):
+            c = (c >> 1) ^ 0xEDB88320 if c & 1 else c >> 1
+        t.append(c)
+    return t
+
+
+_CRC_T = _crc_table()
+
+
+def _crc_byte(crc, b):
+    """One byte of the loader's CRC32 register (reflected, poly EDB88320, init ~0)."""
+    return _CRC_T[(crc ^ b) & 0xFF] ^ (crc >> 8)
+
+
+def load_through_loader(data, pad=0xA5):
+    """A file as the core receives it: bridge strobes + data table length -> (CRC32, words)."""
+    table = datatable({CART_SLOT_ID: len(data)})
+    return loader_load(bridge_strobes(data, pad), datatable_size(table))
 
 
 def bytes_to_words(data):

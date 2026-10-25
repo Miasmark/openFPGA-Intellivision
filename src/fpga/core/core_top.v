@@ -17,9 +17,10 @@
 // SRAM), with the cartridge length from the data table (apf_datatable).
 // Step 3: the machine (intv_machine: CP1610, bus fabric, scratchpad,
 // System RAM, GRAM, STIC and PSG register stubs) runs the EXEC from the
-// first frame after the loader is ready. No picture or sound from it yet:
-// the test pattern stays, and the machine's status is readable over the
-// bridge (0x60000000) for debugging.
+// first frame after the loader is ready.
+// Step 4: the STIC (backgrounds, BUSRQ) draws the picture once the machine
+// runs; the test pattern shows while it is held (loading, a required slot
+// missing or refused). The step-3 status register at 0x60000000 is gone.
 //
 
 `default_nettype none
@@ -377,9 +378,6 @@ synch_3 s01(pll_core_locked, pll_core_locked_s, clk_74a);
 //   0x10000000  settings (interact.json)
 //   0x20000000  JLP flash (0x106, nonvolatile; step 11)
 //   0x50000000  save state blob (step 7; DESIGN.md 4.1)
-//   0x60000000  machine status, read only (step 3, debugging): [15:0] the
-//               address of the last opcode fetch, [25:16] its opcode,
-//               [28] CPU halted, [29] CPU held in reset, [31:30] 0
 //   0xF8000000  APF command interface
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -417,18 +415,12 @@ end
 // JLP flash (step 11): nothing is stored yet. Its size in the data table is
 // 0 (below), and a read of 0x20xxxxxx returns 0 (the mux's default).
 
-// Machine status (0x60000000), from the machine section below
-    reg     [31:0]  mstat_74 = 32'd0;
-
 // for bridge write data, we just broadcast it to all bus devices
 // for bridge read data, we have to mux it
 always @(*) begin
     casex(bridge_addr)
     default: begin
         bridge_rd_data <= 0;
-    end
-    32'h6xxxxxxx: begin
-        bridge_rd_data <= mstat_74;
     end
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -678,13 +670,13 @@ data_loader #(
     wire            cbus_req, cbus_we;
     wire    [15:0]  cbus_addr, cbus_wdata;
     wire    [11:0]  exec_addr;
-    wire    [10:0]  grom_addr;
+    wire    [10:0]  grom_addr, vgrom_addr;
     wire    [15:0]  cbus_rdata;
     wire    [1:0]   cbus_kind;
     wire            aux_ack;
     wire    [15:0]  aux_rdata;
     wire    [9:0]   exec_q;
-    wire    [7:0]   grom_q, ivoice_q;
+    wire    [7:0]   grom_q, vgrom_q, ivoice_q;
     wire    [31:0]  ss_rdata_media;
 
 intv_media media (
@@ -717,6 +709,8 @@ intv_media media (
     .exec_q     ( exec_q ),
     .grom_addr  ( grom_addr ),
     .grom_q     ( grom_q ),
+    .vgrom_addr ( vgrom_addr ),
+    .vgrom_q    ( vgrom_q ),
     .ivoice_addr( 11'd0 ),
     .ivoice_q   ( ivoice_q ),
     .ready      ( cart_ready ),
@@ -785,22 +779,26 @@ intv_timing timing (
 );
 
 ////////////////////////////////////////////////////////////////////////////////
-// The machine (step 3)
+// The machine (steps 3-4)
 ////////////////////////////////////////////////////////////////////////////////
 
     wire    [2:0]   m_phase;
     wire    [15:0]  m_dout, m_din, m_addr;
     wire            m_fetch, m_hold, m_halted;
+    wire    [3:0]   stic_colour;
     wire    [31:0]  ss_rdata_machine;
 
 intv_machine machine (
     .clk            ( clk_sys ),
     .mreset         ( machine_reset ),
     .ce             ( ce_cpu ),
+    .ce_pix         ( ce_stic ),
+    .live           ( live ),
     .hcnt           ( hcnt ),
     .vcnt           ( vcnt ),
     .cfg_hlt_imm    ( 1'b0 ),
     .cfg_sdbd_r6_mame ( 1'b0 ),
+    .busrq_en       ( 1'b1 ),
     .pad_r          ( 8'hFF ),          // input module: step 6
     .pad_l          ( 8'hFF ),
     .cart_req       ( cbus_req ),
@@ -814,6 +812,9 @@ intv_machine machine (
     .exec_q         ( exec_q ),
     .grom_addr      ( grom_addr ),
     .grom_q         ( grom_q ),
+    .vgrom_addr     ( vgrom_addr ),
+    .vgrom_q        ( vgrom_q ),
+    .colour         ( stic_colour ),
     .phase          ( m_phase ),
     .dout           ( m_dout ),
     .din            ( m_din ),
@@ -828,29 +829,9 @@ intv_machine machine (
     .ss_rdata       ( ss_rdata_machine )
 );
 
-// Machine status for the bridge (0x60000000): the last opcode fetch. It is
-// read across clock domains as a quasi-static debugging value (the groups
-// are asynchronous in the SDC); a read may catch it mid-update.
-    reg     [15:0]  mstat_pc = 16'd0;
-    reg     [9:0]   mstat_op = 10'd0;
-    reg     [1:0]   mstat_f = 2'b00;
-    reg     [31:0]  mstat = 32'd0;
-always @(posedge clk_sys) begin
-    if (ce_cpu) begin
-        mstat_f <= {mstat_f[0], m_fetch};       // BAR, NACT, DTB
-        if (m_fetch)
-            mstat_pc <= m_dout;
-        if (mstat_f[1] && m_phase == 3'd3)
-            mstat_op <= m_din[9:0];
-    end
-    mstat <= {2'b00, m_hold, m_halted, 2'b00, mstat_op, mstat_pc};
-end
-always @(posedge clk_74a)
-    mstat_74 <= mstat;
-
     wire            in_pf;
     wire    [7:0]   pf_x, pf_y;
-    wire    [3:0]   colour;
+    wire    [3:0]   pat_colour, colour;
 
 // Required slots: cartridge, EXEC, GROM (data.json)
 test_pattern pattern (
@@ -860,8 +841,13 @@ test_pattern pattern (
     .slot_st    ( slot_st ),
     .slot_req   ( 6'b001101 ),
     .len_st     ( cart_len_st ),
-    .colour     ( colour )
+    .colour     ( pat_colour )
 );
+
+// The STIC's picture once the machine runs, else the test pattern (its
+// slot indicators say what is missing). machine_reset changes only at
+// loads and resets.
+    assign colour = machine_reset ? pat_colour : stic_colour;
 
 pocket_video video (
     .clk_sys    ( clk_sys ),

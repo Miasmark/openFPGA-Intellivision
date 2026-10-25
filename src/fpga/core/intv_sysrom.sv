@@ -9,7 +9,8 @@
 //
 // The ECS ROM (12,288 x 10) is in the SRAM instead (intv_media.sv).
 // Written by the loader at load time; each has one read port with one clk
-// of latency. ROMs are not machine state (DESIGN.md 4.4).
+// of latency, GROM a second one for the STIC (vgrom_addr / vgrom_q, step
+// 4). ROMs are not machine state (DESIGN.md 4.4).
 //
 // SPDX-License-Identifier: MIT
 
@@ -28,6 +29,8 @@ module intv_sysrom (
     output logic      [9:0]  exec_q,
     input  wire logic [10:0] grom_addr,
     output logic      [7:0]  grom_q,
+    input  wire logic [10:0] vgrom_addr,
+    output logic      [7:0]  vgrom_q,
     input  wire logic [10:0] ivoice_addr,
     output logic      [7:0]  ivoice_q
 );
@@ -44,6 +47,8 @@ module intv_sysrom (
         if (we && wsel == 2'd1) grom_mem[waddr[10:0]] <= wdata[7:0];
         grom_q <= grom_mem[grom_addr];
     end
+    always_ff @(posedge clk)
+        vgrom_q <= grom_mem[vgrom_addr];
     always_ff @(posedge clk) begin
         if (we && wsel == 2'd2) ivoice_mem[waddr[10:0]] <= wdata[7:0];
         ivoice_q <= ivoice_mem[ivoice_addr];

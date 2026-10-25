@@ -66,6 +66,8 @@ module intv_media #(
     output logic      [9:0]  exec_q,
     input  wire logic [10:0] grom_addr,
     output logic      [7:0]  grom_q,
+    input  wire logic [10:0] vgrom_addr,      // the STIC's GROM port (step 4)
+    output logic      [7:0]  vgrom_q,
     input  wire logic [10:0] ivoice_addr,
     output logic      [7:0]  ivoice_q,
 
@@ -162,6 +164,7 @@ module intv_media #(
         .we(rom_we), .wsel(rom_wsel), .waddr(rom_waddr), .wdata(rom_wdata),
         .exec_addr(exec_addr), .exec_q(exec_q),
         .grom_addr(grom_addr), .grom_q(grom_q),
+        .vgrom_addr(vgrom_addr), .vgrom_q(vgrom_q),
         .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q)
     );
 

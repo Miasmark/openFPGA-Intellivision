@@ -17,7 +17,7 @@
 // then $1004 (DESIGN 2.1: U9 supplies them; MAME intv_m.cpp:550-561).
 //
 // Address decode (DESIGN 2.6; reads unless marked):
-//   $0000-$003F             STIC registers (intv_stic_regs); writes also from
+//   $0000-$003F             STIC registers (intv_stic); writes also from
 //                           the aliases $4000, $8000, $C000 ($x000-$x03F);
 //                           a read of $x021 reaches the mode latch
 //   $0100-$01EF             scratchpad, 8-bit: the upper byte reads 0

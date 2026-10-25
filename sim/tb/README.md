@@ -8,7 +8,7 @@ to `sim/work*`.
 | `tb_timing.sv` | 1: timing, video port, timing state port | `sim/tb/run_tb_timing.sh --all` |
 | `tb_loader.sv` | 2: loader, CRC table, page table, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` |
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
-| `tb_system.sv` | 3: the machine (CPU, bus fabric, RAMs, STIC/PSG stubs) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all` |
+| `tb_system.sv` | 3-4: the machine (CPU, bus fabric, RAMs, STIC, PSG stub) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; step 4's frame gate `--screens` |
 
 `tb_loader.py` builds `tb_loader.sv` with the real `core_bridge_cmd.v`,
 agg23's `data_loader.sv`, `apf_datatable.sv` and `intv_media.sv`, plus our
@@ -52,7 +52,7 @@ restored into the other CPU instance, fresh or stale, and run on).
 `run_tb_cpu.sh --all` also builds planted faults and fails unless the
 bench catches each one.
 
-`tb_system.py` runs `tb_system.sv`: `intv_machine` with the real
+`tb_system.py` runs `tb_system.sv` (step 4 additions below): `intv_machine` with the real
 `intv_timing`, `intv_media` and the SRAM model, the system ROMs and the
 cartridge loaded through the loader's byte port, for 10 frames
 (149,340 CPU cycles; systest 22). Images: no cartridge, Astrosmash (from
@@ -85,3 +85,51 @@ one cycle either way, hand controllers swapped, closed GRAM reads with 11
 offset bits, cartridge writes not asked or cut to 8 bits) and the state
 port (RAM, PSG, held cartridge word, IAB vector flag, handshake, latched
 address, and restore writes lost in GRAM, scratchpad or System RAM alone).
+
+Step 4 (the STIC, `intv_stic.sv`). The model runs in STIC mode `stic`
+(BUSRQ on, as the core runs it) for every image except `systest` (its
+probe delays were tuned without BUSRQ) and `astro_nobusrq` (Astrosmash
+again with `+busrq=0`, model mode `none`). Every run is also compared on
+the STIC's side: every picture (189 x 240 colours, `+pic`, the model's
+picture numbering), every row fetch (its cycle's frame, row, loaded or
+missed, the FIFO address counter, the 20 words loaded) and every card row
+(card, GROM / GRAM / squares, card address at the row's first line); the
+dumps add the row buffer and the FIFO counter. Two more round trips where
+the display is on: a restore into a reset machine 17 clk_sys into a row
+copy (word 8 of 20, the CPU in BUSAK), and a rewind restore 3 cycles into
+a fetch line (the CPU in BUSAK, the card engine building the row's first
+line); the bench saves and restores its own picture capture with the
+state. Image `sticbus` runs our `sim/testroms/sticbus.asm` (24 frames,
+BUSRQ on): pseudo-random BACKTAB and GRAM (every card kind), delays,
+border extensions, Color Stack and FGBG frames, blank frames with a late
+border colour (it shows from that pixel on: STIC_NOTES D17), a display
+enabled after the window (blank, STIC_NOTES D8), a frame without INTAK
+(the FIFO counter past System RAM), shift blocks that make the CPU miss
+row fetches, and the row-load deadline exactly: BUSAK at R + 57 (the row
+loads) and at R + 58 (missed); the bench fails (STICBUS_DEADLINE) unless
+the model shows both. `--all` adds 41 STIC plants (colour-stack advance,
+restart and row start, vertical and horizontal delay one short, top
+border extension, BUSRQ three lines a row, frame BUSRQ 43 cycles, GRAM /
+GROM select swapped, FGBG GROM with 256 cards, squares off, squares
+quadrants 1 and 2 swapped, FIFO counter not cleared by INTAK or not
+stopped, missed rows loaded anyway, fetch a line late, display enable
+read live, border colour a CPU cycle late or latched per frame; the
+step-4 review's: pastel foreground dropped, FGBG background bits 12/13
+swapped, squares colour 7 shown direct, squares quadrant 3 bit 2 dropped,
+160th column shown, left extension ignored, pixel order reversed, frame
+BUSRQ always on, 13th row fetch dropped, Color Stack GROM limited to 64
+cards, stack advance on squares cards, top extension moved by VDR,
+counter stepping on missed rows, row-load deadline a cycle early, a cycle
+late or two late; state port: row buffer, line buffer, copy state, the
+frame's latches, the next pixel, the colour-stack position or its row
+start lost), some of them on the frame gate's games (`('screen', name,
+pictures)`).
+
+`--screens` is step 4's frame gate (DESIGN 9 step 4; SCREENS): the EXEC
+without a cartridge (600 pictures) and with Astrosmash (its title screen,
+700), Tower of Doom (700), Diner (300), Dig Dug (700), Sewer Sam (300)
+and TRON Solar Sailer (700), as far as the MAME snapshots the model was
+checked against (docs/STIC_NOTES.md 3). The bench runs with `+bushash=1`
+(one hash a frame of its B and S lines instead of the lines) while the
+model runs beside it; every picture, row fetch, card row and per-frame
+bus hash must be equal.

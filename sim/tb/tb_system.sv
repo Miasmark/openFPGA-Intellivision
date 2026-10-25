@@ -1,8 +1,9 @@
-// Step 3 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
-// fabric, RAMs, STIC and PSG register stubs) with the real timing
+// Step 3-4 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
+// fabric, RAMs, the STIC, the PSG register stub) with the real timing
 // (intv_timing) and cartridge side (intv_media and our SRAM model), running
-// the EXEC with or without a cartridge. The bench writes what the bus does;
-// sim/tb/tb_system.py compares it with tools/intv_system.py cycle by cycle.
+// the EXEC with or without a cartridge. The bench writes what the bus does,
+// what the STIC fetches and the pictures it draws; sim/tb/tb_system.py
+// compares them with tools/intv_system.py cycle by cycle and pixel by pixel.
 //
 // Plusargs
 //   +exec=F +grom=F     the system ROM files (loaded through intv_media's
@@ -12,6 +13,10 @@
 //   +pads=RRLL          the hand controllers' bytes at $01FE (right) and
 //                       $01FF (left), hex (default FFFF: nothing pressed)
 //   +log=F              the output (below)
+//   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
+//   +pic=F              write every picture to F (binary, see below)
+//   +bushash=1          instead of B and S lines, one H line a frame with
+//                       a hash of them (long runs; no round trips)
 //   +dump=C             also freeze after cycle C-1 and dump every state
 //                       word (then run on)
 //   +rt=M +rtcyc=C +rtsub=K [+rton=R]
@@ -39,13 +44,30 @@
 //                       latched address, d = dout; IAB d = din
 //   S c r0 .. r7 f      a step starts (opcode fetch or INTAK): registers and
 //                       {S,Z,O,C,I,D} in that cycle
+//   G c r ok a          row fetch r decided in cycle c (the fetch cycle):
+//                       ok = loaded, a = the FIFO address counter
+//   GW c w0 .. w19      the row just loaded (BACKTAB words)
+//   C c r col k base    the card engine at the first line of card row r:
+//                       k 0 GROM, 1 GRAM (base = card address), 2 squares
+//   H k hb nb hs ns     +bushash: frame k's B lines (hb, count nb) and S
+//                       lines (hs, ns), FNV-1a over 32-bit words: B c ph a
+//                       d, S c r0 .. r7 f; S lines of cycle 0 are left out
 //   M c hs cs           the STIC's handshake or mode latch (csmode) changed:
 //                       their values during cycle c (also once after a
 //                       restore; the reader drops repeats)
-//   L ...               load results;  R ...  round-trip notes
+//   L ...               load results;  R ...  round-trip notes ("R mark":
+//                       the state is saved here; lines from here to "R
+//                       rewind" belong to the run that is rewound)
 //   W k id w value      every state word at a dump (k = 1: +dump, 2: the
 //                       end, frozen after cycle N-1)
 //   END / FAIL text
+// Pictures (+pic): picture n (the model's numbering: frame n - 1's display)
+// is 189 x 240 STIC colours, raster lines 46-261 of frame n - 1 and 0-23
+// of frame n, pixel clocks 24-212 (tools/stic.py); each record is the
+// 32-bit number n, then 5,670 32-bit words of eight 4-bit pixels (pixel
+// 8i + j in bits 4j+3:4j), all as $fwrite %u writes them. After a rewind
+// (+rt=2) the frames from the rewind on are written again; the last record
+// of a number counts.
 //
 // SPDX-License-Identifier: MIT
 
@@ -97,9 +119,9 @@ module tb_system;
     wire logic        aux_ack;
     wire logic [15:0] aux_rdata;
     wire logic [11:0] exec_addr;
-    wire logic [10:0] grom_addr;
+    wire logic [10:0] grom_addr, vgrom_addr;
     wire logic [9:0]  exec_q;
-    wire logic [7:0]  grom_q, ivoice_q;
+    wire logic [7:0]  grom_q, vgrom_q, ivoice_q;
     wire logic [16:0] sram_a;
     wire logic [15:0] sram_dq_out, sram_dq_in;
     wire logic        sram_dq_oe, sram_oe_n, sram_we_n, sram_ub_n, sram_lb_n;
@@ -113,7 +135,8 @@ module tb_system;
         .bus_paged(c_paged),
         .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
-        .exec_addr, .exec_q, .grom_addr, .grom_q, .ivoice_addr(11'd0), .ivoice_q,
+        .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q,
+        .ivoice_addr(11'd0), .ivoice_q,
         .ready, .busy, .err, .len_st(), .slot_st, .crc, .words, .layout, .flags, .hit,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_c),
         .sram_a, .sram_dq_out, .sram_dq_oe, .sram_dq_in, .sram_oe_n, .sram_we_n,
@@ -126,13 +149,15 @@ module tb_system;
     wire logic [2:0]  phase;
     wire logic [15:0] dout, din, addr;
     wire logic        fetch, hold, halted;
+    wire logic [3:0]  colour;
+    logic             busrq_en = 1'b1;
 
     intv_machine dut (
-        .clk, .mreset, .ce(ce_cpu), .hcnt, .vcnt,
-        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .pad_r, .pad_l,
+        .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
+        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en, .pad_r, .pad_l,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
-        .exec_addr, .exec_q, .grom_addr, .grom_q,
+        .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
         .phase, .dout, .din, .addr, .fetch, .hold, .halted,
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_m));
 
@@ -156,7 +181,17 @@ module tb_system;
     longint rw_val = 0;
     logic [1:0] ml = 2'b00;               // last logged {hs, csmode}
     logic   ml_force = 1'b0;
+    int     bushash = 0;
+    logic [31:0] hb = 32'h811C9DC5, hs_ = 32'h811C9DC5;
+    int     nb = 0, ns = 0;
+    localparam longint FRAME = 14934;
+
+    function automatic logic [31:0] fnv(input logic [31:0] h, input logic [31:0] x);
+        fnv = (h ^ x) * 32'h01000193;
+    endfunction
+
     always @(posedge clk) begin
+        logic [15:0] ba, bd;
         if (rw_req)
             cyc <= rw_val;
         else if (ce_cpu && !hold) begin
@@ -165,17 +200,86 @@ module tb_system;
                 ml <= {dut.stic.hs, dut.stic.csmode};
                 ml_force <= 1'b0;
             end
-            if (cyc >= 0 && phase != PH_NACT)
-                $fdisplay(fd, "B %0d %0d %04x %04x", cyc, phase,
-                          (phase == 3'd4 || phase == PH_INTAK) ? dout : (phase == 3'd2 ? 16'd0 : addr),
-                          (phase == 3'd4 || phase == PH_INTAK) ? 16'd0
-                          : (phase == 3'd5 || phase == 3'd6) ? dout : din);
-            if (cyc >= 0 && (fetch || phase == PH_INTAK))
-                $fdisplay(fd, "S %0d %04x %04x %04x %04x %04x %04x %04x %04x %02x", cyc,
-                          dut.cpu.r[0], dut.cpu.r[1], dut.cpu.r[2], dut.cpu.r[3],
-                          dut.cpu.r[4], dut.cpu.r[5], dut.cpu.r[6], dut.cpu.r[7],
-                          {dut.cpu.fS, dut.cpu.fZ, dut.cpu.fO, dut.cpu.fC, dut.cpu.fI, dut.cpu.fD});
+            ba = (phase == 3'd4 || phase == PH_INTAK) ? dout : (phase == 3'd2 ? 16'd0 : addr);
+            bd = (phase == 3'd4 || phase == PH_INTAK) ? 16'd0 : (phase == 3'd5 || phase == 3'd6) ? dout : din;
+            if (cyc >= 0 && phase != PH_NACT) begin
+                if (bushash != 0) begin
+                    hb = fnv(fnv(fnv(fnv(hb, 32'(cyc)), 32'(phase)), 32'(ba)), 32'(bd));
+                    nb++;
+                end else
+                    $fdisplay(fd, "B %0d %0d %04x %04x", cyc, phase, ba, bd);
+            end
+            if (cyc >= 0 && (fetch || phase == PH_INTAK)) begin
+                if (bushash != 0) begin
+                    if (cyc > 0) begin
+                        hs_ = fnv(hs_, 32'(cyc));
+                        for (int i = 0; i < 8; i++) hs_ = fnv(hs_, 32'(dut.cpu.r[i]));
+                        hs_ = fnv(hs_, 32'({dut.cpu.fS, dut.cpu.fZ, dut.cpu.fO, dut.cpu.fC,
+                                            dut.cpu.fI, dut.cpu.fD}));
+                        ns++;
+                    end
+                end else
+                    $fdisplay(fd, "S %0d %04x %04x %04x %04x %04x %04x %04x %04x %02x", cyc,
+                              dut.cpu.r[0], dut.cpu.r[1], dut.cpu.r[2], dut.cpu.r[3],
+                              dut.cpu.r[4], dut.cpu.r[5], dut.cpu.r[6], dut.cpu.r[7],
+                              {dut.cpu.fS, dut.cpu.fZ, dut.cpu.fO, dut.cpu.fC, dut.cpu.fI, dut.cpu.fD});
+            end
+            if (bushash != 0 && cyc >= 0 && (cyc + 1) % FRAME == 0) begin
+                $fdisplay(fd, "H %0d %08x %0d %08x %0d", cyc / FRAME, hb, nb, hs_, ns);
+                hb = 32'h811C9DC5; hs_ = 32'h811C9DC5; nb = 0; ns = 0;
+            end
             cyc <= cyc + 1;
+        end
+    end
+
+    // ------------------------------------------------- the STIC's side
+    // row fetches (decided the clk after the fetch cycle's ce) and the card
+    // engine at the first line of each card row
+    always @(posedge clk) begin
+        if (dut.stic.live && !mreset && !ss_en && cyc >= 0) begin
+            if (dut.stic.cp_arm)
+                $fdisplay(fd, "G %0d %0d %0d %0d", cyc, (32'(vcnt) - 69 - 2 * 32'(dut.stic.vdr_l)) / 16,
+                          (!busrq_en || dut.stic.busak) ? 1 : 0, dut.stic.cnt);
+            if (dut.stic.cp_on && dut.stic.cp_ph && dut.stic.cp_j == 5'd19) begin
+                $fwrite(fd, "GW %0d", cyc);
+                for (int i = 0; i < 19; i++) $fwrite(fd, " %04x", dut.stic.rowbuf.mem[i]);
+                $fwrite(fd, " %04x\n", dut.stic.cp_w);
+            end
+            if (ce_stic && dut.stic.eng_card && dut.stic.rstart)
+                $fdisplay(fd, "C %0d %0d %0d %0d %0d", cyc, dut.stic.yy_t[8:4], dut.stic.ec[4:0],
+                          dut.stic.squares ? 2 : dut.stic.w[11] ? 1 : 0,
+                          dut.stic.squares ? 14'd0 : (dut.stic.csmode && !dut.stic.w[11])
+                          ? dut.stic.w & 14'h07F8 : dut.stic.w & 14'h01F8);
+        end
+    end
+
+    // pictures: two buffers, picture of frame k in buf[k & 1]
+    string  pic_f;
+    int     pfd = 0;
+    logic [3:0] pbuf [2][45360];
+    always @(posedge clk) begin
+        longint k;
+        int y, x;
+        if (pfd != 0 && ce_stic && live && cyc >= 0) begin
+            k = cyc / FRAME;
+            x = 32'(hcnt) - 24;
+            if (vcnt == 9'd24 && hcnt == 9'd0 && k >= 1) begin
+                $fwrite(pfd, "%u", 32'(k));
+                for (int i = 0; i < 5670; i++) begin
+                    logic [31:0] wv;
+                    for (int j = 0; j < 8; j++) wv[4*j +: 4] = pbuf[(k - 1) & 1][8 * i + j];
+                    $fwrite(pfd, "%u", wv);
+                end
+            end
+            if (x >= 0 && x < 189) begin
+                if (vcnt >= 9'd46 && vcnt < 9'd262) begin
+                    y = 32'(vcnt) - 46;
+                    pbuf[k & 1][y * 189 + x] = colour;
+                end else if (vcnt < 9'd24 && k >= 1) begin
+                    y = 216 + 32'(vcnt);
+                    pbuf[(k - 1) & 1][y * 189 + x] = colour;
+                end
+            end
         end
     end
 
@@ -203,10 +307,11 @@ module tb_system;
 
     // --------------------------------------------------------- state port
     // module id, word count (the order is the write order)
-    localparam int NMOD = 11;
-    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 52, 14, 256, 256, 96, 256, 256, 21};
+    localparam int NMOD = 13;
+    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 55, 14, 256, 256, 96, 256, 256, 21, 20, 64};
     logic [31:0] saved [NMOD][256];
+    logic [3:0]  pbuf_saved [2][45360];
 
     task automatic ss_read(input int id, input int w, output logic [31:0] v);
         @(negedge clk);
@@ -268,6 +373,8 @@ module tb_system;
     endtask
 
     task automatic save_all();
+        for (int b = 0; b < 2; b++)               // the bench's own picture capture (rewind)
+            for (int i = 0; i < 45360; i++) pbuf_saved[b][i] = pbuf[b][i];
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
@@ -324,6 +431,10 @@ module tb_system;
             dut.sysram.mem[i] = 16'(~(i < 256 ? saved[6][i] : saved[7][i - 256]) ^ 32'(i * 4097));
         for (int i = 0; i < 512; i++)
             dut.gram.mem[i] = 8'(~(i < 256 ? saved[8][i] : saved[9][i - 256]) ^ 32'(i * 41));
+        for (int i = 0; i < 32; i++)
+            dut.stic.rowbuf.mem[i] = 14'(~(i < 20 ? saved[11][i] : 0) ^ 32'(i * 911));
+        for (int i = 0; i < 64; i++)
+            dut.stic.linebuf.mem[i] = 16'(~saved[12][i] ^ 32'(i * 40503));
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_write(mod_id[m], w, ~saved[m][w] ^ (32'h9E3779B9 * (w + 1)));
@@ -354,6 +465,16 @@ module tb_system;
         void'($value$plusargs("rtsub=%d", rtsub));
         void'($value$plusargs("rton=%d", rton));
         void'($value$plusargs("dump=%d", dumpc));
+        void'($value$plusargs("bushash=%d", bushash));
+        begin
+            int b;
+            if ($value$plusargs("busrq=%d", b)) busrq_en = b != 0;
+        end
+        if ($value$plusargs("pic=%s", pic_f)) begin
+            pfd = $fopen(pic_f, "wb");
+            if (pfd == 0) fail($sformatf("cannot open %s", pic_f));
+        end
+        if (bushash != 0 && rt != 0) fail("+bushash with a round trip");
         begin
             logic [15:0] pads;
             if ($value$plusargs("pads=%h", pads)) {pad_r, pad_l} = pads;
@@ -384,29 +505,36 @@ module tb_system;
         repeat (10) @(negedge clk);
         mres_tb = 1'b0;
 
-        if (rt != 0 && rtcyc >= 0) begin
-            wait_cycle(rtcyc);
-            repeat (rtsub) @(negedge clk);
-            freeze();
-            $fdisplay(fd, "R freeze at cycle %0d +%0d clk, timing word %08x", cyc, rtsub + 1,
-                      timing.mpos);
-            save_all();
-            restore_all(rt);
-            if (rt == 2) begin
-                @(negedge clk);
-                rw_val = rtcyc; rw_req = 1'b1;
-                repeat (2) @(negedge clk);
-                rw_req = 1'b0;
-                $fdisplay(fd, "R rewind %0d", rtcyc);
+        // the round trip and the first dump, in the order of their cycles
+        for (int pass = 0; pass < 2; pass++) begin
+            if (rt != 0 && rtcyc >= 0 && (pass == 0) == (dumpc < 0 || rtcyc < dumpc)) begin
+                wait_cycle(rtcyc);
+                repeat (rtsub) @(negedge clk);
+                freeze();
+                $fdisplay(fd, "R freeze at cycle %0d +%0d clk, timing word %08x", cyc, rtsub + 1,
+                          timing.mpos);
+                $fdisplay(fd, "R stic: row copy %0d word %0d, CPU in BUSAK %0d, hcnt %0d, card engine %0d",
+                          dut.stic.cp_on, dut.stic.cp_j, dut.stic.busak, hcnt, dut.stic.eng_card);
+                save_all();
+                $fdisplay(fd, "R mark");
+                restore_all(rt);
+                if (rt == 2) begin
+                    @(negedge clk);
+                    rw_val = rtcyc; rw_req = 1'b1;
+                    repeat (2) @(negedge clk);
+                    rw_req = 1'b0;
+                    for (int b = 0; b < 2; b++)
+                        for (int i = 0; i < 45360; i++) pbuf[b][i] = pbuf_saved[b][i];
+                    $fdisplay(fd, "R rewind %0d", rtcyc);
+                end
+                resume();
             end
-            resume();
-        end
-
-        if (dumpc >= 0) begin
-            wait_cycle(dumpc);
-            freeze();
-            dump_all(1);
-            resume();
+            if (pass == 0 && dumpc >= 0) begin
+                wait_cycle(dumpc);
+                freeze();
+                dump_all(1);
+                resume();
+            end
         end
 
         // just after the ce that ended cycle ncyc - 1
@@ -417,6 +545,7 @@ module tb_system;
         if (halted) $fdisplay(fd, "R CPU halted");
         $fdisplay(fd, nfail == 0 ? "END" : "END with failures");
         $fclose(fd);
+        if (pfd != 0) $fclose(pfd);
         $finish;
     end
 

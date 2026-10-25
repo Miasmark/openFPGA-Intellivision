@@ -26,6 +26,12 @@ simulator and comes first. Python 3, standard library only.
   any extra lump of cycles at an interrupt (`--max-lump`, default 0).
   Needs the user's BIOS, game images and traces, which stay outside the
   repo.
+- `cpu_buslog.py`: exports the model's bus-phase log, step ends and
+  final registers for the RTL lockstep bench (`sim/tb/tb_cpu.sv`, build
+  step 3): every program in `sim/tests/cpu`, a sweep over all 1024
+  opcodes (after SDBD and both branch outcomes too) and random programs,
+  each with save points for the round trip. Run by
+  `sim/tb/run_tb_cpu.sh`.
 - `mapper/`: cartridge mapper model and the CRC map table generator.
   Entry points: `gen_crc_table.py` (builds `data/cart_table.csv`, `data/layouts.json`
   and `src/fpga/core/tables/cart_*.mif|hex`) and `intv_mapper.py` (the model and

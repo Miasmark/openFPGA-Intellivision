@@ -156,8 +156,10 @@ values" (Undocumented_SDBD_Behavior), without details.
    can arrive and still be taken. The model samples at the boundary cycle.
    This sets the exact cycle of the first ISR instruction and of the BUSRQ
    response, which matter for STIC timing (DESIGN.md section 13, items 3-5).
-   Settle with the RTL (step 3) against the timing diagrams, then with MAME
-   traces and STIC test ROMs.
+   The RTL (step 3) fixes the convention, not the hardware fact: it samples
+   at the ce that starts the boundary cycle (see "RTL" below). Whether the
+   real chip needs the request a cycle earlier or later is still open and
+   moves the STIC's figures by a constant; settle with STIC test ROMs.
 2. **Phase position inside branches and stack reads** (estimated, see
    above). Only the totals are documented.
 3. **MAME trace comparison**: done, see "MAME lockstep" below. NEGR,
@@ -234,6 +236,89 @@ INTV_BIOS_DIR, INTV_GAME_DIR and INTV_TRACE_ROOT, or the matching options):
 
     python3 tools/lockstep.py                  # the three games
     python3 tools/lockstep.py --context 20 b17bomb
+
+## RTL (build step 3)
+
+`src/fpga/core/cp1610.sv` is the CPU in SystemVerilog, written from the
+documents above and this model, with the same choices (every row of the
+disagreement table, the undefined cases and both options). It runs one
+bus phase per `ce` (one CPU cycle). No tristate: a 3-bit phase code
+{BDIR, BC2, BC1} (DESIGN.md 2.5), `dout` and a combined `din`.
+
+- **Sequencer.** One state per bus cycle (fetch, operand read, SDBD
+  second read, write, direct address, idle, the nine interrupt cycles,
+  bus wait, halt), so `phase` and `dout` come from flip-flops only. The
+  instruction's effect lands at its last cycle, pointer updates at the
+  decode (the model's order: pointer first, then the result, so
+  `MVI@ R4, R4` gives the data and `ADD@ R5, R5` adds to the incremented
+  pointer). Cycle counts are the model's.
+- **Reset.** One IAB cycle loads the PC (S1 p.21), then the first fetch.
+  The model does not count that cycle; its cycle 0 is the fetch's BAR.
+- **Request lines** (active high in the core) are sampled at the `ce`
+  that ends the last cycle of an instruction or of a bus-wait cycle,
+  never elsewhere (not after the interrupt sequence, not while halted),
+  exactly where the model calls `_sample_irq`. The model's "line at
+  cycle c" is the RTL's sample at the `ce` that starts cycle c. A device
+  that changes a line with its own registered output at the `ce` ending
+  cycle c-1 is therefore seen at the `ce` ending cycle c (one cycle
+  later in model terms); step 4 must account for that constant when it
+  places SR1 and BUSRQ.
+- **Pins.** TCI pulses in the fetch's last cycle (the model's
+  cycle + 3). The SIN pulse (`pcit`) comes in the first cycle after the
+  fetch; the model's hook is at cycle + 2, inside the fetch, where the
+  opcode is not yet known (the bench checks RTL = model + 2). BEXT's
+  `ebci` is sampled at the end of the fetch with `ebca` = the condition
+  number (the model asks at cycle + 4). BDRDY is not modelled: the freeze
+  stops `ce` instead.
+- **Halt.** NACT until reset; the core has no STPST.
+- **State port** (DESIGN.md 4.3): eight 32-bit words, the 32 bytes of
+  DESIGN.md 4.4: R0-R7, the sequence's address and data, opcode, SDBD
+  low byte, cycle state and idle counter, the jump/SDBD/halt/branch
+  latches, S Z O C I D, the interruptible latch, both edge latches with
+  their last samples, halt pending and halted. Layout in the file header.
+  Every flip-flop that changes at run time is in it, so a save in any
+  cycle restores exactly; `ss_ctl` (step 7) still saves only at a
+  quiet point (DESIGN.md 4.2), and the `fetch` output marks an
+  instruction's first cycle for that.
+- **Execute datapath.** One adder and one result mux serve the
+  single-register, shift, register-register and read instructions; the
+  flags come from the result itself, not from the register file after
+  the write (a first version did that: 1,914 ALMs and a 18.7 ns path
+  into Z).
+- **Size.** Quartus 21.1 Lite, 5CEBA4F23C8, the CPU alone as top level
+  (bus and control ports as virtual pins, 42.95 MHz clk_sys constraint,
+  seed 1, in a scratch project outside the repo): 747 ALMs (4 %), 202
+  registers, no RAM, no DSP; worst setup slack +9.531 ns (slow 85 C),
+  worst hold +0.169 ns (fast 0 C). DESIGN.md section 3 estimated
+  900-1,500 ALMs.
+
+### Lockstep bench
+
+`sim/tb/tb_cpu.sv`, run by `sim/tb/run_tb_cpu.sh --all` (Verilator 5.040),
+compares the RTL with the model's bus-phase log exported by
+`tools/cpu_buslog.py`, in every cycle: the phase; the address on BAR and
+INTAK; the latched address and the data on DTB, ADAR, DW and DWS; the
+vector on IAB; BUSAK and halt; TCI and SIN. A step (instruction,
+interrupt, bus wait, halted cycle) must start in exactly the cycles where
+a model step ends, with R0-R7, S Z O C, I and D equal there, and the final
+state must agree. Case sets:
+
+| Set | Cases | What |
+|---|---|---|
+| tests | 35 | every program in `sim/tests/cpu` with its own start, stop, request lines, BEXT conditions and options (the 3 asm-error tests have no program; the 3 strict tests run non-strict, so the RTL's default choice is the one compared) |
+| sweep | 1,420 | every opcode once, after SDBD for each double-byte read, each branch taken and not taken, registers as in `run_cpu_tests.py`'s cycle sweep, at least 40 cycles each |
+| fuzz | 300 | random programs: all 64K words from a hash both sides compute, random registers, flags, I, start address, INTRM/INTR/BUSRQ windows, BEXT conditions, and both HLT and SDBD+R6 options; about 600 cycles each |
+
+Each set runs twice: straight, and with save points (state read through
+the state port mid-instruction, inside the interrupt sequence, inside bus
+waits, between HLT and the halt, and at random cycles; loaded into the
+other CPU instance, alternately reset first and left stale; read back;
+run on). Planted faults that the script builds and the bench must catch:
+10-cycle interrupt, INTRM as a level, SDBD bytes swapped, branch not
+taken with the trailing NACT, SWAP's S from bit 15, MVO interruptible, no
+line sample after a bus wait, JSR return address one low, NEGR 0 without
+C, and the state port missing the idle counter, the INTRM line sample,
+the SDBD low byte, the sequence data word or halt pending.
 
 ## Assembler
 

@@ -11,8 +11,14 @@
 //   - Lines 176-191 (the last card row): one indicator two cards wide per
 //     data slot, left to right cartridge, cartridge config, EXEC, GROM,
 //     ECS ROM, Intellivoice ROM: green = loaded with the expected size,
-//     yellow = loaded, other size, red = a required slot is empty, grey =
-//     an optional slot is empty. The rest of the row is black.
+//     yellow = loaded, other size (the cartridge: loaded with an error, or
+//     refused), red = a required slot is empty, grey = an optional slot is
+//     empty. The rest of the row is black. The cartridge's second card
+//     shows, once it is loaded, where its length came from (len_st,
+//     apf_datatable.sv len_chk): green = the data table, agreeing with the
+//     host's 0x0082 size; orange = they disagree (the table's was used);
+//     cyan = the table had no entry (the 0x0082 size was used); grey = the
+//     table, with no 0x0082 size to check it against.
 //   - The outermost pixel ring of the playfield is white, to check the
 //     crop; the border outside it is blue.
 //
@@ -26,6 +32,7 @@ module test_pattern (
     input  wire logic [7:0]  pf_y,      // 0..191
     input  wire logic [11:0] slot_st,   // 2 bits a slot: 0 empty, 1 other size, 2 ok
     input  wire logic [5:0]  slot_req,  // slot is required
+    input  wire logic [1:0]  len_st,    // cartridge length source (see above)
     output logic      [3:0]  colour
 );
 
@@ -63,6 +70,9 @@ module test_pattern (
             colour = (cx[0] ^ cy[0]) ? 4'd7 : 4'd0;                 // card grid
         else if (cx >= 5'd12)
             colour = 4'd0;
+        else if (cx == 5'd1 && st != 2'd0)                          // cartridge length
+            colour = len_st == 2'd1 ? 4'd5 : len_st == 2'd2 ? 4'd10
+                   : len_st == 2'd3 ? 4'd9 : 4'd8;
         else if (st == 2'd2)
             colour = 4'd5;                                          // ok: green
         else if (st == 2'd1)

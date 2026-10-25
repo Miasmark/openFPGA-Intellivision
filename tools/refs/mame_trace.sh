@@ -1,5 +1,6 @@
 #!/bin/bash
 # mame_trace.sh SYSTEM GAME_IMAGE FRAMES OUTDIR
+# GAME_IMAGE "none" runs the system with an empty cartridge slot.
 # Run the intv-only MAME on one cartridge image for FRAMES frames and write
 # OUTDIR/trace.log: one line per CP1610 instruction (total cycles, frame,
 # beam line, R0-R7, S/Z/O/C flags, PC and disassembly), each followed by
@@ -33,9 +34,11 @@ FRAMESUB = emu.add_machine_frame_notifier(function()
   if n >= $frames then d:command("traceflush"); m:exit() end
 end)
 LUA
+cart=(-cart "$img")
+[ "$img" = none ] && cart=()
 cd "$out"
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout 600 "$MAME" "$sys" \
-  -rompath "$MAME_ROMPATH" -hashpath "$MAME_HASHPATH" -cart "$img" \
+  -rompath "$MAME_ROMPATH" -hashpath "$MAME_HASHPATH" "${cart[@]}" \
   -debug -debugger none -autoboot_script "$out/trace.lua" -video none -sound none -nothrottle \
   -skip_gameinfo -nomouse -nojoystick -nvram_directory "$out/nvram" \
   -cfg_directory "$out/cfg" -snapshot_directory "$out/snap" \

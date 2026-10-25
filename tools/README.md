@@ -26,6 +26,21 @@ simulator and comes first. Python 3, standard library only.
   any extra lump of cycles at an interrupt (`--max-lump`, default 0).
   Needs the user's BIOS, game images and traces, which stay outside the
   repo.
+- `intv_system.py`: the Intellivision as build step 3 has it around the
+  CPU model: memory map, pull-ups, EXEC (10 bits), GROM, GRAM with its
+  windows, scratchpad and System RAM, STIC and PSG register stubs that
+  answer as MAME does, the frame timing (INTRM and the bus-copy window,
+  the STIC handshake) and the cartridge (the mapper model). The golden
+  model of `sim/tb/tb_system.py`. `intv_system.py mame TRACE [--cart IMG]`
+  compares it with a MAME trace, nothing replayed: every read and write
+  and every interrupt point must agree (no-cartridge, Astrosmash, Tower
+  of Doom; B-17 with `--mame-voice-zero`, as MAME reads $0080-$0081 as 0).
+- `cpu_buslog.py`: exports the model's bus-phase log, step ends and
+  final registers for the RTL lockstep bench (`sim/tb/tb_cpu.sv`, build
+  step 3): every program in `sim/tests/cpu`, a sweep over all 1024
+  opcodes (after SDBD and both branch outcomes too) and random programs,
+  each with save points for the round trip. Run by
+  `sim/tb/run_tb_cpu.sh`.
 - `mapper/`: cartridge mapper model and the CRC map table generator.
   Entry points: `gen_crc_table.py` (builds `data/cart_table.csv`, `data/layouts.json`
   and `src/fpga/core/tables/cart_*.mif|hex`) and `intv_mapper.py` (the model and
@@ -40,6 +55,7 @@ Where the sources disagree and what the model does: `docs/CPU_NOTES.md`.
     python3 tools/as1610.py prog.asm -o sim/work/prog.bin --cfg sim/work/prog.cfg -l -
     python3 tools/cp1610.py prog.asm --steps 200   # trace a program
     python3 tools/lockstep.py                 # model vs MAME traces (3 games)
+    python3 tools/intv_system.py mame T.log --cart G.int   # system model vs MAME
 
 Packaging (build step 1): `package.sh` assembles the SD card zip from
 `dist/` and a Quartus bitstream (`release/M_Intellivision_Pocket_<version>.zip`);

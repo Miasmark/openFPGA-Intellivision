@@ -9,9 +9,17 @@
 // Step 1 of DESIGN.md 9: the Pocket skeleton. PLL, the master timing with
 // its clock enables (intv_timing), the video windows and the Pocket video
 // port (pocket_video), a test pattern in the planned palette
-// (test_pattern, intv_palette), the data slots of DESIGN.md 5.6 through
-// the data loader into a byte-counting stand-in (slot_stub), silent audio,
-// and the save-state commands answered "not supported" until step 7.
+// (test_pattern, intv_palette), silent audio, and the save-state commands
+// answered "not supported" until step 7.
+// Step 2: the data slots of DESIGN.md 5.6 through the data loader into
+// intv_media (cartridge into the SRAM with its CRC32, CRC table and page
+// table; EXEC, GROM and Intellivoice ROMs into block RAM; ECS ROM into the
+// SRAM), with the cartridge length from the data table (apf_datatable).
+// Step 3: the machine (intv_machine: CP1610, bus fabric, scratchpad,
+// System RAM, GRAM, STIC and PSG register stubs) runs the EXEC from the
+// first frame after the loader is ready. No picture or sound from it yet:
+// the test pattern stays, and the machine's status is readable over the
+// bridge (0x60000000) for debugging.
 //
 
 `default_nettype none
@@ -307,13 +315,11 @@ assign dram_we_n = 'h1;
 assign dram_ras_n = 'h1;
 assign dram_cas_n = 'h1;
 
-// SRAM: the cartridge's memory from step 2 (DESIGN.md 5.1). Idle for now.
-assign sram_a = 'h0;
-assign sram_dq = {16{1'bZ}};
-assign sram_oe_n  = 1;
-assign sram_we_n  = 1;
-assign sram_ub_n  = 1;
-assign sram_lb_n  = 1;
+// SRAM: the cartridge's memory (DESIGN.md 5.1), driven by intv_media's
+// controller below; DQ is driven only during its writes.
+    wire    [15:0]  sram_dq_out;
+    wire            sram_dq_oe;
+assign sram_dq = sram_dq_oe ? sram_dq_out : {16{1'bZ}};
 
 assign dbg_tx = 1'bZ;
 assign user1 = 1'bZ;
@@ -365,12 +371,15 @@ synch_3 s01(pll_core_locked, pll_core_locked_s, clk_74a);
 //   0x00000000  cartridge (data slot 0x100)        \
 //   0x01000000  cartridge config (0x101)            |  through the data loader:
 //   0x02000000  EXEC (0x102)                        |  bits 27:24 name the slot
-//   0x03000000  GROM (0x103)                        |  (slot_stub; step 2 on)
+//   0x03000000  GROM (0x103)                        |  (intv_media)
 //   0x04000000  ECS ROM (0x104)                     |
 //   0x05000000  Intellivoice ROM (0x105)           /
 //   0x10000000  settings (interact.json)
 //   0x20000000  JLP flash (0x106, nonvolatile; step 11)
 //   0x50000000  save state blob (step 7; DESIGN.md 4.1)
+//   0x60000000  machine status, read only (step 3, debugging): [15:0] the
+//               address of the last opcode fetch, [25:16] its opcode,
+//               [28] CPU halted, [29] CPU held in reset, [31:30] 0
 //   0xF8000000  APF command interface
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -408,12 +417,18 @@ end
 // JLP flash (step 11): nothing is stored yet. Its size in the data table is
 // 0 (below), and a read of 0x20xxxxxx returns 0 (the mux's default).
 
+// Machine status (0x60000000), from the machine section below
+    reg     [31:0]  mstat_74 = 32'd0;
+
 // for bridge write data, we just broadcast it to all bus devices
 // for bridge read data, we have to mux it
 always @(*) begin
     casex(bridge_addr)
     default: begin
         bridge_rd_data <= 0;
+    end
+    32'h6xxxxxxx: begin
+        bridge_rd_data <= mstat_74;
     end
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
@@ -498,9 +513,9 @@ end
 // bridge data slot access
 // synchronous to clk_74a
 
-    reg     [9:0]   datatable_addr = 10'd0;
-    reg             datatable_wren = 1'b0;
-    reg     [31:0]  datatable_data = 32'd0;
+    wire    [9:0]   datatable_addr;
+    wire            datatable_wren;
+    wire    [31:0]  datatable_data;
     wire    [31:0]  datatable_q;
 
 core_bridge_cmd icb (
@@ -584,24 +599,43 @@ core_bridge_cmd icb (
 
 );
 
-// Data table: word 2 * index + 1 is a slot's size, which the Pocket reads to
-// decide how much of a nonvolatile slot to save. The JLP flash slot (index 6)
-// is 0 until step 11 stores flash; its size will then be the game's
-// (DESIGN.md 13, item 17).
-always @(posedge clk_74a) begin
-    datatable_wren <= 1'b1;
-    datatable_addr <= 10'd6 * 2 + 1;
-    datatable_data <= 32'd0;
-end
+// Data table: word 2 * index + 1 is a slot's size. The Pocket reads it to
+// decide how much of a nonvolatile slot to save: the JLP flash slot (index 6)
+// is written 0 until step 11 stores flash; its size will then be the game's
+// (DESIGN.md 13, item 17). The loader reads the cartridge's size from it,
+// once the host has sent "all complete" (apf_datatable.sv).
+    wire    [31:0]  cart_len;
+    wire    [1:0]   cart_len_chk;
+    wire            cart_len_valid;
+
+apf_datatable #(
+    .SLOT_ID    ( {16'd0, SLOT_CART} ),
+    .JLP_IDX    ( 6 )
+) dtab (
+    .clk        ( clk_74a ),
+    .allcomplete( dataslot_allcomplete ),
+    .wr_req     ( dataslot_requestwrite ),
+    .wr_id      ( dataslot_requestwrite_id ),
+    .wr_size    ( dataslot_requestwrite_size ),
+    .dt_addr    ( datatable_addr ),
+    .dt_wren    ( datatable_wren ),
+    .dt_data    ( datatable_data ),
+    .dt_q       ( datatable_q ),
+    .cart_len   ( cart_len ),
+    .len_chk    ( cart_len_chk ),
+    .len_valid  ( cart_len_valid )
+);
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // Loading
 //
 // agg23's data loader (pocket_utils/, MIT) turns the bridge's 32-bit writes
-// below 0x10000000 into bytes on clk_sys, one write strobe per byte.
-// slot_stub counts them per slot for the test pattern until the loaders of
-// steps 2 and 8-10 take them.
+// below 0x10000000 into bytes on clk_sys, one write strobe per byte;
+// intv_media takes them (DESIGN.md 5; the CFG slot is counted only until
+// step 8). The CPU (intv_machine) reaches the cartridge through its bus
+// port, and EXEC/GROM through the ROM read ports. The state port is tied
+// off until ss_ctl (step 7).
 ////////////////////////////////////////////////////////////////////////////////
 
     wire            ioctl_wr;
@@ -626,21 +660,88 @@ data_loader #(
     .write_data             ( ioctl_dout )
 );
 
-    wire    [11:0]  slot_st;
-
-slot_stub slots (
-    .clk        ( clk_sys ),
-    .wr         ( ioctl_wr ),
-    .addr       ( ioctl_addr ),
-    .slot_st    ( slot_st )
-);
-
 // Into clk_sys: PLL lock, the host's reset, the menu's Reset and the
 // settings (they change rarely, only from the menu: two flip-flops a bit).
     reg     [2:0]   lock_s = 3'd0, rst_s = 3'd0, mrst_s = 3'd0;
     reg     [1:0]   border_s = 2'b11;
     reg             timing_reset = 1'b1;
     reg             machine_reset = 1'b1;
+
+    wire    [11:0]  slot_st;
+    wire            cart_ready, cart_busy, cart_hit;
+    wire    [4:0]   cart_err;
+    wire    [1:0]   cart_len_st;
+    wire    [31:0]  cart_crc;
+    wire    [16:0]  cart_words;
+    wire    [7:0]   cart_layout, cart_flags;
+    wire            cbus_ack, cbus_hit, cbus_paged;
+    wire            cbus_req, cbus_we;
+    wire    [15:0]  cbus_addr, cbus_wdata;
+    wire    [11:0]  exec_addr;
+    wire    [10:0]  grom_addr;
+    wire    [15:0]  cbus_rdata;
+    wire    [1:0]   cbus_kind;
+    wire            aux_ack;
+    wire    [15:0]  aux_rdata;
+    wire    [9:0]   exec_q;
+    wire    [7:0]   grom_q, ivoice_q;
+    wire    [31:0]  ss_rdata_media;
+
+intv_media media (
+    .clk        ( clk_sys ),
+    .reset      ( timing_reset ),
+    .mreset     ( machine_reset ),
+    .ld_wr      ( ioctl_wr ),
+    .ld_addr    ( ioctl_addr ),
+    .ld_data    ( ioctl_dout ),
+    .len_valid  ( cart_len_valid ),
+    .cart_len   ( cart_len ),
+    .len_chk    ( cart_len_chk ),
+    .bus_req    ( cbus_req ),
+    .bus_we     ( cbus_we ),
+    .bus_addr   ( cbus_addr ),
+    .bus_wdata  ( cbus_wdata ),
+    .bus_ack    ( cbus_ack ),
+    .bus_rdata  ( cbus_rdata ),
+    .bus_hit    ( cbus_hit ),
+    .bus_kind   ( cbus_kind ),
+    .bus_paged  ( cbus_paged ),
+    .aux_req    ( 1'b0 ),
+    .aux_we     ( 1'b0 ),
+    .aux_addr   ( 17'd0 ),
+    .aux_wdata  ( 16'd0 ),
+    .aux_be     ( 2'b11 ),
+    .aux_ack    ( aux_ack ),
+    .aux_rdata  ( aux_rdata ),
+    .exec_addr  ( exec_addr ),
+    .exec_q     ( exec_q ),
+    .grom_addr  ( grom_addr ),
+    .grom_q     ( grom_q ),
+    .ivoice_addr( 11'd0 ),
+    .ivoice_q   ( ivoice_q ),
+    .ready      ( cart_ready ),
+    .busy       ( cart_busy ),
+    .err        ( cart_err ),
+    .len_st     ( cart_len_st ),
+    .slot_st    ( slot_st ),
+    .crc        ( cart_crc ),
+    .words      ( cart_words ),
+    .layout     ( cart_layout ),
+    .flags      ( cart_flags ),
+    .hit        ( cart_hit ),
+    .ss_addr    ( 16'd0 ),
+    .ss_we      ( 1'b0 ),
+    .ss_wdata   ( 32'd0 ),
+    .ss_rdata   ( ss_rdata_media ),
+    .sram_a     ( sram_a ),
+    .sram_dq_out( sram_dq_out ),
+    .sram_dq_oe ( sram_dq_oe ),
+    .sram_dq_in ( sram_dq ),
+    .sram_oe_n  ( sram_oe_n ),
+    .sram_we_n  ( sram_we_n ),
+    .sram_ub_n  ( sram_ub_n ),
+    .sram_lb_n  ( sram_lb_n )
+);
 always @(posedge clk_sys) begin
     lock_s   <= {lock_s[1:0], pll_core_locked};
     rst_s    <= {rst_s[1:0],  reset_n};
@@ -649,9 +750,11 @@ always @(posedge clk_sys) begin
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
     timing_reset  <= ~lock_s[2];
-    // For the machine from step 3: held while the host holds the core in
-    // reset (loading) and for the menu's Reset.
-    machine_reset <= ~lock_s[2] | ~rst_s[2] | mrst_s[2];
+    // The machine: held while the host holds the core in reset (loading),
+    // for the menu's Reset, and until the loader is ready (it finishes about
+    // 3 ms after the host's "all complete", which comes before its reset
+    // exit). The CPU then starts on the next frame (intv_bus).
+    machine_reset <= ~lock_s[2] | ~rst_s[2] | mrst_s[2] | ~cart_ready;
 end
 
 
@@ -681,6 +784,70 @@ intv_timing timing (
     .ss_rdata   ( ss_rdata_timing )
 );
 
+////////////////////////////////////////////////////////////////////////////////
+// The machine (step 3)
+////////////////////////////////////////////////////////////////////////////////
+
+    wire    [2:0]   m_phase;
+    wire    [15:0]  m_dout, m_din, m_addr;
+    wire            m_fetch, m_hold, m_halted;
+    wire    [31:0]  ss_rdata_machine;
+
+intv_machine machine (
+    .clk            ( clk_sys ),
+    .mreset         ( machine_reset ),
+    .ce             ( ce_cpu ),
+    .hcnt           ( hcnt ),
+    .vcnt           ( vcnt ),
+    .cfg_hlt_imm    ( 1'b0 ),
+    .cfg_sdbd_r6_mame ( 1'b0 ),
+    .pad_r          ( 8'hFF ),          // input module: step 6
+    .pad_l          ( 8'hFF ),
+    .cart_req       ( cbus_req ),
+    .cart_we        ( cbus_we ),
+    .cart_addr      ( cbus_addr ),
+    .cart_wdata     ( cbus_wdata ),
+    .cart_ack       ( cbus_ack ),
+    .cart_rdata     ( cbus_rdata ),
+    .cart_hit       ( cbus_hit ),
+    .exec_addr      ( exec_addr ),
+    .exec_q         ( exec_q ),
+    .grom_addr      ( grom_addr ),
+    .grom_q         ( grom_q ),
+    .phase          ( m_phase ),
+    .dout           ( m_dout ),
+    .din            ( m_din ),
+    .addr           ( m_addr ),
+    .fetch          ( m_fetch ),
+    .hold           ( m_hold ),
+    .halted         ( m_halted ),
+    .ss_en          ( 1'b0 ),
+    .ss_addr        ( 16'd0 ),
+    .ss_we          ( 1'b0 ),
+    .ss_wdata       ( 32'd0 ),
+    .ss_rdata       ( ss_rdata_machine )
+);
+
+// Machine status for the bridge (0x60000000): the last opcode fetch. It is
+// read across clock domains as a quasi-static debugging value (the groups
+// are asynchronous in the SDC); a read may catch it mid-update.
+    reg     [15:0]  mstat_pc = 16'd0;
+    reg     [9:0]   mstat_op = 10'd0;
+    reg     [1:0]   mstat_f = 2'b00;
+    reg     [31:0]  mstat = 32'd0;
+always @(posedge clk_sys) begin
+    if (ce_cpu) begin
+        mstat_f <= {mstat_f[0], m_fetch};       // BAR, NACT, DTB
+        if (m_fetch)
+            mstat_pc <= m_dout;
+        if (mstat_f[1] && m_phase == 3'd3)
+            mstat_op <= m_din[9:0];
+    end
+    mstat <= {2'b00, m_hold, m_halted, 2'b00, mstat_op, mstat_pc};
+end
+always @(posedge clk_74a)
+    mstat_74 <= mstat;
+
     wire            in_pf;
     wire    [7:0]   pf_x, pf_y;
     wire    [3:0]   colour;
@@ -692,6 +859,7 @@ test_pattern pattern (
     .pf_y       ( pf_y ),
     .slot_st    ( slot_st ),
     .slot_req   ( 6'b001101 ),
+    .len_st     ( cart_len_st ),
     .colour     ( colour )
 );
 

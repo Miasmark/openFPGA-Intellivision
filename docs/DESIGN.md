@@ -120,7 +120,7 @@ The CP1610 runs one bus phase per microcycle. The phase is coded on BDIR, BC1, B
 - The core carries the phase code as a 3-bit signal plus a 16-bit data-out and a combined data-in. No tristate. **(review)** The real bus has pull-ups: a read that no device answers returns $FFFF [from wiki Memory_Map:14; wiki Bus_Phases ("NACT ... float to all ones")]. So data-in is an AND of active-low contributions (each idle device drives $FFFF), or an OR with a default of $FFFF when no device selects. A plain OR with idle-zero would return $0000 and break peripheral detection (ECS, Intellivoice, cart RAM probes); jzIntv's ECS notes also say unimplemented memory "should always read as $FFFF" [from S9 doc/tech/ecs.html].
 - Each peripheral latches its address on BAR or ADAR, as the chips do. Aliases and partial decodes then match the hardware.
 - Costs per access: fetch or read 4 cycles, write 5, direct read 6, direct write 7 [from wiki Bus_Phases; L-WIKI].
-- No wait states: BDRDY and STPST are tied to +5 V on the board [from SM Fig 7-2, traced; L-SM]. The core keeps a BDRDY input anyway, tied high, so the save-state freeze can use it.
+- No wait states: BDRDY and STPST are tied to +5 V on the board [from SM Fig 7-2, traced; L-SM]. ~~The core keeps a BDRDY input anyway, tied high, so the save-state freeze can use it.~~ **(build step 3)** The core has no BDRDY input: the freeze stops the machine's clock enable (`ce_cpu` from `intv_timing` is low while `run` is low), so the CPU never waits inside a bus cycle; it simply gets no more microcycles until the machine runs again (`cp1610.sv`, docs/CPU_NOTES.md "RTL (build step 3)").
 - On INTAK, glue logic shows the cartridge port BAR instead. Only System RAM sees the raw INTAK [from SM Fig 7-2, traced; wiki].
 - 8-bit devices: reads in the $01xx range drive DB8-15 to 0 [from SM Fig 7-2, U14/U15].
 - ~~**Open:** the manual's phase table (SM p.52, p.59) disagrees with the wiki and MAME on the IAB/ADAR and DW/DWS rows.~~ **(review) Resolved, no disagreement.** The SM p.52 table is headed **BDIR, BC1, BC2** (crop `research/service-manual/img/crops/z_p52tab.png`, viewed), while the wiki and jzIntv tables are headed BDIR, BC2, BC1. Read with its own column order, the SM gives the same codes: in BDIR/BC2/BC1 order NACT 000, ADAR 001, IAB 010, DTB 011, BAR 100, DW 101, DWS 110, INTAK 111. GI's own 1982 catalog uses both column orders: the RO-3-9504 page is headed "BDIR BC1 BC2" and the RO-3-9508 page "BDIR BC2 BC1", with the same encodings [from S2, catalog text lines 2783-2807 and 2938-2948 in `research/datasheets-licences/text/1982_GI_Microelectronics_Data_Catalog.txt`]. The RTL must name its pins BC1/BC2 carefully, but the phase decode is settled.
@@ -219,8 +219,9 @@ Because the freeze always lands in the same frame phase, the STIC row buffer and
 ### 4.3 How each module exposes state
 
 - Each module has one `ss` port: `ss_addr` (module id + word index), `ss_wdata`, `ss_we`, `ss_rdata`. All ports are OR-combined into one 32-bit state bus, as in agg23's Tamagotchi core (MIT) [from L-PSS: `rtl/savestates/ss_addresses.sv`, `bus_connector`].
-- Restore works as a reset with loaded values: while `ss_load` is high, every register takes its value from the state bus [from L-PSS: Tamagotchi `rtl/stopwatch.sv:54-56`].
-- Block RAMs are read and written through their second port. They cost no logic.
+- Restore works as a reset with loaded values: while `ss_load` is high, every register takes its value from the state bus [from L-PSS: Tamagotchi `rtl/stopwatch.sv:54-56`]. **(build step 3)** As built, the machine is frozen (clock enable stopped, section 2.5) and each state word is written on its own (`ss_we` with `ss_addr`); a write beats the clock enable, and machine reset beats a write.
+- ~~Block RAMs are read and written through their second port. They cost no logic.~~ **(build step 3)** Block RAMs (scratchpad, System RAM, GRAM: `intv_ram.sv`) are read and written through their bus-side port A: `ss_en`, high only while the machine is frozen, hands that port from the CPU bus to the state port (one clock of read latency) and must drop two clocks before the machine runs again. Port B stays free for the STIC's reads (build step 4). The switch costs a few multiplexers per RAM, no RAM.
+- The freeze must wait until no cartridge access is in flight: `intv_bus` asks the cartridge port the clock after each address latch and holds the answer in its state, but the request and the SRAM read take about 6 clk_sys and are not in the state. The quiet point of section 4.2 (an instruction boundary) has none in flight; a freeze anywhere else must wait at least 16 clk_sys after the last CPU microcycle before reading state (the step-3 bench does this).
 - Cart RAM and JLP RAM live in SRAM. `ss_ctl` reads them directly while the machine is frozen.
 - One package file lists every module id and word count. A Python script checks that the RTL package and the blob layout agree.
 - **Rule:** a module is not finished until its `ss` port covers every flip-flop that changes at run time. The round-trip test (section 8.4) enforces this.
@@ -462,6 +463,7 @@ Run N frames, save, restore, run M more. Compare frame CRCs and the PSG register
 | PAL console timing (scope on SR1, line count) | PAL frame timing |
 | ECS keyboard ghosting test program | matrix model |
 | Pocket: save, load, sleep, wake on several titles | firmware behaviour of 00A0/00A4 |
+| Pocket (build step 2/3 test build): the cartridge's second indicator card after the first load, and after a user reload of a cartridge of another size (green: data table length = 0x0082 size; orange: they differ; cyan: no table entry, 0x0082 size used; grey: no 0x0082 size seen) | whether the host writes slot 0x100's size into the data table and rewrites it on reload (`apf_datatable.sv`; no reference core reads a file size back from the table) |
 
 ### 8.6 Overlay index
 
@@ -487,7 +489,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | 5 | MOBs and collisions | 10 more games match; STIC test ROM passes |
 | 6 | PSG #1 and input module | register logs match MAME; games playable on the Pocket |
 | 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set |
-| 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages |
+| 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) |
 | 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test |
 | 10 | Intellivoice | resident phrases and B-17 speech sound right; per-opcode tests pass |
 | 11 | JLP and flash slot | a JLP homebrew runs and keeps its flash |

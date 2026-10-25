@@ -665,12 +665,51 @@ late, M4, M5) now have a check against MAME too, through this program; and
 the border's yellow ("only the scenes where MAME's rules differ failed")
 is what a console that behaves like MAME would show.
 
+**As a cartridge, on the real EXEC.** `sim/testroms/sticmob_cart.py`
+builds the same program as a cartridge image ($5000-$6FFF, 8,192
+big-endian words; MAME's intv loads an image with no hash entry as one
+such block at $5000, slot.cpp:286-315; it reads the first byte of a word
+as the high byte, slot.h:30): sticmob.asm's prologue becomes a cartridge
+header and a title with start-up code after it, which hooks the EXEC's
+ISR vector $0100 / $0101 and, called once by the EXEC's dispatcher, takes
+the machine over and jumps to sticmob's main; sticmob's ISR returns with
+`JR R5` to the dispatcher's return code (S9 interrupts.txt, "ISR VECTOR"
+and "INITIALIZATION"; the code is ours). The scenes, tables and checks
+are sticmob.asm's, unchanged; the EXEC adds its dispatch before the
+ISR. `tools/refs/mame_cart_prog.sh` runs it in MAME
+with the real EXEC (`-cart`) and logs the RAM words, every CPU read of
+$18-$1F with the scene, and snapshots. Over 400 frames: the EXEC calls the
+start-up code in frame 4, sticmob's ISR runs from frame 5 and compares
+its first scene in frame 7; then 17 whole passes and part of the 18th,
+90 fails = 5 a pass, mask $04A0, border yellow (MAME's colour 6 in the
+snapshots of frames 60 and 300). Scene by scene (lane script, the
+model's run under MAME's rules against MAME's reads): in all 22 scenes
+MAME reads the same eight words in every pass, and they are the model's
+MAME-rule words; S5 is one word off the expected words (M4), S7 two (M5),
+S10 two (M1), every other scene equals them. So M1, M4 and M5 are now
+checked against MAME itself, through the real EXEC as a game would run,
+not only against the model's copy of MAME's rules: MAME does what the
+model says it does. (That checks our reading of MAME, not the hardware:
+the hardware answer still needs the console.)
+
 So the ROM, run on a console, answers M1, M4 and M5 by the border colour
 (green: S9's rules; yellow: MAME's; red: something else, the mask says
 which scene) and shows M2 and M3 on screen (S13 and S1). It runs in the
-EXEC slot, on the bench and in MAME; a cartridge build (a header and the
-EXEC's start-up instead of our own ISR vector) is not made, and on the
-owner's console it needs a flash cartridge. ECS BASIC as a way round
+EXEC slot on the bench, and in MAME both in the EXEC slot and as a
+cartridge on the real EXEC; on the owner's console the cartridge image
+needs a flash cartridge (or any device that maps a raw image at $5000).
+The bench does not run the cartridge build; the model does (lane
+script, the model with the owner's EXEC and the cartridge image, 52
+frames): hardware rules 0 fails, 2 passes; MAME's rules 10 fails, mask
+$04A0. The EXEC's dispatch moves the ISR's last STIC register write (the
+border colour) from cycle 1,998-2,057 of the frame (EXEC slot) to
+2,109-2,168 (cartridge), and a scene that fails adds the fail count and
+mask code before it (up to 2,864 under MAME's rules). All of that is
+inside the 3,790-cycle window of the model and MAME (T6), but past S9's
+"~2,000" for the STIC registers: if the console closes them there, the
+border colour write (and on a failing frame more) is lost, which the
+console run would show as a border that stays black. T6 stays open; a
+console result other than green or yellow is read with that in mind. ECS BASIC as a way round
 that: none of our sources (DESIGN 12: the wiki archive, S9, the service
 manual) documents an ECS BASIC statement that writes an arbitrary address
 (a POKE) or the MOB registers, so we cannot say that it can drive the STIC

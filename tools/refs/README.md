@@ -13,6 +13,7 @@ outside this repository and is never committed (DESIGN.md section 1).
 | `trace_summary.py TRACE...` | parses a trace; prints counts and a sha256 only |
 | `mame_snap.sh SYS IMAGE FRAME OUT` | one PNG snapshot at the end of a frame |
 | `mame_exec_prog.sh PROG FRAMES OUT [WORDS]` | one of our test programs (EXEC-slot image, e.g. sticmob) in place of the EXEC, no cartridge; logs chosen System RAM words every frame |
+| `mame_cart_prog.sh CART FRAMES OUT [WORDS] [SNAPS]` | one of our test programs built as a cartridge (e.g. `sim/testroms/sticmob_cart.py`'s image) with the real EXEC; logs chosen System RAM words and the ISR vector every frame, every CPU read of $18-$1F with sticmob's scene, and snapshots at chosen frames |
 | `build_jzintv.sh ZIP DIR` | jzIntv from its official source zip (run only; GPL-2 source never read) |
 | `jzintv_run.sh IMAGE N OUT [flags]` | jzIntv headless for N instructions, then one screenshot |
 

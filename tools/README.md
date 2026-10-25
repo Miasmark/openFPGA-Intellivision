@@ -12,12 +12,16 @@ simulator and comes first. Python 3, standard library only.
   (lockstep), checked against MAME traces as a black box.
 - `run_cpu_tests.py`: runs `sim/tests/cpu/*.asm` (expected results written
   by hand in `;!` comments) and sweeps over all 1024 opcodes (documented
-  cycle counts, interruptibility, bus log, disassembler round trip).
+  cycle counts, interruptibility, bus log, disassembler round trip). A test
+  fails if any expectation or cycles label is never reached, if it halts
+  without `;! stop halt`, or if it fetches an instruction from a word that
+  was neither assembled nor written.
 - `lockstep.py`: runs the model against MAME instruction traces (from
   `tools/refs/mame_trace.sh`) of real games: compares state before each
   instruction, every bus access and the cycle counts, replaying only the
   reads from outside the CPU and the interrupt points. The step 0
-  done-test; results in `docs/CPU_NOTES.md`. Needs the user's BIOS, game
+  done-test; results in `docs/CPU_NOTES.md`. Cycle differences other
+  than the two documented ones (SETC, SARC Rr,2) fail it. Needs the user's BIOS, game
   images and traces, which stay outside the repo.
 - `mapper/`: cartridge mapper model and the CRC map table generator (to come).
 

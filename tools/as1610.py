@@ -543,15 +543,23 @@ class _Assembler:
                 return [0x200 | ext << 4 | cond, 0], False
             target &= 0xFFFF
             # S1 p.47/p.54: forward adds the displacement to PC+2; backward
-            # adds its one's complement, so target = PC+2 - disp - 1.
-            if target >= here + 2:
-                d, disp = 0, target - (here + 2)
-            else:
-                d, disp = 1, (here + 1) - target
+            # adds its one's complement, so target = PC+2 - disp - 1. The CPU
+            # adds mod 2^16, so either direction may wrap past $FFFF. Use the
+            # direction that does not wrap when its displacement fits the ROM
+            # width, else the other one (ORG $FFFE / B $0003 is forward 3).
+            fwd = (target - (here + 2)) & 0xFFFF
+            bwd = ((here + 1) - target) & 0xFFFF
             limit = (1 << self.prog.romw) - 1
-            if disp > limit:
-                raise AsmError("branch to $%04X out of range (displacement %d > %d for ROMW %d)"
-                               % (target, disp, limit, self.prog.romw))
+            order = [(0, fwd), (1, bwd)]
+            if target < here + 2:
+                order.reverse()
+            for d, disp in order:
+                if disp <= limit:
+                    break
+            else:
+                raise AsmError("branch to $%04X out of range (displacement %d forward, "
+                               "%d backward, > %d for ROMW %d)"
+                               % (target, fwd, bwd, limit, self.prog.romw))
             return [0x200 | d << 5 | ext << 4 | cond, disp], False
         if mnem in JUMPS or mnem == "CALL":
             if mnem == "CALL":

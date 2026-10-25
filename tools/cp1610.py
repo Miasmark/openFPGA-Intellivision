@@ -480,6 +480,7 @@ class CP1610:
     def _execute(self):
         pc0 = self.r[7]
         ev = Event("insn", self.cycle, pc0)
+        halt_now = self.halt_pending    # set by an earlier HLT
         self._t = 0
         self._und = None
         self._words = words = []
@@ -561,7 +562,10 @@ class CP1610:
         ev.undefined = self._und
         ev.interruptible = intr_ok
         self.cycle += self._t
-        if self.halt_pending and op != 0x000:
+        # S1 p.56 "HaLT after next instruction is executed": the halt takes
+        # effect after the instruction that follows HLT, whatever it is (a
+        # second HLT included); docs/CPU_NOTES.md row 7.
+        if halt_now:
             self.halt_pending = False
             self.halted = True
         # Sample the request lines at every boundary, act only after an

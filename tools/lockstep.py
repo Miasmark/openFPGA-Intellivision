@@ -27,9 +27,10 @@ What is compared, instruction by instruction
     MAME charges the STIC's stolen cycles in one lump when it raises the
     interrupt (MAME intv_m.cpp:668, 680), so the delta across an interrupt
     is only checked to be at least instruction + interrupt (the extra is
-    printed; in the traces so far it is always 0); cycle
-    differences are tallied per mnemonic, not treated as divergences
-    (they are listed in docs/CPU_NOTES.md).
+    printed; in the traces so far it is always 0). Cycle differences are
+    tallied per mnemonic; only those in KNOWN_CYCLE_DIFF (SETC 4 vs 6,
+    SARC Rr,2 8 vs 6, docs/CPU_NOTES.md rows 3-4) are accepted, any other
+    one is a divergence.
 
 MAME shows SDBD and the instruction it prefixes as one trace step; the
 lockstep merges the two model steps to match.
@@ -267,6 +268,13 @@ def fmt_state(regs, flags):
                              format(flags, "04b"))
 
 
+# Cycle differences against MAME that docs/CPU_NOTES.md lists and decides
+# (rows 3 and 4): (mnemonic, model cycles, MAME cycles). Every other cycle
+# difference, and any interrupt step shorter than instruction + interrupt,
+# fails the lockstep.
+KNOWN_CYCLE_DIFF = frozenset({("SETC", 4, 6), ("SARC ,2", 8, 6)})
+
+
 def mnemonic(text):
     t = text.split()
     if not t:
@@ -388,19 +396,34 @@ def run(name, recs, mem, context=8, keep_going=False, max_div=20, **cpu_opts):
                 cpu.interruptible = False
                 bus.intrm_level = False
             continue
-        # Cycles.
+        # Cycles. Only the documented disagreements in KNOWN_CYCLE_DIFF are
+        # accepted; any other difference is a divergence.
         if k + 1 < n:
             dt = recs[k + 1].cycle - rec.cycle
             mn = mnemonic(rec.text)
+            bad = None
             if rec.intr is None:
                 if dt != cyc:
                     key = (mn, cyc, dt)
                     res.cycle_diff[key] += 1
                     res.cycle_examples.setdefault(key, "%04X %s" % (rec.pc, rec.text))
+                    if key not in KNOWN_CYCLE_DIFF:
+                        bad = "%s takes %d cycles in the model, %d in MAME" % (mn, cyc, dt)
             else:
                 res.lumps.append(dt - cyc - icyc)
                 if dt < cyc + icyc:
-                    res.cycle_diff[(mn + " +INT", cyc + icyc, dt)] += 1
+                    key = (mn + " +INT", cyc + icyc, dt)
+                    res.cycle_diff[key] += 1
+                    res.cycle_examples.setdefault(key, "%04X %s" % (rec.pc, rec.text))
+                    bad = ("%s + interrupt takes %d + %d cycles in the model, MAME's "
+                           "delta is only %d" % (mn, cyc, icyc, dt))
+            if bad is not None:
+                hist.append("  %6d c=%-7d %04X %-22s | (cycles differ)" %
+                            (rec.idx, rec.cycle, rec.pc, rec.text))
+                if fail("cycles", "at %04X %s: %s" % (rec.pc, rec.text, bad), rec):
+                    res.steps += 1
+                    k += 1
+                    break
         res.steps += 1
         k += 1
     res.replayed = bus.replayed
@@ -431,8 +454,9 @@ def report(res, out=sys.stdout):
     if res.cycle_diff:
         p("cycle differences, model vs MAME (mnemonic, model, MAME: count, first):")
         for key, cnt in sorted(res.cycle_diff.items()):
-            p("  %-10s %2d %2d: %5d  %s" % (key[0], key[1], key[2], cnt,
-                                           res.cycle_examples.get(key, "")))
+            p("  %-10s %2d %2d: %5d  %s%s" % (
+                key[0], key[1], key[2], cnt, res.cycle_examples.get(key, ""),
+                "" if key in KNOWN_CYCLE_DIFF else "  (not allowed)"))
     else:
         p("cycle counts: all equal outside interrupts")
     if res.undefined:

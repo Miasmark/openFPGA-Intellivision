@@ -8,15 +8,19 @@ Expected results are written by hand from the documents, in comment lines
 that start with ';!':
 
   ;! start LABEL            reset vector (default: label 'start')
-  ;! stop LABEL             stop on arrival at LABEL (default: 'done')
+  ;! stop LABEL             stop on arrival at LABEL (default: 'done');
+                            'stop halt': the test ends when the CPU halts.
+                            In any other test a halt is a failure.
   ;! options strict sdbd_r6=mame hlt=immediate
   ;! intrm FROM-TO          INTRM* asserted for cycles FROM..TO (TO may be
                             empty: until the end); also 'intr', 'busrq'
   ;! bext N ...             external branch conditions that read true
   ;! maxcycles N            give up after N cycles (default 200000)
   ;! expect LABEL[#K]: CHECKS   checked on the K-th arrival at LABEL (before
-                            the instruction there runs); 'end' = at the stop
+                            the instruction there runs); 'end' = at the stop.
+                            An expectation that is never reached fails.
   ;! cycles A B = N         cycles from the first arrival at A to the first at B
+                            (fails if either label is never reached)
   ;! words LABEL = W ...    assembled words at LABEL
   ;! undefined LABEL        the instruction at LABEL is marked undefined
   ;! raises TEXT            the run must raise UndefinedBehaviour (strict)
@@ -25,6 +29,10 @@ that start with ';!':
 CHECKS: R0..R7=V  S= Z= O= C= I= D=  SZOC=bbbb  CYC=N (cycle at which the
 instruction starts)  [ADDR]=V  INTS=N (interrupts taken)  BUSAK=N (cycles
 waited)  TCI=N  SIN=N  HALT=0|1. Values are as1610 expressions.
+
+The test bus fails a test that fetches an instruction from a word that was
+neither assembled nor written (unassembled memory reads as 0, which is HLT,
+so a wild jump would otherwise just halt).
 
 Use: run_cpu_tests.py [-v] [-k SUBSTR] [--trace DIR] [files...]
 """
@@ -45,11 +53,16 @@ REPO = os.path.dirname(HERE)
 TEST_DIR = os.path.join(REPO, "sim", "tests", "cpu")
 
 
+class TrapFetch(Exception):
+    """An instruction fetch from a word the test never defined."""
+
+
 class TestBus:
     def __init__(self, prog, spec):
         self.mem = [0] * 65536
         for a, w in prog.words.items():
             self.mem[a] = w
+        self.defined = set(prog.words)     # assembled or written words
         self.start = spec["start"]
         self.vector = prog.symbols.get("isr", 0x1004)
         self.ranges = spec["ranges"]
@@ -58,10 +71,14 @@ class TestBus:
         self.intak_log = []
 
     def read(self, addr, cycle, kind):
+        if kind == "fetch" and self.defined is not None and addr not in self.defined:
+            raise TrapFetch("fetch from unassembled word $%04X at cycle %d" % (addr, cycle))
         return self.mem[addr]
 
     def write(self, addr, value, cycle):
         self.mem[addr] = value
+        if self.defined is not None:
+            self.defined.add(addr)
 
     def iab(self, cycle, reason):
         return self.start if reason == "reset" else self.vector
@@ -211,7 +228,11 @@ def run_asm_test(path, trace_dir=None, verbose=False):
     if spec["start"] not in prog.symbols:
         return name, fails or ["no label '%s'" % spec["start"]], nchecks
     spec["start"] = prog.symbols[spec["start"]]
-    stop = prog.symbols.get(spec["stop"])
+    stop_on_halt = spec["stop"] == "halt"
+    stop = None if stop_on_halt else prog.symbols.get(spec["stop"])
+    if stop is None and not stop_on_halt:
+        fails.append("no stop label '%s'" % spec["stop"])
+    reached = set()                 # line numbers of expectations evaluated
     bus = TestBus(prog, spec)
     opts = spec["options"]
     try:
@@ -260,6 +281,9 @@ def run_asm_test(path, trace_dir=None, verbose=False):
         except cp1610.UndefinedBehaviour as e:
             raised = str(e)
             break
+        except TrapFetch as e:
+            fails.append(str(e))
+            break
         if trace is not None:
             trace.append(cp1610.trace_line(ev))
         if ev.kind == "intr":
@@ -280,6 +304,7 @@ def run_asm_test(path, trace_dir=None, verbose=False):
                 extra["cyc"] = ev.cycle
                 for lineno, lab, k, checks in pre:
                     nchecks += 1
+                    reached.add(lineno)
                     for f in run_checks(checks, prog, cpu, bus, extra):
                         fails.append("line %d: at %s#%d: %s" % (lineno, lab, k, f))
                 if pc == stop:
@@ -288,16 +313,23 @@ def run_asm_test(path, trace_dir=None, verbose=False):
                     for lineno, lab, k, checks in spec["expect"]:
                         if lab == "end":
                             nchecks += 1
+                            reached.add(lineno)
                             for f in run_checks(checks, prog, cpu, bus, extra_end):
                                 fails.append("line %d: at end: %s" % (lineno, f))
                     break
                 cpu.set_state(cur[0])
                 bus.mem = cur[1]
         if ev.kind == "halt":
+            if not stop_on_halt:
+                fails.append("CPU halted at $%04X (cycle %d) before reaching the stop "
+                             "label; only ';! stop halt' tests may end in a halt"
+                             % (ev.pc, ev.cycle))
+                break
             extra["cyc"] = ev.cycle
             for lineno, lab, k, checks in spec["expect"]:
                 if lab == "end":
                     nchecks += 1
+                    reached.add(lineno)
                     for f in run_checks(checks, prog, cpu, bus, extra):
                         fails.append("line %d: at end (halted): %s" % (lineno, f))
             end_state = True
@@ -315,8 +347,12 @@ def run_asm_test(path, trace_dir=None, verbose=False):
             fails.append("raised '%s', want '%s'" % (raised, spec["raises"]))
     elif raised is not None:
         fails.append("unexpected UndefinedBehaviour: %s" % raised)
-    elif not end_state and not fails:
-        fails.append("did not reach the stop label")
+    else:
+        if not end_state:
+            fails.append("did not reach the stop (%s)" % spec["stop"])
+        for lineno, lab, k, checks in spec["expect"]:
+            if lineno not in reached:
+                fails.append("line %d: expect %s#%d never reached" % (lineno, lab, k))
     for addr, (lineno, lab) in undefined_at.items():
         nchecks += 1
         if addr not in seen_undef and raised is None:
@@ -376,6 +412,7 @@ def doc_interruptible(op):
 class _SweepBus(TestBus):
     def __init__(self):
         self.mem = [0] * 65536
+        self.defined = None                # no fetch trap in the sweeps
         self.start, self.vector = 0x5000, 0x1004
         self.ranges, self.bext_true = {}, set()
         self.tci_n = self.sin_n = 0

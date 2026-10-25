@@ -93,6 +93,15 @@ not documented; the model puts them before the read (estimated).
   holds SR1 low for about 3,790 cycles (wiki VBlank_Interrupt).
 - The interrupt pushes the PC at R6 (then R6 + 1) and loads the vector from
   IAB (S1 p.24-25). The vector is $1004 on the Intellivision.
+- INTR before INTRM: when both are pending, taking INTR clears only the
+  INTR request; the INTRM request is taken after the handler's first
+  interruptible instruction (irq_both.asm).
+- An INTRM edge that arrives during a bus-request wait is sampled at the
+  end of the wait and taken at once (busrq_intrm_edge.asm).
+- No BUSRQ or interrupt check between the interrupt sequence and the first
+  instruction of the handler: that instruction always runs first, even
+  with BUSRQ held during the sequence. S1 does not say; this matches MAME
+  (estimated, busrq_in_intr.asm).
 
 ## Where the sources disagree
 
@@ -104,7 +113,7 @@ not documented; the model puts them before the read (estimated).
 | 4 | SARC Rr, 2 cycles | 8 ("add 2 cycles if shift is 2 bits", p.53) | 8 | MAME 6 (cp1610.cpp:567; every other two-position shift there is 8); the lockstep sees 6 for every SARC Rr,2 | **8** | sweep |
 | 5 | NEGR of 0: carry | status S Z C OV (p.53, OCR damaged) | "Negating 0 ... sets the Carry Flag" (NEGR) | MAME never sets C (it truncates to 16 bits before the carry test) | **C=1** | single_reg.asm |
 | 6 | SWAP Rr, 2 | "swap bytes ..., then swap them back to original form" (p.53) | low byte copied to both halves (SWAP) | MAME as the wiki ("not officially supported by GI"); S9 "swaps bytes in word once or twice" | **wiki** | shifts.asm |
-| 7 | HLT | "HaLT after next instruction is executed. Resume on control start", 4 cycles (p.56) | halts, cycles "Infinity", ignores interrupts until reset or STPST (HLT) | S9: "Halts the CPU (until next interrupt?)"; MAME: 4 cycles, does not halt (TBD) | **S1**; option `hlt='immediate'` | hlt.asm, hlt_immediate.asm |
+| 7 | HLT | "HaLT after next instruction is executed. Resume on control start", 4 cycles (p.56) | halts, cycles "Infinity", ignores interrupts until reset or STPST (HLT) | S9: "Halts the CPU (until next interrupt?)"; MAME: 4 cycles, does not halt (TBD) | **S1**: the instruction after HLT runs, whatever it is (a second HLT included), then the CPU halts; option `hlt='immediate'` | hlt.asm, hlt_twice.asm, hlt_immediate.asm |
 | 8 | SDBD with R6 | not supported (p.49, p.57) | 10 cycles "regardless of which register" (MVI@, ADD@...); "two stack reads from top of stack, ... decrements stack pointer once" (Undocumented_SDBD_Behavior, from memory) | S9: "not allowed, although I suspect it works as expected (two accesses through R6)"; MAME: two pre-decrements, 13 cycles + SDBD | **wiki** (one decrement, same word twice, 10); option `sdbd_r6='mame'`; strict raises | sdbd.asm, sdbd_r6_mame.asm, strict_sdbd_r6.asm |
 | 9 | SDBD with direct mode | not supported (p.49) | "modifies the behavior of Direct Mode", details unknown (Double_Byte_Data, Undocumented_SDBD_Behavior) | MAME decodes it as indirect through R0 | **D ignored**, one direct read; marked undefined; strict raises | undefined.asm, strict_sdbd_direct.asm |
 | 10 | SDBD before MVO | double byte data is described for reads (p.46-49) | CP1610 table lists D as an input of MVO@ and MVOI | S9: "bringing in (or out) two 8-bit words"; MAME: illegal | **D ignored**, one write; marked undefined | undefined.asm |
@@ -194,6 +203,13 @@ Result, 2026-10-25, on Astrosmash, Tower of Doom and B-17 Bomber (plain
   cycles: MAME's merged step costs SDBD 4 + the documented SDBD form.
 - **Cycles**: the only differences are rows 3 and 4 (SETC: model 4, MAME
   6; SARC Rr,2: model 8, MAME 6). The model keeps the documented values.
+  The lockstep enforces this: those two (mnemonic, model, MAME) triples
+  are its allowlist (`KNOWN_CYCLE_DIFF`), and any other cycle difference,
+  or an interrupt step whose MAME delta is less than instruction +
+  interrupt, is a divergence and makes the run `LOCKSTEP FAIL`. Checked by
+  planting a model that charges 9 instead of 8 cycles for indirect and
+  immediate reads, one with a 10-cycle interrupt and one with a 5-cycle
+  SETC: each fails, on both the 10- and the 120-frame traces.
 - **STIC cycle stealing does not show in MAME's cycle counter.** Every
   instruction's cycle delta equals its documented count (rows 3-4 aside),
   also across interrupts, and a frame is about 14,934 cycles
@@ -223,7 +239,10 @@ INTV_BIOS_DIR, INTV_GAME_DIR and INTV_TRACE_ROOT, or the matching options):
 written with or without `#`. `ROMW 10` makes the assembler add SDBD and two
 decles to an immediate over $3FF, as S1 p.49 describes; an explicit SDBD
 always gives two decles. Branches pick the direction from the target and
-check the displacement against the ROM width. Labels may not be register
+check the displacement against the ROM width; the CPU adds mod 2^16, so
+when the direction that does not wrap past $FFFF is too far for the ROM
+width, the wrapping one is used if it fits (`ORG $FFFE / B $0003` with
+`ROMW 10` is forward 3; branch_wrap.asm). Labels may not be register
 names (R0-R7, SP, PC); a label without a colon must start in column 0 and
 not be a mnemonic. Output: a raw image (segments joined, big-endian words,
 like a `.int`), a `[mapping]` `.cfg` for it, and a listing.

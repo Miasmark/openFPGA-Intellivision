@@ -221,15 +221,19 @@ snapshots (2026-10-25, after D17; lane scripts outside the repository):
 | Diner | 33 of 33 | |
 | Dig Dug | 8 of 8 | |
 | Sewer Sam | 2 of 13 (9, 10) | 12: the lower border band, as Tower of Doom's (D17, 567 pixels). 23-55: Sewer Sam rewrites BACKTAB during the display, so the row copy times decide the picture (T5: the model copies at the fetch cycle, MAME at its real-time row timers) and the stolen cycles (T2) move when it rewrites: 1,008-4,464 pixels in the cards at x = 13. 60-300: 7,488 pixels in every snapshot: the CPU loses about 1,470 cycles a frame to BUSRQ (T2), which MAME never takes, and the game's picture runs out of step with MAME's |
-| TRON Solar Sailer | 2 of 13 (100, 624) | 19 and 648-700: 64-6,916 pixels. With BUSRQ off they shrink to 4-800 pixels at 6 of these snapshots (row copy times, T5); the rest comes from the stolen cycles (T2), which move the game's timing |
+| TRON Solar Sailer | 2 of 13 (100, 624) | 19 and 648-700: 64-6,916 pixels. With BUSRQ off, 4 of these 11 match (648, 651, 652, 660) and the other 7 shrink to 4-800 pixels (row copy times, T5); the rest comes from the stolen cycles (T2), which move the game's timing |
 
 The causes of the Sewer Sam and Solar Sailer differences were separated
 with two diagnostic runs (not gates): with BUSRQ off (mode `none`, rows
 still copied at the hardware fetch cycles) Sewer Sam matches at 9, 10, 55,
 120 and 300 and differs by 240-2,594 pixels elsewhere (T5 only), and
-Solar Sailer matches at 6 of 13 and differs by 4-800 pixels elsewhere; with
-MAME's memory map forced into mode `stic` or `none` the results do not
-change, so the map plays no part in these two games. Which of the two
+Solar Sailer matches at 6 of 13 and differs by 4-800 pixels elsewhere. With
+MAME's memory map forced into mode `stic` or `none`, Sewer Sam's results do
+not change at all. Solar Sailer's change only a little: in mode `stic` the
+same snapshots match (19 differs by 170 pixels instead of 124), and in mode
+`none` 649 matches too (7 of 13), with 19 and 665 at 92 and 24 pixels
+instead of 48 and 26. So the map does not cause the differences in these two
+games; it only moves Solar Sailer's timing slightly. Which of the two
 pictures a real console shows is the hardware question of T1-T5 (our own
 STIC test ROM; not answerable without a flash cartridge).
 

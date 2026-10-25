@@ -1,0 +1,67 @@
+# Game images, system ROMs (BIOS) and firmware: user-supplied, never
+# committed, wherever they land. Test images are built by our own tools
+# under sim/ and tools/ into sim/work*, so they are not committed either.
+*.[iI][nN][tT]
+*.[bB][iI][nN]
+*.[rR][oO][mM]
+*.[iI][tT][vV]
+*.[aA]78
+*.[aA]26
+*.[zZ][iI][pP]
+*.7[zZ]
+bios/
+roms/
+games/
+# Cartridge configs (.cfg) of games are game metadata from elsewhere. Our
+# own CFGs for our own test ROMs live with their sources.
+*.[cC][fF][gG]
+!sim/testroms/**/*.cfg
+# Memory images: anything built from a BIOS or game stays out. The tables
+# our own tools generate (CRC map table, palette) are tracked only under
+# src/fpga/core/tables/.
+*.mif
+*.hex
+*.mem
+*.coe
+!src/fpga/core/tables/*.mif
+!src/fpga/core/tables/*.hex
+!src/fpga/core/tables/*.mem
+# Save states, nonvolatile saves (JLP flash), traces, frame and audio dumps
+# from runs (derived from games)
+*.[sS][aA][vV]
+*.ss
+*.sta
+*.trace
+*.trc
+*.vcd
+*.fst
+*.ghw
+*.wav
+*.ppm
+*.pgm
+*.png
+*.bmp
+*.gif
+*.jpg
+*.jpeg
+# Simulation and build outputs
+sim/work*
+sim/obj_dir*
+obj_dir/
+src/fpga/db/
+src/fpga/incremental_db/
+src/fpga/output_files/
+src/fpga/*.log
+src/fpga/*.qws
+src/fpga/*_assignment_defaults.qdf
+release/
+dist/Cores/*/*.rbf_r
+dist/Cores/*/licenses/
+# The package's own images (not game data), once they exist
+!dist/Cores/Miasmark.Intellivision/icon.bin
+!dist/Platforms/_images/intv.bin
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/

@@ -30,7 +30,10 @@ only):
 The Pocket reloads the core when either slot is loaded (parameters `0x109`),
 and streams every slot that has a file. The loader reads the CFG slot's
 length from the data table (as the cartridge's), so the bridge's pad bytes
-are never parsed. The Pocket keeps the CFG slot's file selected until the
+are never parsed. A CFG slot the data table lists with size 0 means no CFG:
+should the host ever reload a cartridge alone (no core reload), a CFG
+streamed earlier is then not used; one still listed applies to the new
+cartridge (tb_loader's reloads RELOAD2 and RELOAD3). The Pocket keeps the CFG slot's file selected until the
 user changes it: a CFG chosen for one game stays with the next game loaded
 unless it is cleared (owner check on hardware: how the menu clears an
 optional slot).
@@ -241,5 +244,6 @@ the bank registers $0050-$005F not decoded, a bank window using the lower
 2K's register, the bank registers restored one word off, pool blocks not
 filled, the .rom table CRC not checked, a .rom's unwritten blocks not
 cleared, a fine range one block short, the CFG's last byte dropped, plus
-step 2's. tb_savestate: the CFG's CRC not checked, the bank registers not
+step 2's, a CFG the table no longer lists applied to a reload, a kept CFG's
+last bytes fed twice. tb_savestate: the CFG's CRC not checked, the bank registers not
 restored, an image without save states saved.

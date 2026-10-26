@@ -251,3 +251,21 @@ Neither shows metastability: a load decided on the request's first
 flip-flop (`req_s[0]`) passes both. That, and the 10 ns net-delay bound,
 are checked on the fit: `sim/check/fit_crossing_check.py` reads
 `ap_core.sta.rpt` (DEVELOPING, Build).
+
+`tb_savestate.py` runs `tb_savestate.sv` (step 7): `intv_core` (media,
+timing, machine and the save-state controller `intv_ss_ctl`) with the SRAM
+model behind the template's `core_bridge_cmd.v` and core_top's bridge
+multiplexer; the bench is the Pocket's host (command words at 0xF8000000,
+the blob at 0x50000000, one bridge access every 88 clk_74a). For each image
+of the regression set it runs a straight reference (R), the same run with
+saves at chosen moments, a menu pause and a save inside a menu pause (S:
+every frame equal to R, every blob verified by `tools/savestate.py`), each
+state loaded into a fresh core (L: every frame after the restore equal to
+R's), another image's state (F: refused, untouched) and five bad blobs (C:
+refused, then the good one loads). `--plants` builds six planted faults
+(a module dropped, a word off by one, no CRC check, the resume one pixel
+late, no cartridge check, no system-ROM check), each of which must fail.
+Frames are machine frames (H, A, P lines: bus and CPU steps, PSG, picture);
+after a load the PSG's 48 kHz sample values are left out (its output filter
+is not machine state; docs/SAVESTATE.md 5). Last line
+`TB_SAVESTATE_ALL pass`.

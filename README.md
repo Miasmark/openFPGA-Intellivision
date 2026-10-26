@@ -6,10 +6,13 @@ Entertainment Computer System (ECS), the Intellivoice and JLP cartridges, load
 cartridge images directly (raw `.int`/`.bin`, `.bin` + `.cfg`, Intellicart
 `.rom`), and support save states and sleep from its first release.
 
-**Status: in development.** Build steps 1-3 are done: the core shows a test
-pattern at 59.92 Hz, loads and maps the cartridge and the system ROMs, and
-runs the EXEC on the CP1610 with the bus fabric, RAMs and register stubs
-(no picture or sound from the machine yet). The plan is
+**Status: in development.** Build steps 1-7 are done: the core loads and
+maps the cartridge and the system ROMs, runs the EXEC and games on the
+CP1610 with the STIC's picture (backgrounds, MOBs, collisions) and the
+PSG's sound, takes the Pocket's controllers and keyboard as the hand
+controllers, and saves and loads states (Memories, sleep, a menu pause;
+[docs/SAVESTATE.md](docs/SAVESTATE.md)). Cartridge formats beyond the CRC
+table, the ECS, the Intellivoice and JLP come next. The plan is
 [docs/DESIGN.md](docs/DESIGN.md); section 9 gives the build order.
 [docs/DEVELOPING.md](docs/DEVELOPING.md) says how to build, simulate and
 package it.

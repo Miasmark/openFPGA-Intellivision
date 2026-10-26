@@ -209,6 +209,8 @@ Behaviour seen in agg23's cores (not in the docs) [from L-PSS: AGG NES core_top.
 - On save, the core raises `ok` when the first word is ready. Then it gives one word per new bridge read address. Repeated reads of one address must return the same word.
 - Both put the blob at bridge address 0x40000000. The 7800 uses 0x40000000 for FA2 flash [from 7800 data.json], so this core picks its own free address (proposed 0x50000000) [estimated].
 
+**(build step 7)** As built: `intv_ss_ctl.sv`, the blob at 0x50000000, and every detail of the protocol, the freeze, the checks on load and the bench in docs/SAVESTATE.md. The bridge's reads are one word behind (Analogue's `io_bridge_peripheral.v`), so the core holds each read's word until the next read, as the template's command registers do; it serves any read or write order.
+
 ### 4.2 Freezing the machine
 
 1. On 0x00A0 or 0x00B0 (menu open), `ss_ctl` asks for a freeze.
@@ -225,7 +227,7 @@ Because the freeze always lands in the same frame phase, the STIC row buffer and
 - ~~Block RAMs are read and written through their second port. They cost no logic.~~ **(build step 3)** Block RAMs (scratchpad, System RAM, GRAM: `intv_ram.sv`) are read and written through their bus-side port A: `ss_en`, high only while the machine is frozen, hands that port from the CPU bus to the state port (one clock of read latency) and must drop two clocks before the machine runs again. Port B stays free for the STIC's reads (build step 4). The switch costs a few multiplexers per RAM, no RAM. **(build step 4)** Port B is read only and belongs to the STIC (System RAM rows, GRAM patterns); the STIC's row buffer (20 words, id $0C) and line buffer (64 words, id $0D) are `intv_ram`s too, and GROM has a second read port for it. Every port-B word is used only after its address has been stable for a clock, so a freeze may land in any clk_sys (docs/STIC_NOTES.md 4).
 - The freeze must wait until no cartridge access is in flight: `intv_bus` asks the cartridge port the clock after each address latch and holds the answer in its state, but the request and the SRAM read take about 6 clk_sys and are not in the state. The quiet point of section 4.2 (an instruction boundary) has none in flight; a freeze anywhere else must wait at least 16 clk_sys after the last CPU microcycle before reading state (the step-3 bench does this).
 - Cart RAM and JLP RAM live in SRAM. `ss_ctl` reads them directly while the machine is frozen.
-- One package file lists every module id and word count. A Python script checks that the RTL package and the blob layout agree.
+- One package file lists every module id and word count. A Python script checks that the RTL package and the blob layout agree. **(build step 7)** `tools/savestate.py` holds the ids, counts and layout and generates `intv_ss_pkg.sv` and the table in docs/SAVESTATE.md; `gen --check` fails if either, or a module's id default, differs.
 - **Rule:** a module is not finished until its `ss` port covers every flip-flop that changes at run time. The round-trip test (section 8.4) enforces this.
 
 ### 4.4 Blob layout (fixed size)
@@ -248,7 +250,7 @@ Because the freeze always lands in the same frame phase, the STIC row buffer and
 | Cart RAM window (all 64K words of the cart plane, RAM pages only written back) | 131,072 | L-PSS |
 | **Total, padded** | **153,600 (0x25800, 150 KiB)** | L-PSS |
 
-The header holds the cart CRC32. A load with the wrong cartridge is refused with code 3. The input module, audio filters and all ROMs are not saved. Inputs are re-sampled after a restore [from L-PSS].
+The header holds the cart CRC32. A load with the wrong cartridge is refused with code 3. **(build step 7)** Version 1 of the blob keeps the fixed 153,600 bytes but uses only what the core has so far: a 64-byte header (with the payload CRC32 and the EXEC's and GROM's CRC32s too, so that a state made with other system ROMs is refused), the 1,324 module words, and the 16K cells of the SRAM's cart RAM area; the rest is zero and reserved for the ECS, the Intellivoice and JLP (docs/SAVESTATE.md 3). The input module, audio filters and all ROMs are not saved. Inputs are re-sampled after a restore [from L-PSS].
 
 ### 4.5 Expected cost
 
@@ -502,7 +504,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | 4 | STIC backgrounds (three modes), SR1/INTRM, BUSRQ, GROM/GRAM | EXEC title screen and 5 games' frame CRCs match MAME (palette aside) |
 | 5 | MOBs and collisions | 10 more games match; STIC test ROM passes |
 | 6 | PSG #1 and input module | register logs match MAME; games playable on the Pocket |
-| 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set |
+| 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set **(build step 7: in simulation, `sim/tb/tb_savestate.py`; on the Pocket, the owner's test sheet)** |
 | 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) |
 | 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test |
 | 10 | Intellivoice | resident phrases and B-17 speech sound right; per-opcode tests pass |

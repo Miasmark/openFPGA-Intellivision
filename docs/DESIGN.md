@@ -92,7 +92,7 @@ The wiki gives 1.6 MHz for the SP0256. **(review)** Resolved: the SP0256 has a 1
 | /10 | 85.9 MHz | 96 MHz | spare (memory) |
 | /240 and /240 +90 deg | 3.579545 MHz | 4.000 MHz | Pocket video pixel clock |
 
-Clock enables from `clk_sys`: pixel every 12, PSG every 24, CPU microcycle every 48 [estimated, from the ratios above]. The SP0256 runs from a DDS clock enable, not a PLL output [from L-PSS].
+Clock enables from `clk_sys`: pixel every 12, PSG every 24, CPU microcycle every 48 [estimated, from the ratios above]. **(build step 6)** The PSG divides its master / 2 clock by 8 before any generator, so `intv_psg` steps on every 4th CPU cycle enable instead of using the PSG enable: the same rate, locked to the CPU cycle count that the model uses. The SP0256 runs from a DDS clock enable, not a PLL output [from L-PSS].
 
 ### 2.4 Frame timing (NTSC)
 
@@ -376,6 +376,7 @@ File sizes are the owner's files [measured]. They match MAME's expected CRCs: EX
 - Volume curve: the AY 16-level DAC curve from the datasheet, cross-checked with MAME's table [from S4; MAME ay8910.cpp].
 - Speech level against the PSG is unknown (no Intellivoice schematic) [from L-PSS].
 - **Noise LFSR:** use bit0 ^ bit3 (maximal, period 131,071), as MAME does for the AY-3-8910 and YM2149 [from MAME ay8910.h:263-272]. The wiki's formula is bit0 ^ bit2 with period 114,681, which is not maximal [measured, L-WIKI, L-DSL]. GI datasheets say only "pseudo random" [from S4 p.7-101; S2 p.302]. Nothing verifies the taps on the 8914 die itself. This stays a decision until there is a hardware recording (section 11).
+- **(build step 6)** As built (`intv_psg.sv`, model `tools/psg.py`; facts, sources and the differences from MAME in docs/PSG_NOTES.md): the generators step once every 4 CPU cycles (master / 16), counted from the CPU's first cycle, and a write lands at the end of its DW cycle. The 48 kHz output is two one-pole low passes at the step rate (-3 dB near 16.5 kHz), the box filter and an exact 48 kHz phase accumulator; the DAC is MAME's AY-3-8910 curve for fixed and envelope volumes alike; no DC: silence is 0. Register logs equal MAME's for eight games, and with MAME's tone counter and step grid every PSG step equals MAME's own stream; the core's tone counter restarts at 0 when a smaller period is written, as MAME's notes describe the chip, where MAME keeps the remainder (PSG_NOTES P1).
 
 ---
 
@@ -412,6 +413,16 @@ One input module builds a virtual hand controller per player. Every source feeds
 | Later: on-screen keypad | Select opens a 3 x 4 grid drawn in the video path; optional user-supplied overlay scan in its own slot | IN |
 
 Check `cont3_key[31:28] == 4` before reading the keyboard [from L-PSS, APF docs]. Per-game profiles (for example B-17 Bomber, Space Spartans) come from our own CRC-keyed table with function facts only, no artwork [from IN].
+
+**(build step 6) As built** (`src/fpga/core/intv_input.sv`, model `tools/intv_input.py`, bench `sim/tb/tb_input.py`):
+
+- Player 1 = cont1, player 2 = cont2; a slot counts only with type 1 (Pocket), 2 (docked digital) or 3 (docked analog), and the sticks only on type 3. Player 1 is the **left** controller ($01FF, port B) and player 2 the right ($01FE, port A), because many games read only the left one; the Swap Controllers item (0x1000020C) exchanges them. The USB keyboard (cont3 type 4, six usage codes in `cont3_joy` and `cont3_trig`) is player 1's keypad: 1-9 and 0 on the number row and the numpad, Backspace = Clear, Enter and numpad Enter = Enter. ECS keys and the music rows come with step 9.
+- Keypad Mode item (0x10000208): 0 Layer (default), 1 Face-button ring, 2 Right stick; 3 works as Layer. Details beyond the table: R beats L when both are held; R releases the D-pad's disc (the D-pad is the ring), L does not; Y alone, L + Y, Start, Select, L2/R2/L3 press nothing yet (Select is kept for the on-screen keypad); Face-button ring's L is the top side action. Right stick mode is Layer plus the right stick (8 sectors) and R3 = 5, the ring's centre (R3 is this core's addition).
+- Opposite directions together (D-pad up + down, X + B in the ring) cancel. Everything else is wired-OR: each input pulls its code's lines low, so presses combine as on the hardware, the stick's disc with the D-pad's too.
+- Merged with the PSG (branch step6): the module's bytes are intv_machine's `pad_r` / `pad_l`, which the PSG's ports $01FE / $01FF read. The play bench (`sim/tb/tb_system.py --play`) starts Astrosmash and B-17 Bomber with a key press and runs them 20-22 s from power-on with scripted keys (keypad, side buttons, disc): the RTL equals the model (mode `stic`) in every picture, bus phase and PSG step, and the model (mode `mame`) equals MAME, given the same keys at the same frames, in every 10th frame's snapshot and the whole PSG register log (MAME's own BUSRQ timing differs from the core's, STIC_NOTES T2, so MAME is compared with mode `mame`).
+- Analog left stick: 16 directions by integer slopes (sector boundaries at 11.25 + 22.5 n degrees), dead zone radius 40 of 128; right stick: 8 sectors, dead zone 64. Stick y is taken as growing downwards (to be confirmed on a docked analog controller). At the centres of MAME's 5 x 5 analog grid the disc equals MAME's table (handctrl.cpp:137-144).
+- The controller words and the Keypad Mode / Swap settings (all clk_74a) cross into clk_sys as one word with a toggle handshake: a clk_74a copy of all of them, a request flag through two clk_sys flip-flops, the whole copy loaded at once, an acknowledge back through two clk_74a flip-flops before the next copy (0.0.5; the step-6 review: a bit-by-bit crossing could show, for one clk_sys cycle, a press nobody made). About 220 ns of latency; `core_constraints.sdc` bounds the copy's and the request's paths with set_net_delay (10 ns; its comment says why set_max_skew and set_max_delay are not used), and `sim/check/fit_crossing_check.py` checks the fit's net delays and that each flag crosses through two flip-flops. `tb_input` checks the handshake rule and the crossing with skewed inputs and a skewed copy (sim/tb/README). The module keeps no machine state and has no state port (4.4).
+- Interact menu limits learned on the owner's Pocket (2026-10-25, openFPGA-2600): at most 15 options a list (the documents say 16), and interact.json at most 8,740 bytes (10,213 failed), kept minified; `sim/check/apf_json_check.py` enforces both.
 
 ### 7.3 ECS keyboard matrix model
 

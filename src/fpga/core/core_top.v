@@ -21,6 +21,10 @@
 // Step 4: the STIC (backgrounds, BUSRQ) draws the picture once the machine
 // runs; the test pattern shows while it is held (loading, a required slot
 // missing or refused). The step-3 status register at 0x60000000 is gone.
+// Step 6: the PSG (intv_psg) gives the sound, 48 kHz, on both channels.
+// intv_input turns the Pocket's controllers and USB keyboard into
+// the two hand controllers on the PSG's ports; settings Keypad Mode (0x208)
+// and Swap Controllers (0x20C).
 //
 
 `default_nettype none
@@ -397,6 +401,8 @@ localparam [31:0] SS_SIZE = 32'd153600;
 
 // Settings, written by the host from interact.json (clk_74a).
     reg             set_border = 1'b1;      // Border: 1 = show (slot 1), 0 = playfield only (slot 0)
+    reg     [1:0]   set_kp_mode = 2'd0;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick
+    reg             set_swap = 1'b0;        // Swap Controllers: 1 = player 1 on the right controller
     reg     [7:0]   menu_reset_cnt = 8'd0;
 
 always @(posedge clk_74a) begin
@@ -407,6 +413,8 @@ always @(posedge clk_74a) begin
         case (bridge_addr[11:0])
             12'h200: menu_reset_cnt <= 8'hFF;
             12'h204: set_border     <= bridge_wr_data[0];
+            12'h208: set_kp_mode    <= bridge_wr_data[1:0];
+            12'h20C: set_swap       <= bridge_wr_data[0];
             default: ;
         endcase
     end
@@ -779,13 +787,39 @@ intv_timing timing (
 );
 
 ////////////////////////////////////////////////////////////////////////////////
-// The machine (steps 3-4)
+// Input (step 6): the Pocket's controllers and keyboard as the two hand
+// controllers on the PSG's ports (DESIGN.md 7). intv_input takes the
+// clk_74a words and the settings into clk_sys itself, as one word with a
+// toggle handshake (constraints in core_constraints.sdc).
+////////////////////////////////////////////////////////////////////////////////
+
+    wire    [7:0]   pad_r, pad_l;
+
+intv_input input_map (
+    .clk_74a    ( clk_74a ),
+    .clk        ( clk_sys ),
+    .cont1_key  ( cont1_key ),
+    .cont1_joy  ( cont1_joy ),
+    .cont2_key  ( cont2_key ),
+    .cont2_joy  ( cont2_joy ),
+    .cont3_key  ( cont3_key ),
+    .cont3_joy  ( cont3_joy ),
+    .cont3_trig ( cont3_trig ),
+    .kp_mode    ( set_kp_mode ),
+    .swap       ( set_swap ),
+    .pad_r      ( pad_r ),
+    .pad_l      ( pad_l )
+);
+
+////////////////////////////////////////////////////////////////////////////////
+// The machine (steps 3-6)
 ////////////////////////////////////////////////////////////////////////////////
 
     wire    [2:0]   m_phase;
     wire    [15:0]  m_dout, m_din, m_addr;
     wire            m_fetch, m_hold, m_halted;
     wire    [3:0]   stic_colour;
+    wire    [15:0]  psg_audio;
     wire    [31:0]  ss_rdata_machine;
 
 intv_machine machine (
@@ -799,8 +833,8 @@ intv_machine machine (
     .cfg_hlt_imm    ( 1'b0 ),
     .cfg_sdbd_r6_mame ( 1'b0 ),
     .busrq_en       ( 1'b1 ),
-    .pad_r          ( 8'hFF ),          // input module: step 6
-    .pad_l          ( 8'hFF ),
+    .pad_r          ( pad_r ),
+    .pad_l          ( pad_l ),
     .cart_req       ( cbus_req ),
     .cart_we        ( cbus_we ),
     .cart_addr      ( cbus_addr ),
@@ -815,6 +849,8 @@ intv_machine machine (
     .vgrom_addr     ( vgrom_addr ),
     .vgrom_q        ( vgrom_q ),
     .colour         ( stic_colour ),
+    .audio          ( psg_audio ),
+    .audio_stb      ( ),
     .phase          ( m_phase ),
     .dout           ( m_dout ),
     .din            ( m_din ),
@@ -873,8 +909,9 @@ assign video_rgb_clock_90 = clk_vid_90;
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Audio: silent until the PSG (step 6). agg23's sound_i2s (MIT) drives the
-// Pocket's I2S DAC at 48 kHz.
+// Audio: the PSG's 48 kHz sound (intv_psg: box filter from its 223.7 kHz
+// steps, 0..32766, silence 0) on both channels. agg23's sound_i2s (MIT)
+// takes it across to clk_74a and drives the Pocket's I2S DAC at 48 kHz.
 ////////////////////////////////////////////////////////////////////////////////
 
 sound_i2s #(
@@ -883,8 +920,8 @@ sound_i2s #(
 ) sound (
     .clk_74a    ( clk_74a ),
     .clk_audio  ( clk_sys ),
-    .audio_l    ( 16'd0 ),
-    .audio_r    ( 16'd0 ),
+    .audio_l    ( psg_audio ),
+    .audio_r    ( psg_audio ),
     .audio_mclk ( audio_mclk ),
     .audio_lrck ( audio_lrck ),
     .audio_dac  ( audio_dac )

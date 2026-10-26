@@ -16,10 +16,12 @@ the RTL:
                fetches from System RAM and BUSRQ. Write-only aliases at
                $4000, $8000, $C000 (DESIGN 2.6).
   $0100-$01EF  scratchpad RAM, 8-bit (upper byte reads 0, DESIGN 2.5)
-  $01F0-$01FF  PSG register stub (AY-3-8914): 14 registers with MAME's
-               read masks and register order (MAME ay8910.cpp:1445-1450,
-               1533); $01FE / $01FF read the hand controllers (no input yet:
-               $FF). Upper byte 0.
+  $01F0-$01FF  PSG (AY-3-8914, tools/psg.py, build step 6): 14 registers
+               with MAME's read masks and register order (MAME
+               ay8910.cpp:1445-1450, 1533), tone, noise and envelope
+               generators clocked from the CPU cycle count (a tick at the
+               end of cycles 0, 4, 8, ...); $01FE / $01FF read the hand
+               controllers (self.pad, $FF = nothing pressed). Upper byte 0.
   $0200-$035F  System RAM, 16-bit
   $1000-$1FFF  EXEC ROM, 10 bits (upper 6 bits 0, as MAME's ROM region)
   $3000-$37FF  GROM, $FF00 | byte (MAME stic.cpp:1317-1322)
@@ -83,6 +85,7 @@ sys.path.insert(0, os.path.join(HERE, "mapper"))
 from cp1610 import CP1610  # noqa: E402
 
 import stic as sticm  # noqa: E402
+import psg as psgm  # noqa: E402
 from stic import FRAME, VBLANK, STIC_DEF, STIC_REGS, STIC_DER, STIC_GMR  # noqa: E402,F401
 
 VEC_RESET, VEC_INTR = 0x1000, 0x1004
@@ -94,15 +97,55 @@ MAME_CYCLE_AS = 10 ** 18 // 894886
 
 # AY-3-8914: register at $01F0 + n is AY-3-8910 register MAP[n] (MAME
 # ay8910.cpp:1533); read masks per AY-3-8910 register (ay8910.cpp:1445-1450).
-PSG_MAP = (0, 2, 4, 11, 1, 3, 5, 12, 7, 6, 13, 8, 9, 10, 14, 15)
-_MASK8910 = (0xFF, 0x0F, 0xFF, 0x0F, 0xFF, 0x0F, 0x1F, 0xFF,
-             0x3F, 0x3F, 0x3F, 0xFF, 0xFF, 0x0F, 0xFF, 0xFF)
-PSG_MASK = tuple(_MASK8910[PSG_MAP[n]] for n in range(14))
+PSG_MAP = psgm.MAP8910
+PSG_MASK = psgm.MASK
 
 
 def load_words(path):
     data = open(path, "rb").read()
     return [data[i] << 8 | data[i + 1] for i in range(0, len(data) - 1, 2)]
+
+
+# Scripted keys (the step-6 play benches; tools/refs/mame_psg.sh presses
+# the same keys in MAME). The lines each key pulls low: DESIGN 7.1, MAME
+# handctrl.cpp:124-135 inverted (KEYPAD port, names as MAME's PORT_NAME);
+# the disc directions of MAME's digital disc (DISC_DG, handctrl.cpp:37-53,
+# bit 15 "Up" down to bit 0 "Up-Up-Left") pull ~disc_table[bit]
+# (handctrl.cpp:130-135, 160-166).
+KEYCODE = {"1": 0x81, "2": 0x41, "3": 0x21, "4": 0x82, "5": 0x42, "6": 0x22,
+           "7": 0x84, "8": 0x44, "9": 0x24, "Clear": 0x88, "0": 0x48, "Enter": 0x28,
+           "Upper": 0xA0, "Lower-Left": 0x60, "Lower-Right": 0xC0}
+DISC_NAMES = ["Up", "Up-Up-Right", "Up-Right", "Right-Up-Right", "Right", "Right-Down-Right",
+              "Down-Right", "Down-Down-Right", "Down", "Down-Down-Left", "Down-Left",
+              "Left-Down-Left", "Left", "Left-Up-Left", "Up-Left", "Up-Up-Left"]
+_MAME_DISC_TABLE = [0xf3, 0xe3, 0xe7, 0xf7, 0xf6, 0xe6, 0xee, 0xfe,
+                    0xfc, 0xec, 0xed, 0xfd, 0xf9, 0xe9, 0xeb, 0xfb]
+for _i, _n in enumerate(DISC_NAMES):
+    KEYCODE[_n] = ~_MAME_DISC_TABLE[15 - _i] & 0xFF
+
+
+def parse_presses(text):
+    """"F1-F2:KEY,..." (KEY held from MAME's frame notifier F1 until F2)
+    -> [(F1, F2, lines pulled low)]."""
+    out = []
+    for p in filter(None, (text or "").split(",")):
+        fr, key = p.split(":", 1)
+        f1, f2 = (int(x) for x in fr.split("-"))
+        if key not in KEYCODE:
+            raise SystemExit("unknown key %r" % key)
+        out.append((f1, f2, KEYCODE[key]))
+    return out
+
+
+def press_pads(presses, k):
+    """Both hand controllers' byte after frame notifier k: MAME's notifier
+    k runs before the CPU sees frame k + 1, so frame k + 1 (timing.frame,
+    the picture numbering) reads press_pads(presses, k)."""
+    v = 0xFF
+    for f1, f2, code in presses:
+        if f1 <= k < f2:
+            v &= ~code & 0xFF
+    return v
 
 
 class FrameTiming:
@@ -215,8 +258,9 @@ class SystemBus:
         self.sysram = [0] * 352
         self.gram = [0] * 512
         self.vid = sticm.Stic(self, stic_mode)   # the STIC (tools/stic.py)
-        self.psg = [0] * 14
+        self.snd = psgm.ClockedPsg()    # the PSG (tools/psg.py)
         self.pad = (0xFF, 0xFF)         # $01FE right, $01FF left: no input
+        self.presses = None             # scripted keys (press_pads): override self.pad
         self.zero = ()                  # MAME mode: unmapped ranges MAME reads as 0
         self.mame_map = False           # MAME's memory map (MAME_MAP_ZERO, no aliases)
         self.reset()
@@ -226,10 +270,15 @@ class SystemBus:
         ay8910.cpp ay8910_reset_ym), the vector select, the page selects.
         RAM keeps its contents."""
         self.vid.reset()
-        self.psg = [0] * 14
+        self.snd.reset()
         self.iab_reset = True
         if self.cart is not None:
             self.cart.reset()
+
+    # -- the PSG's registers ----------------------------------------------
+    @property
+    def psg(self):
+        return self.snd.regs
 
     # -- the STIC's registers, as the step-3 stub had them ------------------
     @property
@@ -296,7 +345,11 @@ class SystemBus:
             v &= self.scratch[a & 0xFF]
         elif 0x1F0 <= a <= 0x1FF:
             n = a & 0xF
-            v &= self.pad[n - 14] if n >= 14 else self.psg[n]
+            pads = self.pad
+            if self.presses is not None:
+                p = press_pads(self.presses, self.timing.frame(self._t(cycle)) - 1)
+                pads = (p, p)
+            v &= self.snd.read(n, pads)
         elif 0x200 <= a <= 0x35F:
             v &= self.sysram[a - 0x200]
         elif 0x1000 <= a <= 0x1FFF:
@@ -326,8 +379,7 @@ class SystemBus:
         if 0x100 <= a <= 0x1EF:
             self.scratch[a & 0xFF] = value & 0xFF
         elif 0x1F0 <= a <= 0x1FD:
-            n = a & 0xF
-            self.psg[n] = value & PSG_MASK[n]
+            self.snd.bus_write(a & 0xF, value, self._t(cycle))   # MAME mode: on MAME's clock
         elif 0x200 <= a <= 0x35F:
             self.sysram[a - 0x200] = value
         if a & 0x3800 == 0x3800 and (0x3800 <= a <= 0x3BFF or not self.mame_map):
@@ -341,7 +393,11 @@ class SystemBus:
         self.vid.write(n, value, self.timing.frame(t), self.stic_open(cycle), t)
 
     def state(self, cycle):
-        return {"scratch": list(self.scratch), "sysram": list(self.sysram),
+        """The machine's state at the start of cycle `cycle` (the bench's
+        dumps); psgx: the PSG's state words 14-20 (intv_psg.sv)."""
+        self.snd.advance(self._t(cycle) - 1)
+        return {"psgx": self.snd.state(self._t(cycle) % 4)[14:],
+                "scratch": list(self.scratch), "sysram": list(self.sysram),
                 "gram": list(self.gram), "stic": list(self.stic),
                 "psg": list(self.psg), "handshake": int(self.handshake(cycle)),
                 "csmode": self.csmode,

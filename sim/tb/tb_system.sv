@@ -1,5 +1,5 @@
-// Step 3-5 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
-// fabric, RAMs, the STIC, the PSG register stub) with the real timing
+// Step 3-6 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
+// fabric, RAMs, the STIC, the PSG) with the real timing
 // (intv_timing) and cartridge side (intv_media and our SRAM model), running
 // the EXEC with or without a cartridge. The bench writes what the bus does,
 // what the STIC fetches and the pictures it draws; sim/tb/tb_system.py
@@ -12,6 +12,10 @@
 //   +cycles=N           run N CPU cycles from the first fetch (model cycle 0)
 //   +pads=RRLL          the hand controllers' bytes at $01FE (right) and
 //                       $01FF (left), hex (default FFFF: nothing pressed)
+//   +keys=F             scripted hand controllers (tb_system.py --play):
+//                       lines "k RRLL", both bytes from frame k on (model
+//                       cycle k x FRAME) until the next line; +pads before
+//                       the first
 //   +log=F              the output (below)
 //   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
 //   +pic=F              write every picture to F (binary, see below)
@@ -52,6 +56,12 @@
 //   K c b0 .. b7        the frame's end (cycle c): the collision bits the
 //                       frame gathered for MOBs 0-7 (hex; ORed into
 //                       $18-$1F now)
+//   A k ha na hq nq     the end of frame k: the PSG's steps in it (na, FNV-1a
+//                       ha over each step's three levels before it, A | B
+//                       << 4 | C << 8: the filter's input) and its 48 kHz
+//                       samples (nq, hash hq); a rewind (+rt=2) restores
+//                       the sums of the mark, and the last line of a frame
+//                       counts
 //   H k hb nb hs ns     +bushash: frame k's B lines (hb, count nb) and S
 //                       lines (hs, ns), FNV-1a over 32-bit words: B c ph a
 //                       d, S c r0 .. r7 f; S lines of cycle 0 are left out
@@ -155,9 +165,23 @@ module tb_system;
     wire logic [3:0]  colour;
     logic             busrq_en = 1'b1;
 
+    // +keys: the hand controllers' bytes by model cycle (cyc, below)
+    int          nkeys = 0;
+    longint      key_c[256];
+    logic [15:0] key_v[256];
+    logic [15:0] kpads;
+    longint      cyc = -1;                // model cycle of the CPU cycle now running
+
+    always_comb begin
+        kpads = {pad_r, pad_l};
+        for (int i = 0; i < nkeys; i++)
+            if (cyc >= key_c[i]) kpads = key_v[i];
+    end
+
     intv_machine dut (
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
-        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en, .pad_r, .pad_l,
+        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en,
+        .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
@@ -172,7 +196,6 @@ module tb_system;
     int rt = 0, rtsub = 0;
     int  fd;
     int  nfail = 0;
-    longint cyc = -1;                     // model cycle of the CPU cycle now running
 
     task automatic fail(input string s);
         nfail++;
@@ -187,6 +210,8 @@ module tb_system;
     int     bushash = 0;
     logic [31:0] hb = 32'h811C9DC5, hs_ = 32'h811C9DC5;
     int     nb = 0, ns = 0;
+    logic [31:0] ha = 32'h811C9DC5, hq = 32'h811C9DC5, ha_s, hq_s;
+    int     na = 0, nq = 0, na_s, nq_s;
     localparam longint FRAME = 14934;
 
     function automatic logic [31:0] fnv(input logic [31:0] h, input logic [31:0] x);
@@ -230,6 +255,19 @@ module tb_system;
             if (bushash != 0 && cyc >= 0 && (cyc + 1) % FRAME == 0) begin
                 $fdisplay(fd, "H %0d %08x %0d %08x %0d", cyc / FRAME, hb, nb, hs_, ns);
                 hb = 32'h811C9DC5; hs_ = 32'h811C9DC5; nb = 0; ns = 0;
+            end
+            // the PSG: a step ends this cycle (and maybe a 48 kHz sample)
+            if (cyc >= 0 && dut.psg.tick) begin
+                ha = fnv(ha, {20'd0, dut.psg.lv[2], dut.psg.lv[1], dut.psg.lv[0]});
+                na++;
+                if (dut.psg.srph_n >= 23'd3579545) begin
+                    hq = fnv(hq, 32'(dut.psg.prod[31:16]));
+                    nq++;
+                end
+            end
+            if (cyc >= 0 && (cyc + 1) % FRAME == 0) begin
+                $fdisplay(fd, "A %0d %08x %0d %08x %0d", cyc / FRAME, ha, na, hq, nq);
+                ha = 32'h811C9DC5; hq = 32'h811C9DC5; na = 0; nq = 0;
             end
             cyc <= cyc + 1;
         end
@@ -316,7 +354,7 @@ module tb_system;
     // module id, word count (the order is the write order)
     localparam int NMOD = 13;
     int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 14, 256, 256, 96, 256, 256, 21, 20, 64};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 21, 20, 64};
     logic [31:0] saved [NMOD][256];
     logic [3:0]  pbuf_saved [2][45360];
 
@@ -382,6 +420,7 @@ module tb_system;
     task automatic save_all();
         for (int b = 0; b < 2; b++)               // the bench's own picture capture (rewind)
             for (int i = 0; i < 45360; i++) pbuf_saved[b][i] = pbuf[b][i];
+        ha_s = ha; hq_s = hq; na_s = na; nq_s = nq;   // and its PSG sums
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
@@ -484,7 +523,22 @@ module tb_system;
         if (bushash != 0 && rt != 0) fail("+bushash with a round trip");
         begin
             logic [15:0] pads;
+            string keys_f;
             if ($value$plusargs("pads=%h", pads)) {pad_r, pad_l} = pads;
+            if ($value$plusargs("keys=%s", keys_f)) begin
+                int     kf;
+                longint k;
+                logic [15:0] v;
+                kf = $fopen(keys_f, "r");
+                if (kf == 0) fail($sformatf("cannot open %s", keys_f));
+                while (kf != 0 && nkeys < 256 && $fscanf(kf, "%d %h", k, v) == 2) begin
+                    key_c[nkeys] = k * FRAME;
+                    key_v[nkeys] = v;
+                    nkeys++;
+                end
+                if (kf != 0) $fclose(kf);
+                $fdisplay(fd, "L keys %0d", nkeys);
+            end
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -537,6 +591,7 @@ module tb_system;
                     rw_req = 1'b0;
                     for (int b = 0; b < 2; b++)
                         for (int i = 0; i < 45360; i++) pbuf[b][i] = pbuf_saved[b][i];
+                    ha = ha_s; hq = hq_s; na = na_s; nq = nq_s;
                     $fdisplay(fd, "R rewind %0d", rtcyc);
                 end
                 resume();

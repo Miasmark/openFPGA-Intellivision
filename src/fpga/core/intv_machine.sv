@@ -1,10 +1,10 @@
-// Intellivision core: the machine as build step 5 has it (DESIGN.md 9):
+// Intellivision core: the machine as build step 6 has it (DESIGN.md 9):
 // the CP1610, the bus fabric, scratchpad, System RAM and GRAM, the STIC
 // (backgrounds, MOBs and collisions, BUSRQ, the picture) and the PSG
-// register stub, around the
-// cartridge port and the system ROMs of intv_media. No sound yet: the EXEC
-// and the games run, and the bus and the picture match tools/intv_system.py
-// cycle by cycle (sim/tb/tb_system.sv).
+// (sound and the hand controllers), around the cartridge port and the
+// system ROMs of intv_media. The EXEC and the games run, and the bus, the
+// picture and the PSG's output match tools/intv_system.py cycle by cycle
+// (sim/tb/tb_system.sv).
 //
 //   cp1610          CPU (one bus phase per ce)
 //   intv_bus        address latch, decode, data-in, IAB vectors, INTRM and
@@ -13,7 +13,8 @@
 //   intv_stic       STIC: registers and handshake, row fetches from System
 //                   RAM (BUSRQ), cards and MOBs from GROM / GRAM,
 //                   collisions, the picture
-//   intv_psg_regs   PSG registers and hand controllers (stub)
+//   intv_psg        PSG (AY-3-8914): tone, noise, envelope, the 48 kHz
+//                   sound (audio, audio_stb) and the hand controllers
 //   intv_ram x 3    scratchpad 256 x 8 ($0100-$01EF), System RAM 352 x 16
 //                   ($0200-$035F), GRAM 512 x 8 ($3800-$3FFF)
 //
@@ -32,7 +33,7 @@
 //   SS_CPU  ($02)        cp1610, 8 words
 //   SS_BUS  ($03)        intv_bus, 2 words
 //   SS_STIC ($04)        intv_stic, 67 words
-//   SS_PSG  ($05)        intv_psg_regs, 14 words
+//   SS_PSG  ($05)        intv_psg, 21 words
 //   SS_SCR  ($06)        scratchpad, 256 words
 //   SS_SYS  ($07, $08)   System RAM, 352 words
 //   SS_GRAM ($09, $0A)   GRAM, 512 words
@@ -87,6 +88,8 @@ module intv_machine #(
     input  wire logic [7:0]  vgrom_q,
 
     output logic [3:0]       colour,          // the picture, this pixel clock
+    output logic [15:0]      audio,           // the PSG, 48 kHz (0..32766)
+    output logic             audio_stb,
 
     // what the bus does (bench, later the STIC)
     output logic [2:0]       phase,
@@ -153,9 +156,9 @@ module intv_machine #(
         .grom_addr(vgrom_addr), .grom_q(vgrom_q), .colour,
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_stic));
 
-    intv_psg_regs #(.SS_ID(SS_PSG)) psg (
-        .clk, .reset(mreset), .n(addr[3:0]), .we(psg_we), .wdata(dout[7:0]),
-        .q(psg_q), .pad_r, .pad_l,
+    intv_psg #(.SS_ID(SS_PSG)) psg (
+        .clk, .reset(mreset), .ce, .run(!hold), .n(addr[3:0]), .we(psg_we), .wdata(dout[7:0]),
+        .q(psg_q), .pad_r, .pad_l, .audio, .audio_stb,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_psg));
 
     intv_ram #(.AW(8), .DW(8), .WORDS(256), .SS_ID(SS_SCR)) scratch (

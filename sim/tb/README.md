@@ -8,7 +8,8 @@ to `sim/work*`.
 | `tb_timing.sv` | 1: timing, video port, timing state port | `sim/tb/run_tb_timing.sh --all` |
 | `tb_loader.sv` | 2: loader, CRC table, page table, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` |
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
-| `tb_system.sv` | 3-5: the machine (CPU, bus fabric, RAMs, STIC, PSG stub) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-5) `--screens` |
+| `tb_system.sv` | 3-6: the machine (CPU, bus fabric, RAMs, STIC, PSG) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-6) `--screens` |
+| `tb_input.sv` | 6: the input module against the input model and MAME's hand-controller tables | `python3 -I sim/tb/tb_input.py --all` |
 
 `tb_loader.py` builds `tb_loader.sv` with the real `core_bridge_cmd.v`,
 agg23's `data_loader.sv`, `apf_datatable.sv` and `intv_media.sv`, plus our
@@ -165,3 +166,88 @@ and the frame's end dropping a CPU write to $18-$1F (systest p11): 128
 plants in all. `--screens` adds
 the ten MOB games of docs/STIC_NOTES.md 5.4 (700 pictures each, MTE201
 900).
+
+Step 6 (the PSG, `intv_psg.sv`; docs/PSG_NOTES.md 5). The model's PSG
+(`tools/psg.py`) steps with the system model's cycle count. The bench
+writes an A line at every frame's end: a hash of every PSG step's three
+levels in the frame (before the step: the 48 kHz filter's input) and a
+hash of the 48 kHz samples the frame's steps ended; the driver compares
+them with the model, steps in every run, samples in straight runs (the
+filter is not state, so a round trip may move them), and frame by frame
+in the frame gate. The dumps add the PSG's seven new state words (tone
+counts and outputs, noise count and prescaler, LFSR, envelope count, step,
+attack, holding, tick phase); the state port grows to 21 words. Image
+`psgtest` runs `sim/testroms/psgtest.asm` (22 frames, two different
+hand-controller bytes) with two more round trips in the middle of a slow
+envelope: rt9 into a reset machine, rt10 over a later state. `--all` adds
+22 PSG plants (LFSR tap, tone compare, envelope period, volume selects,
+shape restart, alternate, tone-off bit, tick phase, write before the
+step, filter reciprocal, one low pass, a DAC level, the noise prescaler's
+phase, Continue = 0 holding, the mixer's noise bits, the port-direction
+bits obeyed; state port: tone, noise, LFSR, envelope count, envelope
+step, tick phase) and keeps the
+step-3 PSG ones (mask, registers lost, ports swapped) on `intv_psg.sv`.
+
+The play bench (`tb_system.py --play`, step 6): Astrosmash (1,200
+frames) and B-17 Bomber (1,300), each started with a key press and played
+with scripted keys on both hand controllers (`PLAY`: keypad, side buttons
+and disc directions, held from one MAME frame notifier to another). The
+bench reads the keys as `+keys` (the bytes by frame, changing at the
+frame's first cycle) and the model (`intv_system.press_pads`) applies the
+same bytes by frame; every picture, row fetch, card row, collision bit,
+per-frame bus hash and PSG hash must be equal, mode `stic`. With
+`INTV_PLAY_ROOT` (one `tools/refs/mame_play.sh` OUTDIR per game) the
+model in mode `mame` must also equal MAME given the same keys: every
+10th frame's snapshot pixel for pixel (`stic_frames.py compare --press`)
+and the PSG register log and step stream (`psg_compare.py --press`). The
+last line is `TB_PLAY_ALL pass`.
+
+`tb_input.py` writes about 541,000 vectors (`sim/work/tb_input/vectors.txt`)
+and runs `tb_input.sv` (`intv_input.sv` alone) over them: the agreed
+mapping written out row by row as the hand-controller inputs each Pocket
+input must press, with MAME's `read_ctrl()` of those inputs as the expected
+bytes; every combination of the 16 Pocket buttons in each keypad mode
+(player 1 on the Pocket, player 2 docked); both sticks over their whole
+range; every keyboard usage code in each report byte and random reports;
+every slot type on each slot; random vectors; and the centres of MAME's
+analog grid, expected as its table says. Both Swap settings throughout.
+The bench runs `clk` (clk_sys) and `clk_74a` (period drawn each cycle
+between 12.5 and 14.5 ns) and drives the inputs as clk_74a signals; each
+vector is checked 16 clocks after it is driven.
+For all but the spec rows and the grid the expected bytes are the model's,
+and the model must equal MAME's `read_ctrl()` on every vector. `--all`
+then builds 18 planted faults (Swap ignored, a disc code, the dead zone's
+edge, a sector slope, stick y flipped, L beating R, no cancel on the ring,
+the face buttons' left and right swapped, Backspace, the keyboard on any
+slot type, the keyboard's sixth byte, any slot type a controller, no R3,
+the right stick in every mode, sticks on the Pocket, and `bitwise_sync`:
+the crossing before 0.0.5, every bit through two flip-flops on its own;
+`copy_while_in_flight`: the copy retaken at every clk_74a edge;
+`reg_then_bitwise`: a registered copy crossed bit by bit); each must fail.
+The plants run on the skew build (below).
+
+The crossing (`sim/work/tb_input/tear.txt`, 2,000 groups of 2-4 vectors:
+keyboard codes such as 1E and 21, button sets, Keypad Mode and Swap, the
+sticks, slot types, random words): the bench changes the inputs among a
+group's vectors at random clk_74a edges, 64 changes per group, each bit
+taking its new value at one of four moments within the clk_74a cycle (the
+routing of a clk_74a bus), and at every clk edge both bytes must be the
+bytes of one of the group's vectors. This model skews only the raw
+clk_74a inputs: it shows that `intv_input.sv` does not sample the inputs
+bit by bit (`bitwise_sync` shows about 27,000 torn bytes over the 930,000
+clk edges), but the held copy is a register and changes all at once here,
+so it says nothing about the handshake. Two more checks do:
+- the handshake rule, in every run: the copy (`hold_74`) must not change at
+  a clk_74a edge while a transfer is in flight (`req_74 != ack`); the bench
+  counts copies and loads (`copy_while_in_flight` breaks it);
+- the skew build: `tb_input.py` builds `intv_input.sv` a second time with
+  its clk blocks reading the copy and the request through views the bench
+  drives (`-DTB_SKEW`), each bit arriving at one of eight moments 0.5 to
+  19.75 ns after it changes (twice the SDC's 10 ns bound, just under one
+  clk period; drawn per group), and runs the crossing groups on it. A clk
+  side that loads before every bit has arrived, or crosses a registered
+  copy bit by bit (`reg_then_bitwise`), shows torn bytes.
+Neither shows metastability: a load decided on the request's first
+flip-flop (`req_s[0]`) passes both. That, and the 10 ns net-delay bound,
+are checked on the fit: `sim/check/fit_crossing_check.py` reads
+`ap_core.sta.rpt` (DEVELOPING, Build).

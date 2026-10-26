@@ -29,7 +29,7 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
 - `intv_system.py`: the Intellivision as build steps 3-4 have it around
   the CPU model: memory map, pull-ups, EXEC (10 bits), GROM, GRAM with its
   windows, scratchpad and System RAM, the STIC (`stic.py`) and the PSG
-  register stub that answers as MAME does, the frame timing (INTRM and the
+  (`psg.py`), the frame timing (INTRM and the
   bus-copy window, the STIC handshake, BUSRQ) and the cartridge (the
   mapper model). The golden model of `sim/tb/tb_system.py`.
   `intv_system.py mame TRACE [--cart IMG] [--timing computed]` compares it
@@ -38,6 +38,11 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   NEGR carry and its memory map (no GRAM alias above $3BFF, unmapped
   ranges read 0), and with `--timing computed` MAME's 59.92 Hz frames
   computed rather than read from the trace.
+- `intv_input.py`: the input model (DESIGN.md 7.2, build step 6): the
+  Pocket's controllers and USB keyboard as two hand controllers, the bytes
+  on the PSG's ports; its code table is checked against MAME's
+  hand-controller tables (`handctrl.cpp`), and every byte against MAME's
+  `read_ctrl()` transcribed. The golden model of `sim/tb/tb_input.py`.
 - `stic.py`: the STIC model (build steps 4 and 5): registers, Color
   Stack / Colored Squares / Foreground-Background cards from GROM and
   GRAM, border colour, delays and border extension, the display enable,
@@ -52,11 +57,25 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   from register $2C as it is when each pixel is drawn (so a picture is
   handed out at line 24 of the next frame). Facts, sources and
   disagreements: `docs/STIC_NOTES.md`.
+- `psg.py`: the PSG model (build step 6): the AY-3-8914's registers,
+  tone, noise and envelope generators, the 2-bit envelope select, mixer,
+  DAC curve and the 48 kHz filter the core gives the Pocket, clocked from
+  the system model's CPU cycles (`ClockedPsg`); `psg.py selftest` checks
+  periods, the LFSR's length and all 16 envelope shapes. Facts, sources
+  and the differences from MAME: `docs/PSG_NOTES.md`.
+- `psg_compare.py`: the PSG model against MAME (`tools/refs/mame_psg.sh`'s
+  register-write log, step stream and 48 kHz file): the register log and,
+  with MAME's tone counter and step grid, every PSG step must be equal;
+  with the core's counter, how close the steps and the 48 kHz sound are
+  (pitch, spectrum, envelope, waveform). Results in `docs/PSG_NOTES.md` 4.
 - `stic_frames.py`: the model's pictures against MAME's snapshots:
   `import` (MAME PNG to palette-index PGM, the palette read from MAME's
   own source; needs Pillow), `run` (pictures, bus logs with MOB lines and
   collision bits) and `compare` (snapshot N against picture N - 1, every
-  pixel).
+  pixel); `--press F1-F2:KEY,...` holds scripted keys on both hand
+  controllers as `tools/refs/mame_psg.sh` does in MAME
+  (`intv_system.parse_presses` / `press_pads`, also used by
+  `psg_compare.py --press` and the play bench).
 - `cpu_buslog.py`: exports the model's bus-phase log, step ends and
   final registers for the RTL lockstep bench (`sim/tb/tb_cpu.sv`, build
   step 3): every program in `sim/tests/cpu`, a sweep over all 1024

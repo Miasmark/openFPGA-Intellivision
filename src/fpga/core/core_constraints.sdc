@@ -48,3 +48,30 @@ set_input_delay -clock $sram_clk -max 67.0 [get_ports {sram_dq[*]}]
 set_input_delay -clock $sram_clk -min 0.0 [get_ports {sram_dq[*]}]
 set_multicycle_path -from [get_ports {sram_dq[*]}] -setup -end 3
 set_multicycle_path -from [get_ports {sram_dq[*]}] -hold -end 2
+
+# Input (core/intv_input.sv, build step 6): the controller words and the
+# Keypad Mode / Swap settings cross from clk_74a to clk_sys as one held word
+# with a toggle handshake. hold_74 (clk_74a) is taken and req_74 toggles at
+# the same clk_74a edge; req_74 passes two clk_sys flip-flops (req_s), and
+# word loads hold_74 at the clk_sys edge after req_s[1] changes, at least
+# two clk_sys periods (46.56 ns) after req_74 reached req_s[0]; hold_74 does
+# not change again until the acknowledge has come back through two clk_74a
+# flip-flops (ack_74). So the copy is stable for the load as long as no bit
+# of it takes much longer from hold_74 to word than req_74 takes to req_s[0]:
+# the scheme leaves about two clk_sys periods for that difference. No bound
+# on skew is needed, only one on the paths' length, which the asynchronous
+# clock groups above would leave untimed: set_net_delay still applies to
+# cut paths and bounds every hold_74 -> word and req_74 -> req_s[0] net to
+# 10 ns (the paths are register to register, so the net is nearly all of
+# the path; 10 ns is under a quarter of the margin). set_max_skew and
+# set_max_delay do not work here: Quartus Standard drops both on paths the
+# clock groups cut ("No path is found satisfying assignment", tried on the
+# 0.0.5 fit). The fit's Timing Analyzer lists the net delays in
+# ap_core.sta.rpt (panels "Input crossing net delay", core/sta_reports.tcl).
+# The single-bit synchronisers (req_74 -> req_s, ack -> ack_74) need nothing
+# more; the metastability report (panel "Synchronizer chains") lists them as
+# chains of two flip-flops. sim/check/fit_crossing_check.py checks both
+# after a fit (DEVELOPING, Build).
+set in_from [get_keepers {*intv_input:*|hold_74[*] *intv_input:*|req_74}]
+set in_to   [get_keepers {*intv_input:*|word[*] *intv_input:*|req_s[0]}]
+set_net_delay -from $in_from -to $in_to -max 10.0

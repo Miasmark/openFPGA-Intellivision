@@ -14,11 +14,13 @@
         write picture N as DIR/m<N>.pgm and the STIC's graphics bus accesses
         of that frame (row fetches, cards, MOB patterns, collisions) as
         DIR/m<N>.bus.txt.
-  compare --cart IMG|none --ref DIR --snaps N[,N...] [--mode ...]
+  compare --cart IMG|none --ref DIR --snaps N[,N...] [--mode ...] [--press ...]
         run the model and compare DIR/f<N>.pgm (MAME's snapshot at its
         frame notifier N, imported as above) with model picture N - 1,
         every pixel (MOBs included; until build step 5 the MOB areas were
         masked). Prints one line per picture and STIC_FRAMES pass / FAIL.
+        --press F1-F2:KEY,... holds keys on both hand controllers as
+        tools/refs/mame_psg.sh does in MAME (intv_system.press_pads).
 
 Picture N is the one the STIC model draws at the start of frame N, as MAME
 draws the whole frame in its vblank-N interrupt (intv_m.cpp:683). MAME
@@ -76,9 +78,12 @@ def parse_list(s):
     return sorted({int(x) for x in s.split(",") if x})
 
 
-def model_pictures(cart, pictures, mode, bios_dir=None, want_info=False):
-    """{n: (picture, info)} from the system model."""
+def model_pictures(cart, pictures, mode, bios_dir=None, want_info=False, presses=None):
+    """{n: (picture, info)} from the system model, with scripted keys
+    (intv_system.parse_presses) if given."""
     bus, cpu, mclk = isys.system_for(mode, bios_dir, None if cart == "none" else cart)
+    if presses:
+        bus.presses = presses
     out = {}
 
     def grab(n, pic, info):
@@ -132,6 +137,8 @@ def main():
             p.add_argument("--pictures", required=True)
         p.add_argument("--mode", choices=sticm.MODES, default="mame")
         p.add_argument("--bios-dir")
+        p.add_argument("--press", help="F1-F2:KEY,... held on both hand controllers, as "
+                       "tools/refs/mame_psg.sh presses them")
         if name == "run":
             p.add_argument("--out", required=True)
         else:
@@ -154,7 +161,8 @@ def main():
     else:
         snaps = parse_list(a.snaps)
         pics = [n - 1 for n in snaps]
-    got = model_pictures(a.cart, set(pics), a.mode, a.bios_dir)
+    got = model_pictures(a.cart, set(pics), a.mode, a.bios_dir,
+                         presses=isys.parse_presses(a.press))
     if a.cmd == "run":
         os.makedirs(a.out, exist_ok=True)
         for n in pics:

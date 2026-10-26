@@ -3,9 +3,16 @@
 # Run the intv-only MAME on one cartridge image (or "none") for FRAMES
 # frames and record the PSG (AY-3-8914 at $01F0-$01FF). PRESSES (default
 # none) holds keys on both hand controllers: "F1-F2:KEY,..." presses KEY
-# (MAME's field name: 0-9, Clear, Enter, Upper, Lower-Left, Lower-Right) at
-# frame notifier F1 and releases it at F2 (tools/psg_compare.py --press
-# does the same in the model). Output:
+# (MAME's field name: 0-9, Clear, Enter, Upper, Lower-Left, Lower-Right,
+# or a disc direction of port DISC_DG: Up, Up-Up-Right, ..., Up-Up-Left,
+# MAME handctrl.cpp:37-53) at frame notifier F1 and releases it at F2
+# (tools/psg_compare.py --press does the same in the model). A disc press
+# switches both controllers' "Controller Disc Emulation" to Digital first
+# (handctrl.cpp:62-65; nothing pressed reads $FF either way). SNAPS
+# (environment, optional) is a comma-separated list of frame notifiers at
+# which to save a snapshot: OUTDIR/snap/intv/NNNN.png in that order
+# (tools/stic_frames.py import turns them into PGMs); OUTDIR/snap must not
+# exist yet. Output:
 #   OUTDIR/psg.log    one line per CPU write to $01F0-$01FF, in order:
 #                     "c=<total cycles> f=<frame> pc=<R7> W <addr> <data>"
 #                     (MAME debugger watchpoint, logged with its logerror
@@ -37,6 +44,7 @@ done
 : "${MAME:?}" "${MAME_ROMPATH:?}" "${MAME_HASHPATH:?}"
 mkdir -p "$out"; out=$(cd "$out" && pwd)
 rm -f "$out/psg.log" "$out/error.log" "$out/audio.wav"
+if [ -n "${SNAPS:-}" ] && [ -e "$out/snap" ]; then echo "$out/snap exists: use a new OUTDIR" >&2; exit 2; fi
 cat > "$out/psg.lua" <<LUA
 -- psg lane: log every CPU write to the PSG, stop after $frames frames
 local m = manager.machine
@@ -44,9 +52,17 @@ local d = m.debugger
 d:command([[wpset 1f0,10,w,1,{logerror "PSGW c=%d f=%d pc=%04X W %04X %04X\\n",totalcycles,frame,r7,wpaddr,wpdata; g}]])
 d:command("g")
 local press = {$lp}
+local snaps = {}
+for v in string.gmatch("${SNAPS:-}", "%d+") do snaps[tonumber(v)] = true end
 local pads = {}
-for _, t in ipairs({":iopt_right_ctrl:handctrl:KEYPAD", ":iopt_left_ctrl:handctrl:KEYPAD"}) do
-  pads[#pads + 1] = m.ioport.ports[t]
+local digital = false
+for _, p in ipairs(press) do
+  if not ({["0"]=1,["1"]=1,["2"]=1,["3"]=1,["4"]=1,["5"]=1,["6"]=1,["7"]=1,["8"]=1,["9"]=1,
+           Clear=1, Enter=1, Upper=1, ["Lower-Left"]=1, ["Lower-Right"]=1})[p[3]] then digital = true end
+end
+for _, c in ipairs({":iopt_right_ctrl:handctrl:", ":iopt_left_ctrl:handctrl:"}) do
+  if digital then m.ioport.ports[c .. "OPTIONS"].fields["Controller Disc Emulation"].user_value = 0 end
+  pads[#pads + 1] = {m.ioport.ports[c .. "KEYPAD"], m.ioport.ports[c .. "DISC_DG"]}
 end
 local ids, nid = {}, 0
 local tf = io.open("$out/ticks.bin", "wb")
@@ -74,9 +90,13 @@ FRAMESUB = emu.add_machine_frame_notifier(function()
   n = n + 1
   for _, p in ipairs(press) do
     if n == p[1] or n == p[2] then
-      for _, port in ipairs(pads) do port.fields[p[3]]:set_value(n == p[1] and 1 or 0) end
+      for _, pp in ipairs(pads) do
+        local f = pp[1].fields[p[3]] or pp[2].fields[p[3]]
+        f:set_value(n == p[1] and 1 or 0)
+      end
     end
   end
+  if snaps[n] then m.video:snapshot() end
   if n >= $frames then tf:close(); idf:close(); print(string.format("PSGEND frames=%d time=%.6f", n, m.time:as_double())); m:exit() end
 end)
 LUA

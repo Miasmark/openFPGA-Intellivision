@@ -12,6 +12,10 @@
 //   +cycles=N           run N CPU cycles from the first fetch (model cycle 0)
 //   +pads=RRLL          the hand controllers' bytes at $01FE (right) and
 //                       $01FF (left), hex (default FFFF: nothing pressed)
+//   +keys=F             scripted hand controllers (tb_system.py --play):
+//                       lines "k RRLL", both bytes from frame k on (model
+//                       cycle k x FRAME) until the next line; +pads before
+//                       the first
 //   +log=F              the output (below)
 //   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
 //   +pic=F              write every picture to F (binary, see below)
@@ -161,9 +165,23 @@ module tb_system;
     wire logic [3:0]  colour;
     logic             busrq_en = 1'b1;
 
+    // +keys: the hand controllers' bytes by model cycle (cyc, below)
+    int          nkeys = 0;
+    longint      key_c[256];
+    logic [15:0] key_v[256];
+    logic [15:0] kpads;
+    longint      cyc = -1;                // model cycle of the CPU cycle now running
+
+    always_comb begin
+        kpads = {pad_r, pad_l};
+        for (int i = 0; i < nkeys; i++)
+            if (cyc >= key_c[i]) kpads = key_v[i];
+    end
+
     intv_machine dut (
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
-        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en, .pad_r, .pad_l,
+        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en,
+        .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
@@ -178,7 +196,6 @@ module tb_system;
     int rt = 0, rtsub = 0;
     int  fd;
     int  nfail = 0;
-    longint cyc = -1;                     // model cycle of the CPU cycle now running
 
     task automatic fail(input string s);
         nfail++;
@@ -506,7 +523,22 @@ module tb_system;
         if (bushash != 0 && rt != 0) fail("+bushash with a round trip");
         begin
             logic [15:0] pads;
+            string keys_f;
             if ($value$plusargs("pads=%h", pads)) {pad_r, pad_l} = pads;
+            if ($value$plusargs("keys=%s", keys_f)) begin
+                int     kf;
+                longint k;
+                logic [15:0] v;
+                kf = $fopen(keys_f, "r");
+                if (kf == 0) fail($sformatf("cannot open %s", keys_f));
+                while (kf != 0 && nkeys < 256 && $fscanf(kf, "%d %h", k, v) == 2) begin
+                    key_c[nkeys] = k * FRAME;
+                    key_v[nkeys] = v;
+                    nkeys++;
+                end
+                if (kf != 0) $fclose(kf);
+                $fdisplay(fd, "L keys %0d", nkeys);
+            end
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");

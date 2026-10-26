@@ -66,23 +66,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import intv_system as isys  # noqa: E402
 
-# DESIGN 7.1 (MAME handctrl.cpp:124-135): lines pulled low per key
-KEYCODE = {"1": 0x81, "2": 0x41, "3": 0x21, "4": 0x82, "5": 0x42, "6": 0x22,
-           "7": 0x84, "8": 0x44, "9": 0x24, "Clear": 0x88, "0": 0x48, "Enter": 0x28,
-           "Upper": 0xA0, "Lower-Left": 0x60, "Lower-Right": 0xC0}
+KEYCODE = isys.KEYCODE      # keypad, side buttons and disc (intv_system.parse_presses)
 LOG_RE = re.compile(r"c=(\d+) f=(\d+) pc=([0-9A-F]+) W ([0-9A-F]+) ([0-9A-F]+)$")
 WIN = 2048
 
 
-def parse_presses(text):
-    out = []
-    for p in filter(None, (text or "").split(",")):
-        fr, key = p.split(":", 1)
-        f1, f2 = (int(x) for x in fr.split("-"))
-        if key not in KEYCODE:
-            raise SystemExit("unknown key %r" % key)
-        out.append((f1, f2, KEYCODE[key]))
-    return out
+parse_presses = isys.parse_presses
 
 
 def model_run(cart, frames, presses, bios_dir=None, mame_tone=False):
@@ -112,11 +101,7 @@ def model_run(cart, frames, presses, bios_dir=None, mame_tone=False):
     cur = [None]
 
     def pads(k):
-        v = 0xFF
-        for f1, f2, code in presses:
-            if f1 <= k < f2:
-                v &= ~code & 0xFF
-        return v
+        return isys.press_pads(presses, k)
     end = None
     while True:
         ev = cpu.step()

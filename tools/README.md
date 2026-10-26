@@ -72,7 +72,10 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   `import` (MAME PNG to palette-index PGM, the palette read from MAME's
   own source; needs Pillow), `run` (pictures, bus logs with MOB lines and
   collision bits) and `compare` (snapshot N against picture N - 1, every
-  pixel).
+  pixel); `--press F1-F2:KEY,...` holds scripted keys on both hand
+  controllers as `tools/refs/mame_psg.sh` does in MAME
+  (`intv_system.parse_presses` / `press_pads`, also used by
+  `psg_compare.py --press` and the play bench).
 - `cpu_buslog.py`: exports the model's bus-phase log, step ends and
   final registers for the RTL lockstep bench (`sim/tb/tb_cpu.sv`, build
   step 3): every program in `sim/tests/cpu`, a sweep over all 1024

@@ -186,6 +186,20 @@ step, filter reciprocal, one low pass, a DAC level; state port: tone,
 noise, LFSR, envelope count, envelope step, tick phase) and keeps the
 step-3 PSG ones (mask, registers lost, ports swapped) on `intv_psg.sv`.
 
+The play bench (`tb_system.py --play`, step 6): Astrosmash (1,200
+frames) and B-17 Bomber (1,300), each started with a key press and played
+with scripted keys on both hand controllers (`PLAY`: keypad, side buttons
+and disc directions, held from one MAME frame notifier to another). The
+bench reads the keys as `+keys` (the bytes by frame, changing at the
+frame's first cycle) and the model (`intv_system.press_pads`) applies the
+same bytes by frame; every picture, row fetch, card row, collision bit,
+per-frame bus hash and PSG hash must be equal, mode `stic`. With
+`INTV_PLAY_ROOT` (one `tools/refs/mame_play.sh` OUTDIR per game) the
+model in mode `mame` must also equal MAME given the same keys: every
+10th frame's snapshot pixel for pixel (`stic_frames.py compare --press`)
+and the PSG register log and step stream (`psg_compare.py --press`). The
+last line is `TB_PLAY_ALL pass`.
+
 `tb_input.py` writes about 541,000 vectors (`sim/work/tb_input/vectors.txt`)
 and runs `tb_input.sv` (`intv_input.sv` alone) over them: the agreed
 mapping written out row by row as the hand-controller inputs each Pocket

@@ -53,6 +53,13 @@ entries with cart RAM and with paged ROM) it
   python3 -I sim/tb/tb_system.py --all     the step-3/4 gate: the above, then
                                            the planted faults (each must fail)
   python3 -I sim/tb/tb_system.py [--only nocart] [--no-build]
+  python3 -I sim/tb/tb_system.py --play [--only astrosmash,b17bomber]
+        the step-6 play bench (PLAY): each game started with a key press
+        and played with scripted keys (+keys in the bench, press_pads in
+        the model); RTL = model mode "stic" over every frame as in the
+        frame gate; with INTV_PLAY_ROOT (tools/refs/mame_play.sh OUTDIRs)
+        also model mode "mame" = MAME's snapshots and PSG log for the same
+        keys. Last line "TB_PLAY_ALL pass".
   python3 -I sim/tb/tb_system.py --screens [--only astrosmash,...]
         the frame gate (DESIGN 9 steps 4 and 5): the EXEC without a
         cartridge and with Astrosmash (its title screen), five games and
@@ -139,6 +146,23 @@ SCREENS = [('nocart', None, 600),
            ('dragonfire', 'Dragonfire (USA, Europe).zip', 700),
            ('icetrek', 'Ice Trek (USA, Europe).zip', 700),
            ('tropicaltrouble', 'Tropical Trouble (USA, Europe).zip', 700)]
+# the play bench (step 6, --play): each game started with a key press and
+# played for a few seconds with the same scripted keys on both hand
+# controllers (F1-F2:KEY held from MAME frame notifier F1 until F2; MAME's
+# field names, intv_system.KEYCODE). The RTL against the model in mode
+# "stic" over every frame; with INTV_PLAY_ROOT (tools/refs/mame_play.sh
+# OUTDIRs, <root>/<name>) also the model in mode "mame" against MAME's
+# snapshots (every 10th frame) and PSG log for the same keys. Astrosmash:
+# 1 starts the game, then fire, left, right, diagonals; B-17 Bomber: 1, Enter
+# for the map, the disc moves the bomber, 0 takes off, then the disc moves
+# the bombsight and the side buttons fire.
+PLAY = [('astrosmash', 'Astrosmash (USA, Europe).zip', 1200,
+         '200-206:1,300-400:Upper,400-480:Left,480-600:Right,600-700:Lower-Right,'
+         '700-760:Up-Left,800-900:Upper,900-960:Down-Right'),
+        ('b17bomber', 'B-17 Bomber (USA, Europe).zip', 1300,
+         '200-206:1,500-506:Enter,600-630:Right,700-730:Down,800-806:0,900-960:Left,'
+         '1000-1040:Upper,1100-1160:Up,1200-1240:Lower-Right')]
+PLAY_SNAP_STEP = 10
 PIC_W, PIC_H = 189, 240
 PIC_BYTES = 4 + PIC_W * PIC_H // 2
 KIND = {'GROM': 0, 'GRAM': 1, 'squares': 2}
@@ -308,14 +332,17 @@ def fnv(h, *xs):
     return h
 
 
-def model_stream(exec_path, grom_path, cart_path, npics, mode='stic'):
+def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=None):
     """A long model run for the frame gate: per frame k the hash of the
     bus phases and of the step starts as the bench's H lines give them,
-    and pictures 1..npics with their STIC logs."""
+    and pictures 1..npics with their STIC logs; with presses, the scripted
+    keys of the play bench (intv_system.press_pads)."""
     cart = isys.load_cart(cart_path)
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
     bus.vid.mobs = STIC_MOBS
+    if presses:
+        bus.presses = presses
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
     audio = psg_hooks(bus)
@@ -788,10 +815,23 @@ def screen_cart(work, name, zipname, lib):
     return cart
 
 
-def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=True):
+def key_lines(presses, nframes):
+    """The bench's +keys file for a play run: "k RRLL" where frame k's
+    hand-controller byte (press_pads of notifier k - 1) changes."""
+    out, last = [], None
+    for k in range(nframes + 2):
+        v = isys.press_pads(presses, k - 1)
+        if v != last:
+            out.append('%d %02X%02X\n' % (k, v, v))
+            last = v
+    return out
+
+
+def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=True, presses=None):
     """One image of the frame gate: the bench (+bushash, +pic) runs while
     the model runs; then every picture, row fetch, card row and per-frame
-    bus hash must be equal. Returns problems."""
+    bus hash must be equal. With presses (the play bench) both hold the
+    same scripted keys. Returns problems."""
     ncyc = (npics + 1) * FRAME
     log = os.path.join(work, 'screen_%s.log' % name)
     pic = os.path.join(work, 'screen_%s.pic' % name)
@@ -799,11 +839,16 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
            '+dump=%d' % DUMP1, '+log=' + log, '+pic=' + pic, '+bushash=1', '+busrq=1']
     if cart:
         cmd.append('+cart=' + cart)
+    if presses:
+        kf = os.path.join(work, 'screen_%s.keys' % name)
+        with open(kf, 'w') as f:
+            f.writelines(key_lines(presses, npics))
+        cmd.append('+keys=' + kf)
     t0 = time.time()
     out = open(os.path.join(work, 'screen_%s.out' % name), 'w')
     proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=work)
     try:
-        hashes, pics, sinfo, audio = model_stream(exec_path, grom_path, cart, npics)
+        hashes, pics, sinfo, audio = model_stream(exec_path, grom_path, cart, npics, presses=presses)
         t1 = time.time() - t0
         r = proc.wait(timeout=7200)
     finally:
@@ -818,6 +863,11 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
     exp.hashes = hashes
     exp.audio = audio
     probs = list(got[4]) + compare_stic(got, exp, range(npics), check_hash=True)
+    if presses:
+        nk = [x for x in got[3] if x.startswith('L keys')]
+        want = 'L keys %d' % len(key_lines(presses, npics))
+        if nk != [want]:
+            probs.append('%s: bench read %s, want %s' % (name, nk, want))
     probs += compare_audio(got, exp, range(npics + 1), True)
     if verbose:
         en = sum(1 for n in range(1, npics + 1) if exp.sinfo.get(n, ([], []))[1])
@@ -1229,6 +1279,7 @@ def main():
     ap.add_argument('--plant', help='comma-separated plant names')
     ap.add_argument('--mame', action='store_true', help='also compare the model with MAME traces')
     ap.add_argument('--screens', action='store_true', help='the step-4 frame gate (SCREENS)')
+    ap.add_argument('--play', action='store_true', help='the step-6 play bench (PLAY)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_system'))
@@ -1241,6 +1292,8 @@ def main():
 
     if a.screens:
         return screens_main(a, verilator, work, lib, exec_path, grom_path)
+    if a.play:
+        return play_main(a, verilator, work, lib, exec_path, grom_path)
 
     imgs = IMAGES
     if a.only:
@@ -1418,6 +1471,60 @@ def screens_main(a, verilator, work, lib, exec_path, grom_path):
         print('TB_SCREEN %s %s' % (name, 'FAIL' if p else 'pass'))
         fails += ['%s: %s' % (name, x) for x in p]
     print('TB_SCREENS %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:4])))
+    return 1 if fails else 0
+
+
+def play_main(a, verilator, work, lib, exec_path, grom_path):
+    """The step-6 play bench (--play, PLAY)."""
+    sel = PLAY
+    if a.only:
+        sel = [x for x in PLAY if x[0] in a.only.split(',')]
+    proot = os.environ.get('INTV_PLAY_ROOT')
+    binary = os.path.join(work, 'obj', 'tb_system')
+    if not a.no_build:
+        t1 = time.time()
+        binary = build(work, CORE, verilator)
+        if not binary:
+            print('TB_PLAY FAIL (build)')
+            return 1
+        print('build: %.1fs' % (time.time() - t1))
+    fails = []
+    for name, zipname, nframes, ptext in sel:
+        presses = isys.parse_presses(ptext)
+        cart = screen_cart(work, name, zipname, lib)
+        try:
+            print('%s: keys %s' % (name, ptext))
+            p = check_screen(binary, work, name, cart, exec_path, grom_path, nframes, presses=presses)
+            print('TB_PLAY %s RTL = model (mode stic) %s' % (name, 'FAIL' if p else 'pass'))
+            if proot:
+                ref = os.path.join(proot, name)
+                snaps = ','.join(str(n) for n in range(PLAY_SNAP_STEP, nframes + 1, PLAY_SNAP_STEP))
+                for what, cmd in (
+                        ('frames', [sys.executable, '-I', os.path.join(ROOT, 'tools', 'stic_frames.py'),
+                                    'compare', '--mode', 'mame', '--cart', cart, '--ref',
+                                    os.path.join(ref, 'frames'), '--snaps', snaps, '--press', ptext]),
+                        ('PSG', [sys.executable, '-I', os.path.join(ROOT, 'tools', 'psg_compare.py'),
+                                 'compare', ref, '--cart', cart, '--frames', str(nframes),
+                                 '--press', ptext, '--name', name])):
+                    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       universal_newlines=True)
+                    lines = r.stdout.strip().splitlines()
+                    keep = [x for x in lines if 'DIFFER' in x or 'pass' in x or 'FAIL' in x
+                            or 'log equal' in x or 'steps equal' in x]
+                    for x in keep[-6:]:
+                        print('    ' + x)
+                    ok = r.returncode == 0 and lines and ' pass' in lines[-1]
+                    print('TB_PLAY %s MAME %s = model (mode mame) %s' % (name, what, 'pass' if ok else 'FAIL'))
+                    if not ok:
+                        p = p + ['MAME %s' % what]
+            else:
+                print('  MAME side skipped (INTV_PLAY_ROOT not set)')
+        finally:
+            if cart:
+                os.remove(cart)
+        print('TB_PLAY %s %s' % (name, 'FAIL' if p else 'pass'))
+        fails += ['%s: %s' % (name, x) for x in p]
+    print('TB_PLAY_ALL %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:4])))
     return 1 if fails else 0
 
 

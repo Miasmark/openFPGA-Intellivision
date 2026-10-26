@@ -106,6 +106,48 @@ def load_words(path):
     return [data[i] << 8 | data[i + 1] for i in range(0, len(data) - 1, 2)]
 
 
+# Scripted keys (the step-6 play benches; tools/refs/mame_psg.sh presses
+# the same keys in MAME). The lines each key pulls low: DESIGN 7.1, MAME
+# handctrl.cpp:124-135 inverted (KEYPAD port, names as MAME's PORT_NAME);
+# the disc directions of MAME's digital disc (DISC_DG, handctrl.cpp:37-53,
+# bit 15 "Up" down to bit 0 "Up-Up-Left") pull ~disc_table[bit]
+# (handctrl.cpp:130-135, 160-166).
+KEYCODE = {"1": 0x81, "2": 0x41, "3": 0x21, "4": 0x82, "5": 0x42, "6": 0x22,
+           "7": 0x84, "8": 0x44, "9": 0x24, "Clear": 0x88, "0": 0x48, "Enter": 0x28,
+           "Upper": 0xA0, "Lower-Left": 0x60, "Lower-Right": 0xC0}
+DISC_NAMES = ["Up", "Up-Up-Right", "Up-Right", "Right-Up-Right", "Right", "Right-Down-Right",
+              "Down-Right", "Down-Down-Right", "Down", "Down-Down-Left", "Down-Left",
+              "Left-Down-Left", "Left", "Left-Up-Left", "Up-Left", "Up-Up-Left"]
+_MAME_DISC_TABLE = [0xf3, 0xe3, 0xe7, 0xf7, 0xf6, 0xe6, 0xee, 0xfe,
+                    0xfc, 0xec, 0xed, 0xfd, 0xf9, 0xe9, 0xeb, 0xfb]
+for _i, _n in enumerate(DISC_NAMES):
+    KEYCODE[_n] = ~_MAME_DISC_TABLE[15 - _i] & 0xFF
+
+
+def parse_presses(text):
+    """"F1-F2:KEY,..." (KEY held from MAME's frame notifier F1 until F2)
+    -> [(F1, F2, lines pulled low)]."""
+    out = []
+    for p in filter(None, (text or "").split(",")):
+        fr, key = p.split(":", 1)
+        f1, f2 = (int(x) for x in fr.split("-"))
+        if key not in KEYCODE:
+            raise SystemExit("unknown key %r" % key)
+        out.append((f1, f2, KEYCODE[key]))
+    return out
+
+
+def press_pads(presses, k):
+    """Both hand controllers' byte after frame notifier k: MAME's notifier
+    k runs before the CPU sees frame k + 1, so frame k + 1 (timing.frame,
+    the picture numbering) reads press_pads(presses, k)."""
+    v = 0xFF
+    for f1, f2, code in presses:
+        if f1 <= k < f2:
+            v &= ~code & 0xFF
+    return v
+
+
 class FrameTiming:
     """Frame k starts at cycle k x FRAME (the RTL's timing)."""
 
@@ -218,6 +260,7 @@ class SystemBus:
         self.vid = sticm.Stic(self, stic_mode)   # the STIC (tools/stic.py)
         self.snd = psgm.ClockedPsg()    # the PSG (tools/psg.py)
         self.pad = (0xFF, 0xFF)         # $01FE right, $01FF left: no input
+        self.presses = None             # scripted keys (press_pads): override self.pad
         self.zero = ()                  # MAME mode: unmapped ranges MAME reads as 0
         self.mame_map = False           # MAME's memory map (MAME_MAP_ZERO, no aliases)
         self.reset()
@@ -302,7 +345,11 @@ class SystemBus:
             v &= self.scratch[a & 0xFF]
         elif 0x1F0 <= a <= 0x1FF:
             n = a & 0xF
-            v &= self.snd.read(n, self.pad)
+            pads = self.pad
+            if self.presses is not None:
+                p = press_pads(self.presses, self.timing.frame(self._t(cycle)) - 1)
+                pads = (p, p)
+            v &= self.snd.read(n, pads)
         elif 0x200 <= a <= 0x35F:
             v &= self.sysram[a - 0x200]
         elif 0x1000 <= a <= 0x1FFF:

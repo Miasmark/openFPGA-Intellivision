@@ -129,6 +129,11 @@ and 16 DSP blocks (the sticks' squares and slope products; `multstyle`
 "logic" would move them to ALMs if DSPs run short); worst setup +0.757 ns
 (`clk_sys`, the SRAM data inputs, not the input module, whose worst path
 has +7.457 ns), worst hold +0.038 ns (fast 0 C model).
+Step 6 merged (branch step6: the PSG, the input module on the PSG's ports,
+sound on I2S; seed 1): 4,008 ALMs (`intv_psg` 333, `intv_input` 326),
+5,170 registers, 24 RAM blocks (140,108 bits), 20 DSP; worst setup
+`clk_sys` +0.757 ns (slow 85 C, as before), worst hold +0.038 ns
+(`clk_sys`, fast 0 C); no negative slack.
 
 ## Simulation
 

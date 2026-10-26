@@ -123,6 +123,12 @@ Step 6, the PSG with its sound on the Pocket's I2S (seed 1): 3,693 ALMs
 `clk_sys` +0.757 ns (slow 85 C; the SRAM data inputs, as before this
 step), `clk_74a` +3.265 ns; worst hold +0.036 ns (`clk_sys`, fast 0 C);
 no negative slack.
+Step 6, input module added to steps 0-5 (seed 1): 3,726 ALMs, 4,879
+registers, 140,108 RAM bits, 19 DSP; `intv_input` 326 ALMs, 367 registers
+and 16 DSP blocks (the sticks' squares and slope products; `multstyle`
+"logic" would move them to ALMs if DSPs run short); worst setup +0.757 ns
+(`clk_sys`, the SRAM data inputs, not the input module, whose worst path
+has +7.457 ns), worst hold +0.038 ns (fast 0 C model).
 
 ## Simulation
 

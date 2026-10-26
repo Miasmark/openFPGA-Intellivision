@@ -22,8 +22,15 @@ Checks (each prints a line; the last line is APF_JSON pass or APF_JSON FAIL):
   slots as core_top.v tells the test pattern, the JLP flash slot's data
   table entry (apf_datatable.sv), and the save-state address clear of every
   slot;
-- interact.json: the Pocket's menu limits, every address decoded by
-  core_top.v, defaults equal to core_top.v's power-up values;
+- interact.json: the Pocket's menu limits (16 entries, 20 with the
+  reloadable data slots, 15 options a list, 23 characters a name: the
+  documents allow 16 options, but a 16-option list gave an interact error
+  on the owner's Pocket with the 2600 core, 2026-10-25, and 15 works; the
+  file also has an undocumented size limit between 8,740 bytes, which the
+  7800 core's file has and which works, and 10,213, which failed, so it
+  must stay at 8,740 or less and is kept minified), every address decoded
+  by core_top.v, defaults equal to core_top.v's power-up values, Keypad
+  Mode and Swap Controllers as intv_input.sv takes them;
 - video.json: slots 0 and 1 are pocket_video.sv's playfield and border
   windows (from its parameters), the aspect ratios follow from the pixel
   clock (NTSC pixel aspect 12/7, PAL 59/32), and the scaler slot pocket_video
@@ -152,7 +159,9 @@ LIMITS = {
         "interact.variables[].graphical.max": ["s32"],
         "interact.variables[].graphical.adjust_small": ["s32"],
         "interact.variables[].graphical.adjust_large": ["s32"],
-        "interact.variables[].options": ["arr", ("count", 16)], "interact.variables[].options[]": ["obj"],
+        # The documents say 16; the owner's Pocket refused a 16-option list
+        # (openFPGA-2600, 2026-10-25) and takes 15
+        "interact.variables[].options": ["arr", ("count", 15)], "interact.variables[].options[]": ["obj"],
         "interact.variables[].options[].value": ["s32"],
         "interact.variables[].options[].name": ["str", ("len", 23)],
         # Not on the interact.json page; the 7800 core has shipped it empty
@@ -414,8 +423,11 @@ def main():
     # interact.json of 10,213 bytes (8,740 loaded); keep it minified
     nopt = max((len(v.get("options", [])) for v in var), default=0)
     check(nopt <= POCKET_MAX_OPTIONS, f"longest option list {nopt} (Pocket limit {POCKET_MAX_OPTIONS}, docs 16)")
-    isz = len(js[f"Cores/{cname}/interact.json"][1])
-    check(isz <= POCKET_MAX_INTERACT, f"interact.json {isz} bytes (Pocket limit about {POCKET_MAX_INTERACT})")
+    iraw = js[f"Cores/{cname}/interact.json"][1]
+    check(len(iraw) <= POCKET_MAX_INTERACT, f"interact.json {len(iraw)} bytes (Pocket limit about {POCKET_MAX_INTERACT}; 10,213 failed)")
+    iobj = js[f"Cores/{cname}/interact.json"][0]
+    check(iraw.rstrip(b"\n") == json.dumps(iobj, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+          "interact.json minified")
     blk = core_top.split("bridge_addr[31:24] == 8'h10", 1)[1].split("endcase", 1)[0]
     decoded = {int(x, 16) for x in re.findall(r"12'h([0-9A-Fa-f]{3}):", blk)}
     for v in var:
@@ -440,6 +452,29 @@ def main():
           "Border: core_top's set_border at 0x204, power-up value = the menu default")
     check(re.search(r"12'h200:\s*menu_reset_cnt", core_top) is not None and
           any(v["name"] == "Reset" and int(v["address"], 16) & 0xFFF == 0x200 for v in var), "Reset action at 0x200")
+    # Keypad Mode and Swap Controllers (DESIGN.md 7.2): core_top's registers,
+    # their power-up values, and intv_input's encoding
+    inp = open(os.path.join(rtl, "intv_input.sv")).read()
+    kp = [v for v in var if v["name"] == "Keypad Mode"]
+    pw = re.search(r"reg\s+\[1:0\]\s+set_kp_mode\s*=\s*2'd(\d);", core_top)
+    check(len(kp) == 1 and pw and int(kp[0]["address"], 16) & 0xFFF == 0x208
+          and re.search(r"12'h208:\s*set_kp_mode\s*<=\s*bridge_wr_data\[1:0\];", core_top) is not None
+          and kp[0]["defaultval"] == int(pw.group(1)) == 0
+          and [(o["value"], o["name"].split()[0]) for o in kp[0]["options"]] == [(0, "Layer"), (1, "Face-button"), (2, "Right")]
+          and "kp_mode,       // 0 Layer, 1 Face-button ring, 2 Right stick" in inp,
+          "Keypad Mode: core_top's set_kp_mode at 0x208 (power-up Layer), 0 Layer / 1 Face-button ring / 2 Right stick as intv_input.sv")
+    sw = [v for v in var if v["name"] == "Swap Controllers"]
+    pw = re.search(r"reg\s+set_swap\s*=\s*1'b([01]);", core_top)
+    check(len(sw) == 1 and pw and int(sw[0]["address"], 16) & 0xFFF == 0x20C
+          and re.search(r"12'h20C:\s*set_swap\s*<=\s*bridge_wr_data\[0\];", core_top) is not None
+          and sw[0]["defaultval"] == int(pw.group(1)) == 0
+          and [o["value"] for o in sw[0]["options"]] == [0, 1]
+          and "swap,          // 1: player 1 on the right controller" in inp,
+          "Swap Controllers: core_top's set_swap at 0x20C (power-up off: player 1 on the left controller)")
+    check(re.search(r"\.pad_r\s*\(\s*pad_r\s*\)", core_top) is not None
+          and re.search(r"\.pad_l\s*\(\s*pad_l\s*\)", core_top) is not None
+          and re.search(r"intv_input\s+\w+\s*\(", core_top) is not None,
+          "core_top: intv_input's bytes reach the machine's PSG ports")
     total_opts = sum(len(v.get("options", [])) for v in var)
     check(total_opts <= 51, f"{total_opts} list options in all (51 proven on hardware by the 7800 core)")
 
@@ -468,6 +503,10 @@ def main():
     mp = js[f"Cores/{cname}/input.json"][0]["input"]["controllers"][0]["mappings"]
     check(len({x["id"] for x in mp}) == len(mp) and len({x["key"] for x in mp}) == len(mp) and all(x["name"] for x in mp),
           "input.json: unique ids and keys, every button named")
+    check([x["key"] for x in mp] == ["pad_btn_a", "pad_btn_b", "pad_btn_x", "pad_btn_y", "pad_trig_l", "pad_trig_r"]
+          and [x["name"] for x in mp][:4] == ["Side lower right", "Side lower left", "Side top", "Enter (with R)"],
+          "input.json: A/B/X side actions lower right / lower left / top, Y Enter, L and R the keypad layers "
+          "(intv_input.sv Layer mode)")
     info = open(os.path.join(core_dir, "info.txt")).read()
     check(all(w in info for w in ("exec.bin", "grom.bin", "ecs.bin", "ivoice.bin", "/Assets/intv/common/")),
           "info.txt names the system ROM files and their folder")

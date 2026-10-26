@@ -9,6 +9,7 @@ to `sim/work*`.
 | `tb_loader.sv` | 2: loader, CRC table, page table, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` |
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
 | `tb_system.sv` | 3-6: the machine (CPU, bus fabric, RAMs, STIC, PSG) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-6) `--screens` |
+| `tb_input.sv` | 6: the input module against the input model and MAME's hand-controller tables | `python3 -I sim/tb/tb_input.py --all` |
 
 `tb_loader.py` builds `tb_loader.sv` with the real `core_bridge_cmd.v`,
 agg23's `data_loader.sv`, `apf_datatable.sv` and `intv_media.sv`, plus our
@@ -184,3 +185,20 @@ shape restart, alternate, tone-off bit, tick phase, write before the
 step, filter reciprocal, one low pass, a DAC level; state port: tone,
 noise, LFSR, envelope count, envelope step, tick phase) and keeps the
 step-3 PSG ones (mask, registers lost, ports swapped) on `intv_psg.sv`.
+
+`tb_input.py` writes about 541,000 vectors (`sim/work/tb_input/vectors.txt`)
+and runs `tb_input.sv` (`intv_input.sv` alone) over them: the agreed
+mapping written out row by row as the hand-controller inputs each Pocket
+input must press, with MAME's `read_ctrl()` of those inputs as the expected
+bytes; every combination of the 16 Pocket buttons in each keypad mode
+(player 1 on the Pocket, player 2 docked); both sticks over their whole
+range; every keyboard usage code in each report byte and random reports;
+every slot type on each slot; random vectors; and the centres of MAME's
+analog grid, expected as its table says. Both Swap settings throughout.
+For all but the spec rows and the grid the expected bytes are the model's,
+and the model must equal MAME's `read_ctrl()` on every vector. `--all`
+then builds 15 planted faults (Swap ignored, a disc code, the dead zone's
+edge, a sector slope, stick y flipped, L beating R, no cancel on the ring,
+the face buttons' left and right swapped, Backspace, the keyboard on any
+slot type, the keyboard's sixth byte, any slot type a controller, no R3,
+the right stick in every mode, sticks on the Pocket); each must fail.

@@ -139,6 +139,7 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           # (sim/testroms/step9/build_images.py)
           ('ecstest', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
           ('ecssynth', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
+          ('ecstest_off', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
           ('ecsboot', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('ecsastro', 'Astrosmash (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
           ('ecssound', ('step9', 'ecssound'), None, 30, (0xFF, 0xFF), 'stic'),
@@ -159,6 +160,7 @@ ECSSYNTH_KEYS = '1-2:synth:0+8,2-3:synth:0+8+9,3-4:synth:36'
 ECS_OF = {
     'ecstest': dict(ovr='auto', synth=False, presses=ECSTEST_KEYS, auto=1),
     'ecssynth': dict(ovr='auto', synth=True, presses=ECSSYNTH_KEYS, auto=1),
+    'ecstest_off': dict(ovr='off', auto=1),     # the same program with the ECS forced off: nothing answers
     'ecsboot': dict(ovr='auto', auto=1),
     'ecsastro': dict(ovr='auto', auto=2),
     'ecssound': dict(ovr='auto', auto=1, passes=(2, 3)),
@@ -243,8 +245,10 @@ def ecs_selfcheck(name, e):
     want = e.ecs
     probs = []
     dev = e.bus.ecs
-    if dev is None or dev.mode != want['auto']:
-        probs.append('Auto mode %s, want %s' % (dev and ecsm.MODE_NAMES[dev.mode], ecsm.MODE_NAMES[want['auto']]))
+    mode = want['auto'] if want['ovr'] == 'auto' else {'on': ecsm.ON, 'off': ecsm.OFF}[want['ovr']]
+    if dev is None or dev.mode != mode or ecsm.auto_mode(*ecsm.cart_inputs(e.bus.cart)) != want['auto']:
+        probs.append('mode %s (Auto %s), want %s' % (dev and ecsm.MODE_NAMES[dev.mode], ecsm.MODE_NAMES[want['auto']],
+                                                     ecsm.MODE_NAMES[mode]))
     ram = e.snaps[e.ncyc]['sysram']
     if want.get('presses'):
         presses = isys.parse_presses(want['presses'])
@@ -1716,7 +1720,9 @@ PLANTS = [
     ('ecs_mix_wraps', 'intv_machine.sv', [("assign audio     = mix[16:15] != 2'd0 ? 16'h7FFF : mix[15:0];",
                                           "assign audio     = mix[15:0];")], 'ecstest', None),
     ('ecs_latch_when_off', 'intv_ecs.sv', [("        end else if (on) begin\n", "        end else begin\n")],
-     'cart4000', None),
+     'ecstest_off', None),
+    ('ecs_answers_when_off', 'intv_ecs.sv', [("assign hit = on && (sel_uart", "assign hit = (sel_uart")],
+     'ecstest_off', None),
 ]
 
 

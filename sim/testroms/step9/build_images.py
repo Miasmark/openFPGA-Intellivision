@@ -9,7 +9,8 @@ committed themselves:
   ecssound   ecssound.bas: SOUND 5-9 and CONT3, so IntyBASIC boots through the $4800
              hook; its CFG says [vars] ecs = 1 (the ECS flag: Auto -> on)
   ecshook    the same image with the CFG's [vars] taken out: Auto finds the hook's
-             word <= $03FF at $4800 -> on
+             word <= $03FF at $4800 (and the header at $500C that starts it straight) -> on
+  ecsnohook  ecshook with $1234 (not an opcode) at $4800: -> attached
   ecsavail   ecsavail.bas: no ECS feature, no hook: Auto -> attached, ROMs paged out
   cart4000   cart4000.bas: maps $4000 and $47FF itself: Auto -> off
 
@@ -67,6 +68,8 @@ def images(work=None):
     if nov == c:
         sys.exit('ecssound.cfg has no [vars] section')
     out.append(dict(name='ecshook', data=d, cfg=nov, auto=ecsm.ON))
+    # the same with a data word ($1234, not an opcode) at $4800: no hook, so attached
+    out.append(dict(name='ecsnohook', data=b'\x12\x34' + d[2:], cfg=nov, auto=ecsm.ATTACHED))
     d, c = intybasic('ecsavail.bas', work)
     out.append(dict(name='ecsavail', data=d, cfg=c, auto=ecsm.ATTACHED))
     d, c = intybasic('cart4000.bas', work)

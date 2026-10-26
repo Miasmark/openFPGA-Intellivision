@@ -23,12 +23,13 @@
 // The ECS (build step 9): its ROMs are read through intv_cart's port
 // (ecs_on, ecs_pg from intv_ecs; ecs_rom_ok: the ECS ROM slot loaded
 // whole). After every load, before ready rises, the Auto rule's probe
-// reads $4800 through the cartridge port (the machine is in reset, the
-// selects at 0) and ecs_auto gives DESIGN 20's mode (tools/ecs.py
-// auto_mode): the ECS flag, or no cartridge (0 words) -> 1 (on); a ROM
-// word <= $03FF at $4800 (read, not a RAM cell) -> 1; the image maps
-// $4000-$47FF (intv_cart m4) -> 0 (off); else 2 (attached, ROMs paged
-// out).
+// reads $4800 and then $500C through the cartridge port (the machine is
+// in reset, the selects at 0) and ecs_auto gives DESIGN 20's mode
+// (tools/ecs.py auto_mode, refined there): the ECS flag, or no cartridge
+// (0 words) -> 1 (on); a ROM word <= $03FF at $4800 (read, not a RAM
+// cell) with a header at $500C that the ECS boot starts straight (the
+// word byte-swapped, AND $FD, = 1) -> 1; the image maps $4000-$47FF
+// (intv_cart m4) -> 0 (off); else 2 (attached, ROMs paged out).
 //
 // Three SRAM masters, fixed priority: the loader (only while loading, when
 // the machine is held in reset), the cartridge port, and an auxiliary port
@@ -184,6 +185,7 @@ module intv_media #(
 
     // ---------------------------------------- the Auto rule's $4800 probe
     logic        ld_ready, probing = 1'b0, pr_req = 1'b0, res_ecs = 1'b0, res_none = 1'b0;
+    logic        pr_2nd = 1'b0, code48 = 1'b0;      // the $500C read; $4800 holds code
     logic        c_bus_req, c_bus_ack, c_bus_hit, c_m4;
     logic [15:0] c_bus_rdata;
     logic [3:0]  c_bus_attr;
@@ -195,15 +197,21 @@ module intv_media #(
     assign bus_rdata  = c_bus_rdata;
     assign bus_hit    = c_bus_hit;
     assign bus_attr   = c_bus_attr;
+    wire logic hdr_ok = c_bus_hit && c_bus_rdata[15:10] == 6'd0 && c_bus_rdata[8];   // bit 9 ignored
     always_ff @(posedge clk) begin
         pr_req <= 1'b0;
         if (res_we) begin
             probing <= 1'b1;
             pr_req  <= 1'b1;
-        end else if (probing && c_bus_ack) begin
+            pr_2nd  <= 1'b0;
+        end else if (probing && c_bus_ack && !pr_2nd) begin       // $4800
+            code48 <= c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0;
+            pr_2nd <= 1'b1;
+            pr_req <= 1'b1;
+        end else if (probing && c_bus_ack) begin                  // $500C
             probing  <= 1'b0;
             ecs_auto <= (res_ecs || res_none) ? 2'd1
-                      : (c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0) ? 2'd1
+                      : (code48 && hdr_ok) ? 2'd1
                       : c_m4 ? 2'd0 : 2'd2;
         end
         if (reset) begin
@@ -228,7 +236,7 @@ module intv_media #(
         .cfg_crc(cfg_crc), .fmt(c_fmt), .noss(noss),
         .pg_rst(pg_rst), .pg_sel(pg_sel),
         .ecs_on(ecs_on && !probing), .ecs_pg(ecs_pg), .ecs_rom_ok(ecs_rom_ok), .m4(c_m4),
-        .bus_req(c_bus_req), .bus_we(probing ? 1'b0 : bus_we), .bus_addr(probing ? 16'h4800 : bus_addr),
+        .bus_req(c_bus_req), .bus_we(probing ? 1'b0 : bus_we), .bus_addr(probing ? (pr_2nd ? 16'h500C : 16'h4800) : bus_addr),
         .bus_wdata(bus_wdata),
         .bus_ack(c_bus_ack), .bus_rdata(c_bus_rdata), .bus_hit(c_bus_hit),
         .bus_attr(c_bus_attr), .bus_paged(bus_paged),

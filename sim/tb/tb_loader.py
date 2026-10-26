@@ -507,25 +507,27 @@ PLANTS = [
     ('ram_per_page', 'intv_loader.sv', "if (y != 4'd0 && (!paged[r] || h_mode == H_RAM)) begin",
      "if (y != 4'd0 && !paged[r]) begin", 'cart RAM in a paged range not shared by its pages'),
     # build step 9: the ECS Auto rule (intv_media's probe, intv_cart's m4): the ECS flag ignored
-    # (Game Factory), the $4800 word not checked against $03FF (ecsavail: $FFFF there), the hook
-    # ignored (ecshook), the $4000 map ignored (cart4000), no cartridge not on (NEGNOCART), the
-    # probe at $4801
+    # (Game Factory), the $4800 word not checked against $03FF (ecsnohook: $1234 there), the hook
+    # ignored (ecshook), the $500C header ignored (Atlantis), the $4000 map ignored (cart4000), no
+    # cartridge not on (NEGNOCART), the probe at $4801
     ('auto_flag', 'intv_media.sv', "ecs_auto <= (res_ecs || res_none) ? 2'd1", "ecs_auto <= (res_none) ? 2'd1",
      'Auto: the ECS flag ignored'),
-    ('auto_4800_any', 'intv_media.sv', "&& c_bus_rdata[15:10] == 6'd0) ? 2'd1", ") ? 2'd1",
-     'Auto: any word at $4800 taken as code'),
-    ('auto_hook_ignored', 'intv_media.sv', ": (c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0) ? 2'd1",
-     ": 1'b0 ? 2'd1", 'Auto: the $4800 hook ignored'),
+    ('auto_4800_any', 'intv_media.sv', "code48 <= c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0;",
+     "code48 <= c_bus_hit && !c_bus_attr[1];", 'Auto: any word at $4800 taken as code'),
+    ('auto_hook_ignored', 'intv_media.sv', ": (code48 && hdr_ok) ? 2'd1", ": 1'b0 ? 2'd1",
+     'Auto: the $4800 hook ignored'),
+    ('auto_header_ignored', 'intv_media.sv', ": (code48 && hdr_ok) ? 2'd1", ": code48 ? 2'd1",
+     'Auto: code at $4800 turns the ECS on whatever the header (the Imagic titles get its menu)'),
     ('auto_m4_ignored', 'intv_media.sv', ": c_m4 ? 2'd0 : 2'd2;", ": 2'd2;", 'Auto: $4000-$47FF mapped ignored'),
     ('auto_nocart_off', 'intv_media.sv', "res_none <= res_words == 17'd0;", "res_none <= 1'b0;",
      'Auto: no cartridge not on'),
-    ('auto_probe_4801', 'intv_media.sv', "probing ? 16'h4800 : bus_addr", "probing ? 16'h4801 : bus_addr",
+    ('auto_probe_4801', 'intv_media.sv', "(pr_2nd ? 16'h500C : 16'h4800)", "(pr_2nd ? 16'h500C : 16'h4801)",
      'Auto: the probe at $4801'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
-                'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsavail', 'cart4000')
+                'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C')
 
 
 def main():
@@ -534,6 +536,7 @@ def main():
     ap.add_argument('--only', help='comma-separated CRCs or synthetic names')
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--plants-only', action='store_true')
+    ap.add_argument('--plant', help='comma-separated plant names (with --all or --plants-only)')
     ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
@@ -654,8 +657,10 @@ def main():
             rc_fail += failed
         if a.all or a.plants_only:
             pimgs = [i for i in imgs if (i['crc'] in PLANT_IMAGES or i['name'] in PLANT_IMAGES)
-                     and not i.get('neg')]
+                     and (not i.get('neg') or i['crc'] == 'NEGNOCART')]   # no cartridge: the Auto plant
             for name, fn, frm, to, what in PLANTS:
+                if a.plant and name not in a.plant.split(','):
+                    continue
                 d = os.path.join(work, 'plant_' + name)
                 shutil.rmtree(d, ignore_errors=True)
                 os.makedirs(os.path.join(d, 'rtl'))

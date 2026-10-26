@@ -54,8 +54,20 @@ on; the image maps `$4000-$47FF` on page 0 -> off; else attached. Added here: no
 image) -> on, as a console with the ECS and no cartridge (ECS BASIC). A RAM cell at `$4800` is not
 code. The menu item "ECS" (Auto / On / Off) is taken at the next machine reset (Reset or a load).
 
-In the RTL, `intv_media` reads `$4800` through the cartridge port after every load, before
-`ready` rises (the machine is still in reset, the selects at 0), and `intv_cart` keeps `m4`: an
+**Refined here (a change to DESIGN 20's second row, for the owner to confirm):** code at `$4800`
+turns the ECS on only when the ECS boot would then start the cartridge straight, i.e. its header
+word at `$500C`, byte-swapped and ANDed with `$FD`, is 1 (the ECS ROM's own test, REPORT 2 step 5;
+IntyBASIC's hook cartridges have `$03C0` there and pass); otherwise the ECS is attached with its ROMs
+out, which is "as if a `$4800` hook had run" and still runs the hook. Over the owner's library the
+literal rule turned the ECS on for the four Imagic titles that boot through `$4800` (Atlantis, Beauty
+& the Beast, Demon Attack, Microsurgeon): their `$500C` fails the test, so they would have shown the
+ECS title and menu first (as on a console with the ECS), which is what the rule is there to avoid;
+and a hook cartridge whose header fails the test would get an ECS title read from ROMs its hook had
+just paged out (REPORT 2). With the refinement: 9 library images on (all by the ECS flag), 179
+attached, none off.
+
+In the RTL, `intv_media` reads `$4800` and `$500C` through the cartridge port after every load,
+before `ready` rises (the machine is still in reset, the selects at 0), and `intv_cart` keeps `m4`: an
 entry `{r = 4, page 0, block < 8}` with R, W or B as the loader last wrote it. `ecs_auto` goes to
 `intv_core`, which applies the menu's override.
 

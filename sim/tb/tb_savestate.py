@@ -106,9 +106,9 @@ SS_IMAGES = [
     # build step 9 (SS_ECS): ECS BASIC with no cartridge, a line typed on the ECS keyboard
     # (ECS RAM, the page latches, PSG #2 as the keyboard port); our ecssound cartridge (PSG #2
     # sounding, the $4800 hook's pages); our ecsavail cartridge (the Auto rule's attached mode)
-    ('ecsbasic', None, None, (0xFF, 0xFF), 1000,
-     '300-306:Enter,420-426:1,500-506:Enter',
-     [(820, 'midinst'), (850, 'any'), (880, 'busrq'), (910, 'any')], (930, 10), 950),
+    ('ecsbasic', None, None, (0xFF, 0xFF), 520,
+     '100-106:Enter,160-166:1,220-226:Enter',
+     [(330, 'midinst'), (370, 'any'), (410, 'busrq'), (440, 'any')], (460, 10), 480),
     ('ecssound', ('step9', 'ecssound'), None, (0xFF, 0xFF), 100, None,
      [(40, 'sound'), (55, 'midinst'), (70, 'sound'), (78, 'any')], (82, 6), 86),
     ('ecsavail', ('step9', 'ecsavail'), None, (0xFF, 0xFF), 60, None,
@@ -117,10 +117,10 @@ SS_IMAGES = [
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
 SS_ECS = {
-    'ecsbasic': dict(ovr=0, mode=1, presses='800-806:ecs:1,812-818:ecs:0,824-830:ecs:SPACE,'
-                                         '836-842:ecs:P,848-854:ecs:R,860-866:ecs:I,872-878:ecs:N,'
-                                         '884-890:ecs:T,896-902:ecs:SPACE,908-914:ecs:7,920-926:ecs:RTN,'
-                                         '932-938:ecs:R,944-950:ecs:U,956-962:ecs:N,968-974:ecs:RTN'),
+    'ecsbasic': dict(ovr=0, mode=1, presses='300-306:ecs:1,312-318:ecs:0,324-330:ecs:SPACE,'
+                                         '336-342:ecs:P,348-354:ecs:R,360-366:ecs:I,372-378:ecs:N,'
+                                         '384-390:ecs:T,396-402:ecs:SPACE,408-414:ecs:7,420-426:ecs:RTN,'
+                                         '432-438:ecs:R,444-450:ecs:U,456-462:ecs:N,468-474:ecs:RTN'),
     'ecssound': dict(ovr=0, mode=1),
     'ecsavail': dict(ovr=0, mode=2),
 }
@@ -759,6 +759,14 @@ PLANTS = [
     ('ss_noss_ignored', 'intv_ss_ctl.sv',
      [("                if (cart_noss && cart_ready)", "                if (1'b0 && cart_noss && cart_ready)")],
      'cartnoss', 'psgtest', r'NOSS: '),
+    # build step 9: the header's ECS flag not set or checked (a state with the ECS loads into a core
+    # with it off: the E run); the ECS RAM not restored (ECS BASIC's typed line lost)
+    ('ss_ecs_unchecked', 'intv_ss_ctl.sv',
+     [("4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = 32'd0;")],
+     'ecsavail', 'psgtest', r' E: (FAIL load|loads |state set)'),
+    ('ss_ecsram_lost', 'intv_ecs.sv',
+     [("rwe  = ss_en ? ss_we && ss_rhit : wr && sel_ram && on;", "rwe  = ss_en ? 1'b0 : wr && sel_ram && on;")],
+     'ecsbasic', 'psgtest', AFTER),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 

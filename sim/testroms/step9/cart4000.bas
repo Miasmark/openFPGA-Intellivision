@@ -2,12 +2,13 @@
 ' itself, so the core's Auto rule leaves the ECS off (its RAM would clash).
 ' Built with IntyBASIC and as1600 (run as programs) by
 ' sim/testroms/step9/build_images.py; our own program (MIT).
-' Screen: CART 4000 (the cartridge's own words at $4000 and
-' $47FF read back), ECS OFF (IntyBASIC's $4040/$4041 test finds no ECS:
+' Screen: CART 4000 (the cartridge's own words at $4000, written to first,
+' and $47FF read back), ECS OFF (IntyBASIC's $4040/$4041 test finds no ECS:
 ' $4040 is not mapped) and a frame counter.
     CLS
     PRINT AT 0, "STEP 9  CART 4000"
     #p = $4000
+    POKE #p, $5A            ' its ROM keeps $1234; with the ECS forced on, its RAM takes $5A
     #a = PEEK(#p)
     #p = $47FF
     #b = PEEK(#p)

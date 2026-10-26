@@ -530,7 +530,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | 6 | PSG #1 and input module | register logs match MAME; games playable on the Pocket |
 | 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set **(build step 7: in simulation, `sim/tb/tb_savestate.py`; on the Pocket, the owner's test sheet)** |
 | 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) **(build step 8: tb_loader over the step-2 set and the step-8 images built from our sources, tb_system `cartbank`/`cartcfg` with `sim/testroms/cart8test.asm`, tb_savestate `cartbank`/`cartcfg`/`cartnoss`, MAME as the .rom reference; docs/CARTFORMATS.md 7)** |
-| 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test |
+| 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test **(built: docs/ECS_NOTES.md; 0.0.9)** |
 | 10 | Intellivoice | resident phrases and B-17 speech sound right; per-opcode tests pass |
 | 11 | JLP and flash slot | a JLP homebrew runs and keeps its flash |
 | 12 | PAL | depends on PAL timing data (section 10) |
@@ -671,7 +671,9 @@ Gaps the documents leave, which the owner's ECS can close:
 4. ECS BASIC with no tape: what CSAV/CLOD do (error message, hang, or wait). Decides the UART model ($00E0-$00E3).
 5. Keyboard behaviour in ECS BASIC: hold Shift with L, J, G, D, A (the documented scan bug); press three keys at the
    corners of a matrix rectangle and note any ghost character: W, Q and 1 together should ghost a 3 (rows 4/5,
-   columns 3/4 of the wiki matrix table);
+   columns 3/4 of the wiki matrix table) **(build step 9: under 7.3's rule the ECS ROM's scan drives every row, so
+   no ghost can appear: W, Q and 1 mask each other and all vanish; the 0.0.9 test sheet asks which the console
+   shows; docs/ECS_NOTES.md 4)**;
    key repeat delay and rate.
 6. Conflicting cartridges: does Centipede or Dig Dug (ROM at $7000/$E000) run with the ECS attached? Sets the
    "ECS must stay off" rule.

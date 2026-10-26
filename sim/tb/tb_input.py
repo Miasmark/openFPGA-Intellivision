@@ -652,7 +652,7 @@ PLANTS = [
     ('kbd_any_type', 'intv_input.sv', "k3[31:28] == 4'd4", "k3[31:28] != 4'd0"),
     ('kbd_5_bytes', 'intv_input.sv', ' | hid_code(t3[15:8]);', ';'),
     ('type_any', 'intv_input.sv', "(t == 4'd1 || t == 4'd2 || t == 4'd3) ? p", "(t != 4'd0) ? p"),
-    ('no_r3', 'intv_input.sv', "| (r3 ? key_code(4'd5) : 8'h00)", ''),
+    ('no_r3', 'intv_input.sv', "| (r3 ? key_code(4'd5) : 8'h00)", "| (1'b0 ? key_code(4'd5) : 8'h00)"),
     ('rstick_any_mode', 'intv_input.sv', "if (mode == 2'd2 && an)", 'if (an)'),
     # L + D-pad (Precision controls): the turn the wrong way (counter-clockwise); no turn (as before
     # 0.0.7); L turning the D-pad in Face-button ring too; an L chord (A/B/X) dropping the disc, or undoing

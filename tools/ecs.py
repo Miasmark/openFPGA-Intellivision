@@ -45,7 +45,16 @@ auto_mode() is DESIGN 20's Auto rule, in its order: the CRC table's ECS
 flag -> ON; a ROM word <= $03FF at $4800 (code there: the EXEC's $4800 hook,
 REPORT 2) -> ON; the cartridge maps $4000-$47FF on page 0 -> OFF (the ECS
 RAM would clash); else ATTACHED. Added here: no cartridge at all (an empty
-image) -> ON, a console with the ECS and no cartridge (ECS BASIC). The menu's override (Auto / On / Off)
+image) -> ON, a console with the ECS and no cartridge (ECS BASIC). Refined
+here: code at $4800 turns the ECS on only when the ECS boot would start the
+cartridge straight, i.e. the header word at $500C passes the ECS ROM's test
+((the word byte-swapped) & $FD == 1, REPORT 2 step 5: IntyBASIC's $03C0
+does); otherwise ATTACHED. Without it the four Imagic titles that boot
+through $4800 (Atlantis, Beauty & the Beast, Demon Attack, Microsurgeon)
+got the ECS title and menu first, as on a console with the ECS (their
+$500C fails the test), and a hook cartridge whose header fails the test
+would get the ECS title read from ROMs its hook had paged out (REPORT 2).
+ATTACHED is "as if a $4800 hook had run": the hook still runs. The menu's override (Auto / On / Off)
 picks Auto or a fixed mode. Without the ECS ROM slot the ROMs never answer.
 
 Keyboard matrix (DESIGN 7.3; INPUT_NOTES "ECS keyboards"): port A ($FE)
@@ -102,14 +111,23 @@ UART_STATUS = 0x0002
 OVERRIDE_AUTO, OVERRIDE_ON, OVERRIDE_OFF = 0, 1, 2
 
 
-def auto_mode(flags_ecs, w4800, maps4000, nocart=False):
-    """DESIGN 20's Auto rule. flags_ecs: the CRC table's (or the CFG's /
-    .rom tag's) ECS flag; w4800: the word a ROM read of $4800 gives at
-    reset paging (None: not answered, or RAM); maps4000: the cartridge maps
-    $4000-$47FF on page 0; nocart: no cartridge image (0 words)."""
+def header_direct(w500c):
+    """The ECS boot starts the cartridge straight (no ECS title): the word at
+    $500C, byte-swapped, AND $FD equals 1 (REPORT 2 step 5)."""
+    if w500c is None:
+        return False
+    return (((w500c >> 8) | (w500c << 8)) & 0xFD) == 1
+
+
+def auto_mode(flags_ecs, w4800, maps4000, nocart=False, w500c=None):
+    """DESIGN 20's Auto rule (refined: see the module docstring). flags_ecs:
+    the CRC table's (or the CFG's / .rom tag's) ECS flag; w4800: the word a
+    ROM read of $4800 gives at reset paging (None: not answered, or RAM);
+    maps4000: the cartridge maps $4000-$47FF on page 0; nocart: no cartridge
+    image (0 words); w500c: the word at $500C (None: not answered)."""
     if flags_ecs or nocart:
         return ON
-    if w4800 is not None and w4800 <= 0x3FF:
+    if w4800 is not None and w4800 <= 0x3FF and header_direct(w500c):
         return ON
     if maps4000:
         return OFF
@@ -121,20 +139,22 @@ def mode_for(override, auto):
 
 
 def cart_inputs(cart):
-    """(flags_ecs, w4800, maps4000) of a cartfmt.MapCart as the loader and
-    the reset probe see them (intv_cart: the map table's page-0 entries of
-    $4000-$47FF; a read of $4800 that a ROM block answers)."""
+    """(flags_ecs, w4800, maps4000, nocart, w500c) of a cartfmt.MapCart as
+    the loader and the reset probe see them (intv_cart: the map table's
+    page-0 entries of $4000-$47FF; reads of $4800 and $500C, $4800 only from
+    a ROM block)."""
     import cartfmt
     if cart is None or cart.ld.words == 0:
-        return False, None, False, True
+        return False, None, False, True, None
     ld = cart.ld
     maps = any(ld.table[(4 << 8) | b] & (cartfmt.E_R | cartfmt.E_W | cartfmt.E_B) for b in range(8))
     saved = list(cart.sel)
     cart.sel = [0] * 16
     hit, bits, _ = cart.attr(0x4800)
     w = cart.read(0x4800) if hit and not bits & 2 else None
+    h = cart.read(0x500C)
     cart.sel = saved
-    return bool(ld.flags & cartfmt.FLAG_ECS), w, maps, False
+    return bool(ld.flags & cartfmt.FLAG_ECS), w, maps, False, h
 
 
 def load_rom(path):
@@ -423,7 +443,9 @@ def selftest():
     m.write(0x7FFF, 0x7A5F, 0)
     chk(m.rom_word(0x7000) == 4096, "MAME ignores $7A5F")
     # Auto rule
-    chk(auto_mode(True, None, True) == ON and auto_mode(False, 0x0004, False) == ON and
+    chk(auto_mode(True, None, True) == ON and auto_mode(False, 0x0004, False, w500c=0x03C0) == ON and
+        auto_mode(False, 0x0004, False, w500c=0x00C0) == ATTACHED and
+        auto_mode(False, 0x0004, False) == ATTACHED and
         auto_mode(False, 0x0400, True) == OFF and auto_mode(False, None, False) == ATTACHED and
         auto_mode(False, 0x0400, False) == ATTACHED and auto_mode(False, None, True, True) == ON, "auto_mode")
     # PSG #2 envelope select: one bit

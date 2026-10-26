@@ -538,6 +538,14 @@ module tb_loader;
             cart_wr(16'(r * 4096 + 4095), 16'(r * 4096 + 32'hA50 + (r & 3)));
         for (int i = 0; i < NSS; i++) begin ss_rd(i, ss1[i]); $fdisplay(outf, "ss1 %0d %08X", i, ss1[i]); end
         space("E");
+        // ---- W: writes that must not select a page: another range's $xA5y at
+        // $xFFF, the range's own at $xFFE and $xF7F (the selects must stay)
+        for (int r = 0; r < 16; r++) begin
+            cart_wr(16'(r * 4096 + 4095), 16'(((r + 1) & 15) * 4096 + 32'hA50 + ((r + 7) & 15)));
+            cart_wr(16'(r * 4096 + 4094), 16'(r * 4096 + 32'hA50 + ((r + 9) & 15)));
+            cart_wr(16'(r * 4096 + 3967), 16'(r * 4096 + 32'hA50 + ((r + 11) & 15)));
+        end
+        for (int i = 5; i < 7; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssw %0d %08X", i, ssq); end
         for (int i = 0; i < NSS; i++) ss_wr(i, 32'd0);
         for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssz %0d %08X", i, ssq); end
         space("Z");

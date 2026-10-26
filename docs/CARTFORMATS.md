@@ -19,6 +19,7 @@ only):
 | jzIntv `doc/tech/ecs.html` | ECS-style page selects: $xA5y written to $xFFF |
 | as1600 outputs (the tool run as a program) | word-exact `[mapping]` lines, `PAGE` in hex, pages padded to 4K, the N bit 4 in the access nibble, compat tag bytes |
 | MAME `src/devices/bus/intv/slot.cpp:225-290, 450` | MAME's .rom test (byte 0 $A8, byte 1 = ~byte 2) and loader (segments only, tables skipped); no BIN+CFG |
+| jzIntv 20200712, run as a program (a black box; its code is not read) | the reference for what a CFG or .rom maps word by word (section 7, `JZ_REF`); where we differ on purpose: 2.4 |
 
 ## 1 Data slots
 
@@ -47,12 +48,13 @@ optional slot).
 - `[name]` at the start of a line selects a section; names compared in lower
   case; text after `]` ignored. Lines before the first section, in
   `[macro]` and in unknown sections are skipped.
-- Numbers are hex, `$` optional, at most 20 bits (more: refused).
+- Numbers are hex, `$` optional, at most 20 bits (more: refused). (jzIntv
+  wants the `$`; we also take bare hex, see 2.4.)
 - `[mapping]`: `lo - hi = addr [PAGE p]` (file words lo..hi at CPU address
   addr; `PAGE` any case, then a blank and one hex page 0-F).
 - `[preload]`: `lo - hi = addr` (Intellicart memory only, not readable).
 - `[memattr]`: `lo - hi = RAM|WOM|ROM [8|16]` (width 16 when not given, as
-  the Intellicart manual's example).
+  the Intellicart manual's example; jzIntv wants the width, see 2.4).
 - `[bankswitch]`: `lo - hi`.
 - `[vars]`: `name = decimal`; names case sensitive (as1600.txt). Used:
   `ecs` (1: ECS flag), `ecs_compat` (3: ECS, 0: ECS_OFF), `voice` (1),
@@ -66,27 +68,33 @@ optional slot).
 Each map line becomes a range (at most 32): `[mapping]` and `[preload]` give
 CPU/Intellicart addresses lo..hi with the file offset of lo; `[memattr]` and
 `[bankswitch]` give address ranges with attributes. The map table works in
-256-word blocks (section 4); per block:
+256-word blocks (section 4); per block and page:
 
-- the data ranges that touch it (a `[mapping]` line of the block's page, or
-  a `[preload]` line on page 0): one range covering the block whole points
-  the block into the file (no copy); a block with parts of ranges, gaps or
-  more than one range is assembled at load into a pool block ($1E000, 32
-  blocks): filled with $FFFF (what the bus reads when nothing answers), then
-  each range's words copied in, in file order (a later line wins where two
-  overlap);
+- Pages: a 4K range that a `[mapping]` line with `PAGE` touches is paged.
+  There, as in jzIntv, the lines without `PAGE` (`[mapping]` without it,
+  `[preload]`, `[memattr]`, `[bankswitch]`) count on every page, and a
+  `PAGE p` line on page p only. A range no `PAGE` line touches has page 0
+  alone (it answers whatever page is selected).
+- the data ranges that touch it (`[mapping]` and `[preload]` lines, as
+  above): one range covering the block whole points the block into the
+  file (no copy); a block with parts of ranges, gaps or more than one range
+  is assembled at load into a pool block ($1E000, 32 blocks): filled with
+  $FFFF (what the bus reads when nothing answers), then the words of the
+  lines without `PAGE`, then those of the page's own `PAGE` lines (each in
+  file order: a later line wins where two overlap). A page with no `PAGE`
+  line in the block shares one block with the other such pages.
 - `[memattr]` adds R, W, N; `[bankswitch]` adds B and R (intellicart.txt:
   "also informs the Intellicart to respond to read accesses");
 - a block with W and not B is RAM: it gets a block of the cart RAM area
-  ($18000, 64 blocks), cleared, with any data ranges copied in (RAM with
-  preloaded data); the save state holds that area.
-- `[memattr]` ranges are word exact in the file but act on whole blocks: a
-  3-word `RAM 8` line makes its 256-word block 8-bit RAM (the Intellicart
-  itself works in 2K windows trimmed to 256-word blocks).
-- Pages: a 4K range with any `PAGE` line is paged: a line without `PAGE` is
-  page 0 there, visible only while page 0 is selected; ranges with no
-  `PAGE` line answer on every page. `[memattr]` and `[bankswitch]` act on
-  page 0.
+  ($18000, 64 blocks), cleared, with page 0's data ranges copied in (RAM with
+  preloaded data); the save state holds that area. In a paged range the same
+  RAM block answers on every page.
+- Word exact: each block keeps the first and last word its ranges declare
+  (the trim, section 4); the words of the block outside it are not answered
+  and not written. `[memattr] $8040 - $8049 = RAM 16` (IntyBASIC `--cc3`
+  writes this) answers at $8040-$8049 only, not in the STIC's alias at
+  $8000-$803F nor at $804A-$80FF. Inside the trim, a gap between two ranges
+  reads $FFFF from a ROM block and is a RAM cell in a RAM block.
 - A mapping past the end of the file: those words are not answered.
 - A CFG with no map lines (only `[vars]`): the CRC table's layout (or the
   default map) maps the image; the CFG's flags are added.
@@ -112,6 +120,32 @@ CPU/Intellicart addresses lo..hi with the file offset of lo; `[memattr]` and
 `examples/spacepat/dbgmac.cfg`, holds debugger watches `@W name addr`); the
 patching use DESIGN 5.3 mentions comes from INTVPC-era files whose form is
 not documented here. Skipped; a CFG that needs it maps without its patches.
+
+### 2.4 Where we differ from jzIntv on purpose
+
+jzIntv, run as a black box (`JZ_REF`, section 7), maps every CFG and .rom
+of the test set as we do, word for word, outside these cases (each written
+into `tools/refs/jz_cart_compare.py`, which checks that they still differ):
+
+- A `PAGE` line and a line without `PAGE` on the same words: jzIntv answers
+  with both (the bus ANDs them); we give the page's words (zoo7, $B000).
+- `[memattr]` RAM in a paged range under a `PAGE` line: jzIntv answers with
+  the RAM and the page's ROM together; we answer with the RAM alone, on
+  every page, within its trim, and the page's words in that block are not
+  seen (zoo7, $A800-$A9FF). A cartridge built this way would be unusual:
+  one storage per block and page is what the map table holds.
+- `[memattr] ROM` over words no line gives data: jzIntv reads $0000; we do
+  not answer ($FFFF). A pool block's unfilled words in a `ROM 8` block:
+  jzIntv $0000, we $00FF (zoo1).
+- BIN + CFG banking: jzIntv's BIN+CFG loader ignores `[bankswitch]` and
+  `[preload]` (zoo2's windows read $0000 there after bank writes); we follow
+  intellicart.txt's BIN2ROM text for them.
+- Syntax: jzIntv refuses numbers without `$` (`0800-0FFF=6000`) and `RAM`
+  without a width (zoo1); we take both.
+- .rom: jzIntv refuses a file whose tags end with a NUL tag (its error 7;
+  id_tag.txt describes the NUL tag, so we take it: `romfine`; as1600 never
+  writes one, `romfine_nonul` is that form) and a file with a tag whose CRC
+  is bad (its error 8; we skip that tag: `rombadtag`).
 
 ## 3 Intellicart .rom
 
@@ -155,12 +189,13 @@ blocks; more stay in plane 1 and the image has no save states.
 
 ## 4 The map table and the cartridge port (`intv_cart.sv`)
 
-4,096 entries of 22 bits in block RAM, one per 256-word block of each of the
+4,096 entries of 38 bits in block RAM, one per 256-word block of each of the
 16 pages of each 4K range, index {r = addr[15:12], y, b = addr[11:8]} with
 y = the range's page select if the range is paged, else 0:
 
 | Bits | Field |
 |---|---|
+| 37:30, 29:22 | the trim: first and last word of the block that answer (a CFG block: what its ranges declare; any other format: $00-$FF). Through a bank window, the storage block's trim |
 | 21 | S: the block has storage |
 | 20 | R: reads answered |
 | 19 | W: writes stored |
@@ -183,9 +218,12 @@ Writes, wherever they go: $xA5y to $xFFF selects page y of range x
 Intellicart bank register addr[4:0] (the low byte; $0040 + r for the lower 2K
 of range r, $0050 + r for the upper). An access is looked up with the selects
 and registers as they were before it; its own select or register write lands
-after it. The bank registers are 0 after a load and keep their values over a
-machine reset (the Intellicart does not see the console's reset; its manual
-calls them undefined at start: programs set them first).
+after it. After a load each bank register points its 2K window at its own
+address ($0040 + r = r << 4, $0050 + r = r << 4 | 8: a window reads the
+Intellicart memory at its own address until the program sets it), as
+jzIntv starts them (the Intellicart manual calls the start state undefined;
+step 8's first build started them at 0); they keep their values over a
+machine reset (the Intellicart does not see the console's reset).
 
 An access through the table costs 2 clk_sys more than step 7's (3 through a
 bank window), plus the SRAM's: about 8 of the 96 clk_sys a CPU bus cycle
@@ -242,6 +280,7 @@ wrong (the test pattern's slot card), as the step-2 length checks do.
 | `sim/tb/tb_system.py` images `cartbank`, `cartcfg` | `sim/testroms/cart8test.asm` in the EXEC slot on `rombank.rom` and on `cfgmap.bin + .cfg`: bank register writes and the windows they map (Intellicart memory, the RAM, a wrap past $FFFF, a register of no window), RAM 16/8 bit, page selects in three ranges, an ISR that changes bank and page every frame; RTL = model on every bus cycle with the round trips; a self-check against the image's own words (`CART8_SELFCHECK`) |
 | `sim/tb/tb_savestate.py` images `cartbank`, `cartcfg`, `cartnoss` | saves and loads with cart RAM in use and non-default pages and bank registers; a blob of another CFG refused (C); an image with a writing bank window: every save and load answers err |
 | `tools/refs/mame_cart_dump.sh` + `tools/refs/cart_ref_compare.py` | MAME as a reference for .rom: at every address our map answers through a plain readable window onto loaded memory, MAME's CPU reads the same word (low byte in a narrow window) |
+| `tools/refs/jzintv_cart_dump.sh` + `tools/refs/jz_cart_compare.py` (`JZ_REF`) | jzIntv as a black-box reference for BIN + CFG and .rom: for 18 cases (images, then page selects, bank register and RAM writes made through jzIntv's debugger) the model reads what jzIntv reads at every address outside the console's devices, except the differences of 2.4, each of which must still differ |
 
 Planted faults (tb_loader): page off by one, 8-bit RAM read as 16 bits, CFG
 `RAM 8` taken as 16-bit, a CFG section ignored (`[memattr]`, `[preload]`),
@@ -250,5 +289,10 @@ the bank registers $0050-$005F not decoded, a bank window using the lower
 filled, the .rom table CRC not checked, a .rom's unwritten blocks not
 cleared, a fine range one block short, the CFG's last byte dropped, plus
 step 2's, a CFG the table no longer lists applied to a reload, a kept CFG's
-last bytes fed twice. tb_savestate: the CFG's CRC not checked, the bank registers not
+last bytes fed twice; after the step-8 review: a page select taken from
+another range's value (`sel_no_range_match`: the bench's phase W writes
+another range's $xA5y to $xFFF, and the range's own to $xFFE and $xF7F;
+cart8test does the same), lines without `PAGE` on page 0 only, no trim, the
+bank registers 0 after a load, a line without `PAGE` over a page's own
+words, cart RAM in a paged range not shared by its pages. tb_savestate: the CFG's CRC not checked, the bank registers not
 restored, an image without save states saved.

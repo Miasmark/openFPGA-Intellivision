@@ -11,15 +11,17 @@
 ; the Intellicart bank registers. DESIGN.md 9 step 8: it writes and reads
 ; back the Intellicart bank registers at $0040-$005F and the RAM they map.
 ;   1. a write then a read of 14 addresses: cart RAM 16- and 8-bit, the
-;      8-bit RAM's block past its CFG range, ROM, a CFG gap, a bank
-;      register (write only: reads $FFFF), a bank window
+;      8-bit RAM's block past its CFG range (not answered: $FFFF), ROM, a
+;      CFG gap, a bank register (write only: reads $FFFF), a bank window
 ;   2. Intellicart bank registers: (register, value) writes, each followed
 ;      by reads of $6000, $6001, $67FF, $6800 and $6FFF: windows at the
 ;      loaded Intellicart memory ($1000, $3000), at the RAM of section 1
 ;      ($8000, and the 8-bit $8800 through a 16-bit window), past $FFFF
 ;      (wraps), a register of a window that is not a bank window
 ;   3. ECS-style page selects ($xA5y to $xFFF) at $F000, $2000 and $E000,
-;      each followed by reads of $F000, $F010, $FF00, $2000, $2800, $E800
+;      each followed by reads of $F000, $F010, $FF00, $2000, $2800, $E800;
+;      then writes that must not select: another range's value at $xFFF,
+;      the range's own value at $FFFE
 ;   4. interrupts on: the ISR counts frames, points $6000 at the frame's
 ;      bank and flips the $F000 page; the loop writes and reads cart RAM and
 ;      reads both windows, all through the run (so the bench's save and
@@ -194,6 +196,10 @@ sels:   BIDECLE $FFFF, $FA51    ; $F000 page 1
         BIDECLE $FFFF, $FA50    ; back to page 0
         BIDECLE $2FFF, $2A50
         BIDECLE $EFFF, $EA50
-NSEL    EQU     9
+        BIDECLE $FFFF, $2A51    ; $2000's value at $FFFF: no select
+        BIDECLE $EFFF, $FA51    ; $F000's value at $EFFF: no select
+        BIDECLE $FFFE, $FA52    ; $F000's own value one word low: no select
+        BIDECLE $2FFF, $EA53    ; $E000's value at $2FFF: no select
+NSEL    EQU     13
 pgrd:   BIDECLE $F000, $F010, $FF00, $2000, $2800, $E800
 NPGRD   EQU     6

@@ -159,7 +159,9 @@ def step8_image(name, work):
 def cart8_selfcheck(e, cart_path):
     """cart8test.asm's results against the image itself (not the model): section 2's
     windows after $0046 = $10 read the Intellicart words at $1000/$1001 (rombank), after
-    $0046 = $80 the RAM section 1 wrote at $8000; the 8-bit RAM keeps the low byte."""
+    $0046 = $80 the RAM section 1 wrote at $8000; the 8-bit RAM keeps the low byte; past the
+    CFG's 8-bit RAM ($9003, cfgmap) nothing answers. Section 3's last four writes must not
+    select a page: their reads equal those after the selects went back to page 0."""
     import cartfmt
     ram = e.snaps[e.ncyc]['sysram']
     res = ram[0x10:]                       # $0210 on
@@ -168,13 +170,17 @@ def cart8_selfcheck(e, cart_path):
     s1 = res[:14]
     v = [(0xA55A + k * 0x1111) & 0xFFFF for k in range(14)]
     if not cartfmt.is_rom(data):
-        want = {0: v[0], 1: v[1], 2: 0xFFFF, 3: 0xFFFF, 5: v[5] & 0xFF, 6: v[6] & 0xFF, 7: v[7] & 0xFF,
+        want = {0: v[0], 1: v[1], 2: 0xFFFF, 3: 0xFFFF, 5: v[5] & 0xFF, 6: v[6] & 0xFF, 7: 0xFFFF,
                 8: v[8], 9: 0x5000 ^ 0x1111, 10: 0xFFFF, 11: 0xFFFF, 12: 0xD150 ^ 0x4444}
     else:
         want = {0: v[0], 1: v[1], 2: v[2], 3: v[3] & 0xFF, 4: v[4] & 0xFF, 5: 0xFFFF, 11: 0xFFFF}
     for k, w in want.items():
         if s1[k] != w:
             probs.append('section 1 word %d = $%04X, want $%04X' % (k, s1[k], w))
+    s3 = res[14 + 8 * 5:14 + 8 * 5 + 13 * 6]
+    for k in range(9, 13):
+        if s3[6 * k:6 * k + 6] != s3[6 * 8:6 * 8 + 6]:
+            probs.append('section 3 write %d selected a page' % (k + 1))
     if cartfmt.is_rom(data):
         p = cartfmt.parse_rom(data)
         icart = dict(p.writes)

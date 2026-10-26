@@ -42,6 +42,12 @@ POOL_BLOCKS = 32
 NENT = 4096                     # map table entries: {r = a[15:12], y = page, b = a[11:8]}
 E_S, E_R, E_W, E_N, E_B = 1 << 21, 1 << 20, 1 << 19, 1 << 18, 1 << 17
 E_BASE = 0x1FFFF
+E_TLO, E_THI = 30, 22           # [37:30] first, [29:22] last word of the block that answers
+TRIM_FULL = (0x00 << E_TLO) | (0xFF << E_THI)
+
+# the Intellicart bank registers after a load: each 2K window onto its own address (as jzIntv
+# starts them; intellicart.txt calls the start state undefined): $40+r = r << 4, $50+r = r << 4 | 8
+BANK0 = [((i & 15) << 4) | (8 if i & 16 else 0) for i in range(32)]
 
 FMT_NONE, FMT_RAW, FMT_CFG, FMT_ROM = 0, 1, 2, 3
 FMT_NAMES = {FMT_NONE: 'none', FMT_RAW: 'raw', FMT_CFG: 'bin+cfg', FMT_ROM: 'rom'}
@@ -634,14 +640,20 @@ def rom_flags(compat):
 # ---------------------------------------------------------------------------------------
 # The map table builder (intv_loader.sv's finish), and the loaded cartridge
 # ---------------------------------------------------------------------------------------
-def ent(s=0, r=0, w=0, n=0, b=0, base=0):
+def ent(s=0, r=0, w=0, n=0, b=0, base=0, tlo=0x00, thi=0xFF):
     return (E_S if s else 0) | (E_R if r else 0) | (E_W if w else 0) | (E_N if n else 0) | \
-        (E_B if b else 0) | (base & E_BASE)
+        (E_B if b else 0) | (base & E_BASE) | (tlo << E_TLO) | (thi << E_THI)
 
 
 def dec(e):
     return dict(s=bool(e & E_S), r=bool(e & E_R), w=bool(e & E_W), n=bool(e & E_N), b=bool(e & E_B),
-                base=e & E_BASE)
+                base=e & E_BASE, tlo=(e >> E_TLO) & 0xFF, thi=(e >> E_THI) & 0xFF)
+
+
+def trim_ok(e, lo8):
+    """The word lo8 of a storage block lies in the entry's trim (CFG blocks: the words its
+    ranges declare, from the first to the last; every other format: the whole block)."""
+    return (e >> E_TLO) & 0xFF <= lo8 <= (e >> E_THI) & 0xFF
 
 
 def ent_text(e):
@@ -649,7 +661,8 @@ def ent_text(e):
         return '-'
     d = dec(e)
     a = ''.join(k.upper() for k in 'rwnb' if d[k])
-    return '%s@%05X' % (a or '-', d['base']) if d['s'] else a + '@none'
+    t = '' if (d['tlo'], d['thi']) == (0, 0xFF) else '[%02X-%02X]' % (d['tlo'], d['thi'])
+    return '%s@%05X%s' % (a or '-', d['base'], t) if d['s'] else a + '@none'
 
 
 class Loaded:
@@ -728,40 +741,96 @@ def build_raw(ld, layout_entries, lid):
     ld.limit = ld.words
 
 
+def cfg_paged(rng):
+    """The paged 4K ranges: every range a [mapping] line with PAGE touches (the loader's first
+    pass over the ranges)."""
+    m = 0
+    for (kind, hp, pg, at, lo, hi, src) in rng:
+        if kind == RK_MAP and hp:
+            for r in range(lo >> 12, (hi >> 12) + 1):
+                m |= 1 << r
+    return m
+
+
+def cfg_data(rng_entry, y, pr):
+    """A [mapping] or [preload] line gives data to page y of its range: a PAGE line on its own
+    page; any other line on page 0, and on every page of a paged range (pr: as jzIntv, a line
+    without PAGE stays mapped whatever page is selected)."""
+    kind, hp, pg = rng_entry[0], rng_entry[1], rng_entry[2]
+    if kind == RK_MAP and hp:
+        return pg == y
+    return kind in (RK_MAP, RK_PRE) and (y == 0 or pr)
+
+
+H_NONE, H_RAM, H_UNPAGED = 0, 1, 2
+
+
 def build_cfg(ld, cfg):
-    """Map table from a CFG's ranges (word-exact; docs/CARTFORMATS.md 2)."""
+    """Map table from a CFG's ranges (word-exact; docs/CARTFORMATS.md 2).
+
+    The walk is r, then b, then y (the RTL's order), so that a block's pages follow each other:
+    - in a range no PAGE line touches, only page 0 is built (the others are never looked up)
+    - in a paged range, lines without PAGE ([mapping] without PAGE, [preload], [memattr]) count
+      on every page; a page's own PAGE lines are copied over them where both have words
+    - a block with [memattr] RAM or WOM is one block of cart RAM on every page (built at page 0,
+      the same entry on the others: the RAM answers there whatever page is selected; it starts
+      with the words page 0 maps there)
+    - a page with no PAGE line in the block gets the entry of the block without them (built
+      once: one pool block, not one per page)
+    Each entry keeps the first and last word of the block its ranges declare (the trim): words
+    of the block outside it are not answered and not written (a [memattr] range of a few words
+    does not make its whole 256-word block answer, as at $8000-$803F, the STIC's alias).
+    """
     rng = cfg.ranges
+    ld.paged = cfg_paged(rng)
     ram_next = pool_next = 0
     for r in range(16):
-        for y in range(16):
-            for b in range(16):
-                b0 = (r << 12) | (b << 8)
-                b1 = b0 + 255
+        pr = ld.paged >> r & 1
+        for b in range(16):
+            hmode, hent = H_NONE, 0
+            b0 = (r << 12) | (b << 8)
+            b1 = b0 + 255
+            for y in range(16):
+                idx = (r << 8) | (y << 4) | b
+                if y and not pr:
+                    ld.table[idx] = 0
+                    continue
+                if y and hmode == H_RAM:
+                    ld.table[idx] = hent
+                    continue
+                app = y == 0 or pr
                 R = W = N = B = 0
-                cnt = 0
+                cnt = pc = 0
                 fbase, ffull = 0, False
-                for (kind, hp, pg, at, lo, hi, src) in rng:
-                    ov = lo <= b1 and hi >= b0
-                    full = lo <= b0 and hi >= b1
-                    if not ov:
+                tlo, thi = 0xFF, 0x00
+                for q in rng:
+                    (kind, hp, pg, at, lo, hi, src) = q
+                    if not (lo <= b1 and hi >= b0):
                         continue
-                    if kind == RK_MAP and pg == y or kind == RK_PRE and y == 0:
+                    full = lo <= b0 and hi >= b1
+                    data = cfg_data(q, y, pr)
+                    if data:
                         if kind == RK_MAP:
                             R = 1
                         cnt += 1
                         if cnt == 1:
                             fbase, ffull = (src + b0 - lo) & E_BASE, full
                         if kind == RK_MAP and hp:
-                            ld.paged |= 1 << r
-                    elif kind == RK_MEM and y == 0:
+                            pc = 1
+                    elif kind == RK_MEM and app:
                         R |= at & AT_R
                         W |= (at & AT_W) >> 1
                         N |= (at & AT_N) >> 2
-                    elif kind == RK_BSW and y == 0:
+                    elif kind == RK_BSW and app:
                         B = R = 1
+                    if data or (kind in (RK_MEM, RK_BSW) and app):
+                        tlo = min(tlo, 0 if lo <= b0 else lo & 0xFF)
+                        thi = max(thi, 0xFF if hi >= b1 else hi & 0xFF)
+                if y and not pc and hmode == H_UNPAGED:
+                    ld.table[idx] = hent
+                    continue
                 S = 0
                 base = 0
-                idx = (r << 8) | (y << 4) | b
                 if W and not B:
                     if ram_next == RAM_BLOCKS:
                         ld.err = ERR_RAM_FULL
@@ -785,22 +854,32 @@ def build_cfg(ld, cfg):
                     R = 0
                 if W and B:
                     ld.noss = True
-                ld.table[idx] = ent(S, R, W, N, B, base)
+                e = ent(S, R, W, N, B, base, tlo, thi)
+                ld.table[idx] = e
+                if y == 0:
+                    hmode = H_RAM if (W and not B) else H_UNPAGED if not pc else H_NONE
+                    hent = e
+                elif not pc:
+                    hmode, hent = H_UNPAGED, e
     ld.limit = ld.words
-    # assembly: pool blocks filled with $FFFF, then each overlapping data range copied (later wins)
+    # assembly: pool blocks filled with $FFFF, then the words of the lines without PAGE, then
+    # the page's own PAGE lines (each pass in line order: a later line wins)
     for idx, base, kind in ld.asm:
         r, y, b = idx >> 8, (idx >> 4) & 15, idx & 15
         b0 = (r << 12) | (b << 8)
+        pr = ld.paged >> r & 1
         if kind == 'pool':
             for i in range(256):
                 ld.sram[base + i] = 0xFFFF
-        for (rk, hp, pg, at, lo, hi, src) in rng:
-            if not (rk == RK_MAP and pg == y or rk == RK_PRE and y == 0):
-                continue
-            for a in range(max(lo, b0), min(hi, b0 + 255) + 1):
-                s = src + (a - lo)
-                if s < ld.limit:
-                    ld.sram[base + (a - b0)] = ld.sram_rd(s)
+        for pas in (0, 1):
+            for q in rng:
+                (rk, hp, pg, at, lo, hi, src) = q
+                if not cfg_data(q, y, pr) or int(rk == RK_MAP and hp) != pas:
+                    continue
+                for a in range(max(lo, b0), min(hi, b0 + 255) + 1):
+                    s = src + (a - lo)
+                    if s < ld.limit:
+                        ld.sram[base + (a - b0)] = ld.sram_rd(s)
 
 
 def build_rom(ld, access, fine):
@@ -960,7 +1039,7 @@ class MapCart:
 
     read(a) -> word or None (not answered: the bus reads $FFFF); write(a, v); reset() is the
     machine reset (page selects to 0; the bank registers keep their values: the Intellicart
-    does not see the console's reset). Same interface as intvcart.CartModel (sel, reset,
+    does not see the console's reset; after a load they are BANK0). Same interface as intvcart.CartModel (sel, reset,
     read, write, mapped_space_crc).
     """
 
@@ -969,23 +1048,23 @@ class MapCart:
         self.table = ld.table
         self.sram = dict(ld.sram)
         self.sel = [0] * 16
-        self.bank = [0] * 32
+        self.bank = list(BANK0)
 
     def reset(self):
         self.sel = [0] * 16
 
     def _lookup(self, a):
-        """(entry, SRAM address or None)."""
+        """(entry, SRAM address or None: no storage, or a word outside the storage block's trim)."""
         r = a >> 12
         y = self.sel[r] if self.ld.paged >> r & 1 else 0
         e = self.table[(r << 8) | (y << 4) | ((a >> 8) & 15)]
         if e & E_B:
             ia = ((a & 0x7FF) + (self.bank[((a >> 11) & 1) << 4 | r] << 8)) & 0xFFFF
             e2 = self.table[((ia >> 12) << 8) | ((ia >> 8) & 15)]
-            if not e2 & E_S:
+            if not e2 & E_S or not trim_ok(e2, ia & 0xFF):
                 return e, None
             return e, ((e2 & E_BASE) + (ia & 0xFF)) & 0x1FFFF
-        if not e & E_S:
+        if not e & E_S or not trim_ok(e, a & 0xFF):
             return e, None
         return e, ((e & E_BASE) + (a & 0xFF)) & 0x1FFFF
 
@@ -1042,11 +1121,11 @@ class MapCart:
         return n
 
     def mapped_space_crc(self):
-        """The 64K-word space at reset paging and bank 0 (ROM words as read, $FFFF for RAM and
-        unmapped), then for each paged 4K range its pages 1 .. n-1 (tools/mapper/README.md)."""
+        """The 64K-word space at reset paging and the load's bank registers (ROM words as read,
+        $FFFF for RAM and unmapped), then for each paged 4K range its pages 1 .. n-1 (tools/mapper/README.md)."""
         saved, sbank = list(self.sel), list(self.bank)
         self.reset()
-        self.bank = [0] * 32
+        self.bank = list(BANK0)
         crc = crc32(struct.pack('>65536H', *self.rom_space()))
         for r in range(16):
             if self.ld.paged >> r & 1:

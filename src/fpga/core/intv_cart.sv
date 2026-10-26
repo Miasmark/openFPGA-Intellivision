@@ -8,7 +8,12 @@
 //
 //   index  {r = addr[15:12], y, b = addr[11:8]}, y = sel[r] if range r is
 //          paged (ECS-style pages, intv_pagesel), else 0
-//   entry  [21] S  the block has storage
+//   entry  [37:30] first, [29:22] last word of the block that answers (the
+//          trim: a BIN + CFG's ranges declare only those words; every other
+//          format the whole block, $00-$FF). A word outside it is not
+//          answered and not written. Through a bank window, the trim of the
+//          storage block's entry counts.
+//          [21] S  the block has storage
 //          [20] R  reads answered        [19] W  writes stored
 //          [18] N  narrow: 8-bit cells (reads give the upper byte 0, a write
 //                  keeps the low byte; MAME rom.h:52-53, jzIntv's N)
@@ -26,10 +31,12 @@
 //
 // CPU writes, whatever their address: $xA5y to $xFFF selects a page
 // (intv_pagesel); $0040-$005F loads Intellicart bank register addr[4:0]
-// (the low byte; $0040+r for $r000-$r7FF, $0050+r for $r800-$rFFF). The
-// bank registers are 0 after a load and keep their values over a machine
-// reset (the Intellicart does not see the console's reset; its manual
-// calls them undefined at start).
+// (the low byte; $0040+r for $r000-$r7FF, $0050+r for $r800-$rFFF). After
+// a load each bank register points its 2K window at its own address
+// ($0040+r = r << 4, $0050+r = r << 4 | 8: what jzIntv does; the
+// Intellicart manual calls the start state undefined), and they keep their
+// values over a machine reset (the Intellicart does not see the console's
+// reset).
 //
 // Bus port: a request (one clk) is answered by ack (one clk) with the data,
 // hit (a read answered), the window's attributes {B, N, W, R} and the
@@ -67,8 +74,8 @@ module intv_cart #(
     // load port (intv_loader)
     input  wire logic        ld_tab_we,
     input  wire logic [11:0] ld_tab_idx,
-    input  wire logic [21:0] ld_tab_d,
-    input  wire logic        ld_res_we,       // results; selects and bank registers to 0
+    input  wire logic [37:0] ld_tab_d,
+    input  wire logic        ld_res_we,       // results; selects to 0, bank registers to their start
     input  wire logic [31:0] ld_crc,
     input  wire logic [16:0] ld_words,
     input  wire logic [7:0]  ld_layout,
@@ -121,8 +128,8 @@ module intv_cart #(
 );
 
     // ------------------------------------------------------------ table
-    logic [21:0] tab [4096];
-    logic [21:0] tab_q;
+    logic [37:0] tab [4096];
+    logic [37:0] tab_q;
     logic [11:0] tab_ra;
     always_ff @(posedge clk) begin
         if (ld_tab_we)
@@ -135,7 +142,7 @@ module intv_cart #(
     logic [7:0]  bank [32];
 
     initial begin
-        for (int i = 0; i < 32; i++) bank[i] = 8'd0;
+        for (int i = 0; i < 32; i++) bank[i] = {4'(i), i[4], 3'd0};
         crc = 32'd0; words = 17'd0; layout = 8'd0; flags = 8'd0; hit = 1'b0; cfg_crc = 32'd0;
         fmt = 2'd0; noss = 1'b0;
         bus_ack = 1'b0; bus_rdata = 16'hFFFF; bus_hit = 1'b0; bus_attr = 4'd0; bus_paged = 1'b0;
@@ -160,7 +167,7 @@ module intv_cart #(
     logic [15:0] qa = 16'd0;                   // the access, held
     logic        qwe = 1'b0;
     logic [15:0] qwd = 16'd0;
-    logic [21:0] qe = 22'd0;                   // the window's entry (B_T2)
+    logic [21:0] qe = 22'd0;                   // the window's entry (B_T2; its trim is not used)
     logic [7:0]  qlo = 8'd0;                   // the word in the Intellicart block (B_T2)
 
     wire logic [3:0]  r_bus = bus_addr[15:12];
@@ -171,12 +178,13 @@ module intv_cart #(
     // the access, from the window's entry w and the storage entry s
     // (s = w unless w is a bank window)
     /* verilator lint_off UNUSEDSIGNAL */
-    wire logic [21:0] w_e   = bst == B_T2 ? qe : tab_q;    // its R, W, N
+    wire logic [21:0] w_e   = bst == B_T2 ? qe : tab_q[21:0];  // its R, W, N
     /* verilator lint_on UNUSEDSIGNAL */
     wire logic [7:0]  lo8   = bst == B_T2 ? qlo : qa[7:0];
     wire logic [16:0] sa    = tab_q[16:0] + {9'd0, lo8};
     wire logic        lim   = !sa[16] && sa >= limit;
-    wire logic        go    = tab_q[21] && !lim && (qwe ? w_e[19] : w_e[20]);
+    wire logic        trim  = lo8 >= tab_q[37:30] && lo8 <= tab_q[29:22];
+    wire logic        go    = tab_q[21] && !lim && trim && (qwe ? w_e[19] : w_e[20]);
 
     always_comb begin
         tab_ra = {r_bus, y_bus, bus_addr[11:8]};
@@ -197,7 +205,7 @@ module intv_cart #(
             end
             B_T1, B_T2: begin
                 if (bst == B_T1) begin                          // tab_q: the window's entry
-                    qe  <= tab_q;
+                    qe  <= tab_q[21:0];
                     qlo <= ia[7:0];
                     bus_attr  <= {tab_q[17], tab_q[18], tab_q[19], tab_q[20]};
                     bus_rdata <= 16'hFFFF;
@@ -240,7 +248,7 @@ module intv_cart #(
         if (ld_res_we) begin
             crc <= ld_crc; words <= ld_words; layout <= ld_layout; flags <= ld_flags; hit <= ld_hit;
             cfg_crc <= ld_cfg_crc; fmt <= ld_fmt; noss <= ld_noss; paged <= ld_paged; limit <= ld_limit;
-            for (int i = 0; i < 32; i++) bank[i] <= 8'd0;
+            for (int i = 0; i < 32; i++) bank[i] <= {4'(i), i[4], 3'd0};
         end
         if (ss_hit && ss_addr[7:0] >= 8'd7 && ss_addr[7:0] <= 8'd14)
             for (int i = 0; i < 4; i++)

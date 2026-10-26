@@ -130,7 +130,7 @@ module intv_media #(
     logic [9:0]  rom_wdata;
     logic        tab_we, res_we, res_hit, res_noss;
     logic [11:0] tab_idx;
-    logic [21:0] tab_d;
+    logic [37:0] tab_d;
     logic [31:0] res_crc, res_cfg_crc;
     logic [16:0] res_words, res_limit;
     logic [7:0]  res_layout, res_flags;

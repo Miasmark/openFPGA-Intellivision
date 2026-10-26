@@ -141,6 +141,11 @@ def images(work=None):
     add('romfine', good_rom)
     add('romodd', good_rom[:-1] + b'\x05\x01\x02')       # a partial tag at the end: ignored
     add('rombadtag', rom_file(segs, acc, fine, tag(0x06, [0x80, 0, 0])[:-1] + b'\x00'))  # bad tag CRC
+    # romfine without the NUL tag at the end: as1600's form, which jzIntv loads (it refuses a
+    # .rom whose tags end with a NUL tag, error 7; id_tag.txt describes the NUL tag, so we take
+    # both). rombadtag has no NUL tag (its last byte is the bad CRC's): jzIntv refuses it for
+    # that CRC (error 8), we skip the tag (docs/CARTFORMATS.md 3)
+    add('romfine_nonul', rom_file(segs, acc, fine, tag(0x01, b'step8') + tag(0x06, [0x40, 0, 0])))
 
     # ---- refusals: CFG
     base = pattern_bin(0x2000, 0x33)

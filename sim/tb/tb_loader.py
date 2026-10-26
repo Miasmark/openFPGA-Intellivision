@@ -251,6 +251,14 @@ def expect(img, tab, bios):
         L.append('ss1 %d %08X' % (i, w))
     for r in range(16):
         L.append('E %d %08X' % (r, blockcrc(mi, r)))
+    # W: writes that must not select a page (another range's value at $xFFF; $xFFE, $xF7F)
+    for r in range(16):
+        mi.write((r << 12) + 0xFFF, (((r + 1) & 15) << 12) + 0xA50 + ((r + 7) & 15))
+        mi.write((r << 12) + 0xFFE, (r << 12) + 0xA50 + ((r + 9) & 15))
+        mi.write((r << 12) + 0xF7F, (r << 12) + 0xA50 + ((r + 11) & 15))
+    ssw = mi.ss_words()
+    for i in (5, 6):
+        L.append('ssw %d %08X' % (i, ssw[i]))
     mi.ss_load([0] * NSS)
     for i, w in enumerate(mi.ss_words()):
         L.append('ssz %d %08X' % (i, w))
@@ -453,8 +461,8 @@ PLANTS = [
     ('cfg_memattr_ignored', 'intv_cfgparse.sv', "is_name(name, nlen, N_MEMATTR, 4'd7) ? S_MEM :",
      "1'b0 ? S_MEM :", 'the CFG section [memattr] ignored'),
     ('cfg_preload_ignored', 'intv_loader.sv',
-     "(q_kind == 3'd1 && rq[54:51] == ey) || (q_kind == 3'd2 && ey == 4'd0);",
-     "(q_kind == 3'd1 && rq[54:51] == ey);", 'the CFG section [preload] ignored'),
+     "q_data = (q_kind == 3'd1 || q_kind == 3'd2) && (q_pg ? rq[54:51] == ey : q_app);",
+     "q_data = q_kind == 3'd1 && (q_pg ? rq[54:51] == ey : q_app);", 'the CFG section [preload] ignored'),
     ('bank_decode', 'intv_cart.sv', "if (fx_we && qa[15:5] == 11'd2)", "if (fx_we && qa[15:4] == 12'd4)",
      'bank registers $0050-$005F not decoded'),
     ('bank_index', 'intv_cart.sv', "wire logic [7:0]  bk    = bank[{qa[11], qa[15:12]}];",
@@ -475,10 +483,23 @@ PLANTS = [
      "cfg_on <= cnt[1] != 25'd0;", 'a CFG the data table no longer lists applied to a reload'),
     ('cfg_refeed', 'intv_loader.sv', "if (cfg_n != 25'd0 && !cfg_fin) begin   // once per CFG stream",
      "if (cfg_n != 25'd0) begin", 'a kept CFG\'s last bytes fed again at a reload'),
+    # the step-8 review
+    ('sel_no_range_match', 'intv_pagesel.sv', "wdata[15:4] == {addr[15:12], 8'hA5}", "wdata[11:4] == 8'hA5",
+     'a page select taken from another range\'s value'),
+    ('unpaged_page0_only', 'intv_loader.sv', "wire  logic        q_app  = ey == 4'd0 || paged[er];",
+     "wire  logic        q_app  = ey == 4'd0;", 'lines without PAGE only on page 0 of a paged range'),
+    ('trim_off', 'intv_cart.sv', "wire logic        trim  = lo8 >= tab_q[37:30] && lo8 <= tab_q[29:22];",
+     "wire logic        trim  = 1'b1;", 'a CFG block answers past its declared words'),
+    ('bank_start_zero', 'intv_cart.sv', "            for (int i = 0; i < 32; i++) bank[i] <= {4'(i), i[4], 3'd0};",
+     "            for (int i = 0; i < 32; i++) bank[i] <= 8'd0;", 'bank registers 0 after a load'),
+    ('asm_one_pass', 'intv_loader.sv', "if (q_ov && q_data && q_pg == apass) begin",
+     "if (q_ov && q_data && !apass) begin", 'a line without PAGE over the page\'s own words'),
+    ('ram_per_page', 'intv_loader.sv', "if (y != 4'd0 && (!paged[r] || h_mode == H_RAM)) begin",
+     "if (y != 4'd0 && !paged[r]) begin", 'cart RAM in a paged range not shared by its pages'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
-                'RELOAD2', 'RELOAD3')
+                'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8')
 
 
 def main():

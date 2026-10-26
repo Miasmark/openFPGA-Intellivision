@@ -107,7 +107,7 @@ module intv_loader #(
     // results (intv_cart)
     output logic             tab_we,
     output logic [11:0]      tab_idx,
-    output logic [21:0]      tab_d,
+    output logic [37:0]      tab_d,
     output logic             res_we,
     output logic [31:0]      res_crc,
     output logic [16:0]      res_words,
@@ -264,7 +264,7 @@ module intv_loader #(
     // ------------------------------------------------------------ finish
     typedef enum logic [5:0] {
         F_IDLE, F_CHECK, F_FIX, F_CF0, F_CF1, F_CF2, F_CFE, F_CFW, F_LK, F_LK_W, F_LK_C,
-        F_LK_FW, F_LK_F, F_SRC, F_CLR, F_COV, F_COV_W, F_COV_D, F_COV_Z, F_COV_N, F_BUILD,
+        F_LK_FW, F_LK_F, F_SRC, F_CLR, F_COV, F_COV_W, F_COV_D, F_COV_Z, F_COV_N, F_PG, F_PG_EV, F_BUILD,
         F_RAW_W, F_RAW_C, F_C_RD, F_C_EV, F_C_DEC, F_R_A, F_R_AW, F_R_F, F_R_FW, F_R_C,
         F_ZERO, F_ASM, F_ASM_W, F_ASM_D, F_FILL, F_SCAN, F_SCAN_EV, F_CP_RQ, F_CP_RD,
         F_CP_WR, F_CP_NX, F_DRAIN, F_RES
@@ -281,7 +281,7 @@ module intv_loader #(
     logic [1:0]  fmt = FMT_NONE;
     logic [1:0]  src = 2'd0;                   // map source: 0 refused, 1 raw, 2 CFG, 3 .rom
     logic [14:0] clr = 15'd0;
-    logic [12:0] idx = 13'd0;                  // [12]: done
+    logic [12:0] idx = 13'd0;                  // the walk: {done, r, b, y} (a block's pages in a row)
     logic [7:0]  conf = 8'd0;
     logic [15:0] paged = 16'd0;
     logic        noss = 1'b0, anyw = 1'b0;
@@ -292,8 +292,16 @@ module intv_loader #(
     logic [7:0]  blk = 8'd0;
     // the entry being built
     logic        e_r = 1'b0, e_w = 1'b0, e_n = 1'b0, e_b = 1'b0, ffull = 1'b0;
+    logic        e_pc = 1'b0;                  // a PAGE line gives the block words on this page
     logic [1:0]  e_cnt = 2'd0;
     logic [16:0] fbase = 17'd0;
+    logic [7:0]  t_lo = 8'hFF, t_hi = 8'h00;   // the trim: first and last word the ranges declare
+    // the block's entry held over its pages: H_RAM (cart RAM: every page the
+    // same), H_UNP (the entry without PAGE lines, for a page that has none)
+    localparam logic [1:0] H_NONE = 2'd0, H_RAM = 2'd1, H_UNP = 2'd2;
+    logic [1:0]  h_mode = H_NONE;
+    logic [37:0] h_ent = 38'd0;
+    logic        apass = 1'b0;                 // assembly: 0 lines without PAGE, 1 PAGE lines
     logic [7:0]  acc = 8'd0;
     // the assembly item / copy run
     logic [1:0]  a_kind = 2'd0;
@@ -306,7 +314,8 @@ module intv_loader #(
     wire  logic [8:0]  mid   = 9'((10'(lo) + 10'(hi)) >> 1);
     wire  logic [5:0]  units = 6'((18'(words) + 18'd2047) >> 11);
     wire  logic [16:0] size256 = (words + 17'd255) >> 8;
-    wire  logic [3:0]  r = idx[11:8], y = idx[7:4], b = idx[3:0];
+    wire  logic [3:0]  r = idx[11:8], b = idx[7:4], y = idx[3:0];
+    wire  logic [11:0] tix = {r, y, b};        // the table index of the walk's entry
     wire  logic [15:0] b0w = {r, b, 8'h00}, b1w = {r, b, 8'hFF};
 
     assign crc_ra = mid[7:0];
@@ -316,13 +325,20 @@ module intv_loader #(
     // the range rq against the block being built (or assembled: a_idx)
     wire  logic [3:0]  ar = a_idx[11:8], ay = a_idx[7:4], ab = a_idx[3:0];
     wire  logic [3:0]  ey = st == F_SCAN_EV ? ay : y;
+    wire  logic [3:0]  er = st == F_SCAN_EV ? ar : r;
     wire  logic [15:0] eb0 = st == F_SCAN_EV ? {ar, ab, 8'h00} : b0w;
     wire  logic [15:0] eb1 = st == F_SCAN_EV ? {ar, ab, 8'hFF} : b1w;
     wire  logic [2:0]  q_kind = rq[58:56];
     wire  logic [15:0] q_lo = rq[47:32], q_hi = rq[31:16], q_src = rq[15:0];
     wire  logic        q_ov   = q_lo <= eb1 && q_hi >= eb0;
     wire  logic        q_full = q_lo <= eb0 && q_hi >= eb1;
-    wire  logic        q_data = (q_kind == 3'd1 && rq[54:51] == ey) || (q_kind == 3'd2 && ey == 4'd0);
+    // a line without PAGE counts on page 0, and on every page of a paged range
+    // (as jzIntv); a PAGE line on its own page
+    wire  logic        q_app  = ey == 4'd0 || paged[er];
+    wire  logic        q_pg   = q_kind == 3'd1 && rq[55];
+    wire  logic        q_data = (q_kind == 3'd1 || q_kind == 3'd2) && (q_pg ? rq[54:51] == ey : q_app);
+    wire  logic [7:0]  q_tlo  = q_lo <= eb0 ? 8'h00 : q_lo[7:0];
+    wire  logic [7:0]  q_thi  = q_hi >= eb1 ? 8'hFF : q_hi[7:0];
 
     // the raw layout's entry for (r, y, b)
     logic [21:0] raw_e;
@@ -344,7 +360,7 @@ module intv_loader #(
         for (int i = 0; i < 6; i++) cnt[i] = 25'd0;
         for (int i = 0; i < 4; i++) begin crc_at[i] = 32'd0; wq[i] = 35'd0; end
         rom_we = 1'b0; rom_wsel = 2'd0; rom_waddr = 12'd0; rom_wdata = 10'd0;
-        tab_we = 1'b0; tab_idx = 12'd0; tab_d = 22'd0;
+        tab_we = 1'b0; tab_idx = 12'd0; tab_d = 38'd0;
         res_we = 1'b0; res_crc = 32'd0; res_words = 17'd0; res_layout = 8'd0; res_flags = 8'd0;
         res_hit = 1'b0; res_cfg_crc = 32'd0; res_fmt = 2'd0; res_noss = 1'b0; res_paged = 16'd0;
         res_limit = 17'd0; ready = 1'b0; err = 6'd0; fmt_err = 8'd0; len_st = 2'd0;
@@ -622,9 +638,19 @@ module intv_loader #(
                 blk <= blk + 8'd1;
                 if (blk == 8'hFF) begin
                     idx <= 13'd0;
-                    st  <= F_BUILD;
+                    ri  <= 6'd0;
+                    st  <= src == 2'd2 ? F_PG : F_BUILD;
                 end else
                     st <= F_COV;
+            end
+            // ---- CFG: the paged ranges first (every 4K range a PAGE line touches)
+            F_PG: st <= ri == nrng ? F_BUILD : F_PG_EV;
+            F_PG_EV: begin
+                if (q_kind == 3'd1 && rq[55])
+                    for (int i = 0; i < 16; i++)
+                        if (4'(i) >= q_lo[15:12] && 4'(i) <= q_hi[15:12]) paged[i] <= 1'b1;
+                ri <= ri + 6'd1;
+                st <= F_PG;
             end
             // ---- the map table
             F_BUILD: begin
@@ -635,13 +661,20 @@ module intv_loader #(
                     2'd0: st <= F_ZERO;
                     2'd1: st <= F_RAW_W;              // lay_ra is {lid, r, b[3]}
                     2'd2: begin
-                        e_r <= 1'b0; e_w <= 1'b0; e_n <= 1'b0; e_b <= 1'b0; e_cnt <= 2'd0;
-                        ffull <= 1'b0; fbase <= 17'd0; ri <= 6'd0;
-                        st <= F_C_RD;
+                        if (y != 4'd0 && (!paged[r] || h_mode == H_RAM)) begin
+                            // pages of a range no PAGE line touches: never looked up;
+                            // a cart RAM block: the same on every page
+                            tab_we <= 1'b1; tab_idx <= tix; tab_d <= paged[r] ? h_ent : 38'd0;
+                            idx <= idx + 13'd1;
+                        end else begin
+                            e_r <= 1'b0; e_w <= 1'b0; e_n <= 1'b0; e_b <= 1'b0; e_cnt <= 2'd0; e_pc <= 1'b0;
+                            ffull <= 1'b0; fbase <= 17'd0; ri <= 6'd0; t_lo <= 8'hFF; t_hi <= 8'h00;
+                            st <= F_C_RD;
+                        end
                     end
                     default: begin
                         if (y != 4'd0) begin
-                            tab_we <= 1'b1; tab_idx <= idx[11:0]; tab_d <= 22'd0;
+                            tab_we <= 1'b1; tab_idx <= tix; tab_d <= 38'd0;
                             idx <= idx + 13'd1;
                         end else begin
                             rp_tra <= {2'd0, r};
@@ -651,13 +684,13 @@ module intv_loader #(
                 endcase
             end
             F_ZERO: begin
-                tab_we <= 1'b1; tab_idx <= idx[11:0]; tab_d <= 22'd0;
+                tab_we <= 1'b1; tab_idx <= tix; tab_d <= 38'd0;
                 idx <= idx + 13'd1;
                 st <= F_BUILD;
             end
             F_RAW_W: st <= F_RAW_C;
             F_RAW_C: begin
-                tab_we <= 1'b1; tab_idx <= idx[11:0]; tab_d <= raw_e;
+                tab_we <= 1'b1; tab_idx <= tix; tab_d <= {raw_e[21] ? 16'h00FF : 16'h0000, raw_e};
                 if (lay_q[15:14] == 2'd1 && lay_q[13] && !(lid == 8'd1 && {1'b0, lay_q[8:0]} >= {4'd0, units}))
                     paged[r] <= 1'b1;
                 if (y == 4'd0 && raw_e[20:19] != 2'd0) begin
@@ -680,23 +713,33 @@ module intv_loader #(
                         ffull <= q_full;
                     end
                     if (e_cnt != 2'd2) e_cnt <= e_cnt + 2'd1;
-                    if (q_kind == 3'd1 && rq[55]) paged[r] <= 1'b1;
+                    if (q_pg) e_pc <= 1'b1;
                 end
-                if (q_ov && q_kind == 3'd3 && y == 4'd0) begin
+                if (q_ov && q_kind == 3'd3 && q_app) begin
                     if (rq[48]) e_r <= 1'b1;
                     if (rq[49]) e_w <= 1'b1;
                     if (rq[50]) e_n <= 1'b1;
                 end
-                if (q_ov && q_kind == 3'd4 && y == 4'd0) begin
+                if (q_ov && q_kind == 3'd4 && q_app) begin
                     e_b <= 1'b1;
                     e_r <= 1'b1;
+                end
+                if (q_ov && (q_data || ((q_kind == 3'd3 || q_kind == 3'd4) && q_app))) begin
+                    if (q_tlo < t_lo) t_lo <= q_tlo;
+                    if (q_thi > t_hi) t_hi <= q_thi;
                 end
                 ri <= ri + 6'd1;
                 st <= F_C_RD;
             end
-            F_C_DEC: begin
+            F_C_DEC: if (y != 4'd0 && !e_pc && h_mode == H_UNP) begin
+                // no PAGE line on this page: the block's entry without them
+                tab_we <= 1'b1; tab_idx <= tix; tab_d <= h_ent;
+                idx <= idx + 13'd1;
+                st  <= F_BUILD;
+            end else begin
                 logic s;
                 logic [16:0] base;
+                logic [37:0] e;
                 s = 1'b0;
                 base = 17'd0;
                 if (e_w && !e_b) begin
@@ -723,19 +766,27 @@ module intv_loader #(
                     if (e_w && !e_b) begin
                         ram_next <= ram_next + 7'd1;
                         if (e_cnt != 2'd0) begin
-                            asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_RAM, idx[11:0], base};
+                            asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_RAM, tix, base};
                             nasm <= nasm + 7'd1;
                         end
                     end else if (!(e_cnt == 2'd1 && ffull) && e_cnt != 2'd0) begin
                         pool_next <= pool_next + 6'd1;
-                        asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_POOL, idx[11:0], base};
+                        asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_POOL, tix, base};
                         nasm <= nasm + 7'd1;
                     end
                     if (e_w && e_b) noss <= 1'b1;
                     if (e_w) anyw <= 1'b1;
+                    e = {t_lo, t_hi, s, (e_b || s) && e_r, e_w, e_n, e_b, base};
                     tab_we  <= 1'b1;
-                    tab_idx <= idx[11:0];
-                    tab_d   <= {s, (e_b || s) && e_r, e_w, e_n, e_b, base};
+                    tab_idx <= tix;
+                    tab_d   <= e;
+                    if (y == 4'd0) begin
+                        h_mode <= (e_w && !e_b) ? H_RAM : !e_pc ? H_UNP : H_NONE;
+                        h_ent  <= e;
+                    end else if (!e_pc) begin
+                        h_mode <= H_UNP;
+                        h_ent  <= e;
+                    end
                     if (y == 4'd0 && (((e_b || s) && e_r) || e_w || e_b)) begin
                         if (r == 4'd7 || (r == 4'd4 && !b[3])) conf <= conf | FLAG_ECS_OFF;
                         if (r == 4'd2 || r == 4'd14)          conf <= conf | FLAG_ECS_RISK;
@@ -760,7 +811,7 @@ module intv_loader #(
                     if (ram_next != 7'd64) begin
                         base = RAM_BASE + {3'd0, ram_next[5:0], 8'd0};
                         ram_next <= ram_next + 7'd1;
-                        asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_ROM, idx[11:0], base};
+                        asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_ROM, tix, base};
                         nasm <= nasm + 7'd1;
                     end else
                         noss <= 1'b1;
@@ -768,8 +819,8 @@ module intv_loader #(
                 if (nib[1] && nib[3]) noss <= 1'b1;
                 if (nib[1]) anyw <= 1'b1;
                 tab_we  <= 1'b1;
-                tab_idx <= idx[11:0];
-                tab_d   <= {1'b1, nib[0], nib[1], nib[2], nib[3], base};
+                tab_idx <= tix;
+                tab_d   <= {8'h00, 8'hFF, 1'b1, nib[0], nib[1], nib[2], nib[3], base};
                 if (nib[0] || nib[1] || nib[3]) begin
                     if (r == 4'd7 || (r == 4'd4 && !b[3])) conf <= conf | FLAG_ECS_OFF;
                     if (r == 4'd2 || r == 4'd14)          conf <= conf | FLAG_ECS_RISK;
@@ -790,6 +841,7 @@ module intv_loader #(
                 a_base <= asm_q[16:0];
                 wcnt   <= 9'd0;
                 ri     <= 6'd0;
+                apass  <= 1'b0;
                 c_lo   <= {asm_q[28:25], asm_q[20:17], 8'h00};
                 c_a    <= {asm_q[28:25], asm_q[20:17], 8'h00};
                 c_hi   <= {asm_q[28:25], asm_q[20:17], 8'hFF};
@@ -800,12 +852,15 @@ module intv_loader #(
                 wcnt <= wcnt + 9'd1;
                 if (wcnt == 9'd255) st <= F_SCAN;
             end
+            // two passes over the lines: those without PAGE, then the page's own
+            // (a page's words replace the others'; in each pass a later line wins)
             F_SCAN: begin
-                if (ri == nrng) begin ai <= ai + 7'd1; st <= F_ASM; end
+                if (ri == nrng && !apass) begin apass <= 1'b1; ri <= 6'd0; end
+                else if (ri == nrng) begin ai <= ai + 7'd1; st <= F_ASM; end
                 else st <= F_SCAN_EV;
             end
             F_SCAN_EV: begin
-                if (q_ov && q_data) begin
+                if (q_ov && q_data && q_pg == apass) begin
                     c_lo  <= q_lo;
                     c_src <= {1'b0, q_src};
                     c_a   <= q_lo > eb0 ? q_lo : eb0;

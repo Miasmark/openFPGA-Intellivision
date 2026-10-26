@@ -102,6 +102,18 @@ not tracked. After every build check `src/fpga/output_files/ap_core.sta.summary`
 every setup and hold slack must be positive. A clock name you don't
 recognise there means `core_constraints.sdc` no longer matches the PLL's
 clock names (`ic|pll|altera_pll_i|cyclonev_pll|counter[n].output_counter|divclk`).
+Then check the input crossing (DESIGN.md 7.2), which the clock groups
+leave out of the slack summary:
+
+```sh
+python3 -I sim/check/fit_crossing_check.py    # src/fpga/output_files/ap_core.sta.rpt
+```
+
+It must print `FIT_CROSSING pass`: both "Input crossing net delay" panels
+with no negative slack and one row per kept `word` bit plus the request,
+and the metastability report ("Synchronizer chains") with `req_74` and
+`ack` each crossing through two flip-flops (`core/sta_reports.tcl` adds
+these panels to every fit).
 
 The first fit of step 1 (seed 1): 656 ALMs of 18,480, 3 M10K, 1 DSP;
 worst setup +3.537 ns (`clk_74a`), `clk_sys` +12.999 ns, `clk_vid`

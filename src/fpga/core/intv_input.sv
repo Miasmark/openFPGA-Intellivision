@@ -36,8 +36,11 @@
 // nobody made: HID 1E '1' to 21 '4' read as 1F '2'). The latency from a
 // change to the bytes is at most about 7 clk + 4 clk_74a periods (220 ns);
 // the words change at most once a frame. core_constraints.sdc bounds the
-// copy's paths into clk (set_max_skew, set_net_delay), which the
-// asynchronous clock groups otherwise leave untimed. The module holds no
+// copy's and the request's paths into clk with set_net_delay (10 ns; its
+// comment says why not set_max_skew or set_max_delay), which the
+// asynchronous clock groups otherwise leave untimed;
+// sim/check/fit_crossing_check.py checks those net delays and the two
+// flip-flops of each flag after a fit. The module holds no
 // machine state (inputs are sampled again after a restore, DESIGN.md 4.4),
 // so it has no state port.
 //

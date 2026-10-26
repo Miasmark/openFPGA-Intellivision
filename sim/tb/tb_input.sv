@@ -26,6 +26,26 @@
 // the last vector must be on the outputs. The bench also counts how often
 // the outputs changed, to show the words do get across while they change.
 //
+// That input model cannot see a fault in the handshake itself: hold_74 is
+// a register and changes all at once in a zero-delay simulation. Two more
+// checks cover the handshake:
+// - the handshake rule (both builds): at a clk_74a edge where a transfer
+//   is in flight (req_74 != ack: the clk side has not loaded the copy
+//   since the request), hold_74 must not change; the bench counts the
+//   copies taken and the loads made;
+// - the copy's routing (built with -DTB_SKEW, tb_input.py's skew build:
+//   in intv_input.sv's always_ff @(posedge clk) blocks hold_74 and req_74
+//   read hold_v and req_v instead, which this bench drives): each bit of
+//   hold_74, and req_74, reaches the clk side after its own delay, one of
+//   eight moments from 0.5 to 19.75 ns (twice the SDC's 10 ns bound, just
+//   under one clk period), drawn again for every group. So a clk side that
+//   loads the copy before every bit has arrived, or crosses a registered
+//   copy bit by bit, shows torn bytes.
+// What neither can show is metastability: a load decided on the request's
+// first flip-flop (req_s[0]) passes here. sim/check/fit_crossing_check.py
+// checks after a fit that the metastability report has req_74 and ack
+// crossing through two flip-flops each, and the net delays.
+//
 // It prints TB_INPUT pass or TB_INPUT FAIL.
 //
 // SPDX-License-Identifier: MIT
@@ -43,6 +63,102 @@ module tb_input;
     wire  [7:0]  pad_r, pad_l;
 
     always #11.64 clk = ~clk;
+
+    // --------------------------------------------------------------- skew
+`ifdef TB_SKEW
+    // The clk side's view of hold_74 and req_74 (dut.hold_v, dut.req_v):
+    // bit i arrives msk_k[i]'s moment after it changes, req_74 at moment
+    // rk. Delays are fixed per group, so changes arrive in order.
+    localparam int NM = 8;
+    real          dly [NM];
+    logic [W-1:0] msk [NM];
+    int           rk;
+
+    task automatic draw_skew();
+        logic [W-1:0] r0, r1, r2;
+        r0 = rbits();
+        r1 = rbits();
+        r2 = rbits();
+        for (int k = 0; k < NM; k++)
+            msk[k] = ({W{k[0]}} ~^ r0) & ({W{k[1]}} ~^ r1) & ({W{k[2]}} ~^ r2);
+        rk = $urandom % NM;
+    endtask
+
+    task automatic carry_hold(input int k);
+        forever begin
+            @(dut.hold_74);
+            begin
+                automatic logic [W-1:0] b = dut.hold_74;
+                automatic logic [W-1:0] mk = msk[k];
+                automatic real d = dly[k];
+                fork
+                    begin
+                        #(d);
+                        dut.hold_v = (dut.hold_v & ~mk) | (b & mk);
+                    end
+                join_none
+            end
+        end
+    endtask
+
+    task automatic carry_req();
+        forever begin
+            @(dut.req_74);
+            begin
+                automatic logic v = dut.req_74;
+                automatic real d = dly[rk];
+                fork
+                    begin
+                        #(d);
+                        dut.req_v = v;
+                    end
+                join_none
+            end
+        end
+    endtask
+
+    initial begin
+        for (int k = 0; k < NM; k++)
+            dly[k] = 0.5 + 2.75 * k;
+        draw_skew();
+        dut.hold_v = dut.hold_74;
+        dut.req_v = dut.req_74;
+        for (int k = 0; k < NM; k++) begin
+            automatic int kk = k;
+            fork
+                carry_hold(kk);
+            join_none
+        end
+        fork
+            carry_req();
+        join_none
+    end
+`endif
+
+    // ------------------------------------------------- the handshake rule
+    // hold_74 must not change at a clk_74a edge while a transfer is in
+    // flight (req_74 != ack, both before the edge). A copy is a request
+    // toggle; a load is an acknowledge toggle.
+    int ncopy = 0, nload = 0, nflight = 0;
+    always @(posedge clk_74a) begin
+        automatic logic inflight = dut.req_74 != dut.ack;
+        automatic logic r = dut.req_74;
+        automatic logic [W-1:0] h = dut.hold_74;
+        #0.1;
+        if (dut.req_74 != r)
+            ncopy++;
+        if (inflight && dut.hold_74 !== h) begin
+            if (nflight < 10)
+                $display("  FAIL  handshake at %0t: hold_74 changed while a transfer was in flight", $time);
+            nflight++;
+        end
+    end
+    always @(posedge clk) begin
+        automatic logic a = dut.ack;
+        #0.1;
+        if (dut.ack != a)
+            nload++;
+    end
 
     // clk_74a: period 12.5 .. 14.5 ns, high for half of it
     real p74;
@@ -183,6 +299,9 @@ module tb_input;
                     ge[i] = {f[10][7:0], f[11][7:0]};
                 end
                 // settle on the first vector
+`ifdef TB_SKEW
+                draw_skew();
+`endif
                 @(posedge clk_74a);
                 #1 bus = gv[0];
                 repeat (16) @(posedge clk);
@@ -238,6 +357,15 @@ module tb_input;
                 ntear++;
             nbad += ntear;
         end
+
+        // the handshake rule over the whole run
+        $display("  %s handshake: %0d copies, %0d loads, %0d copies changed in flight",
+                 (nflight == 0 && nload > 0) ? "ok  " : "FAIL", ncopy, nload, nflight);
+        if (nflight != 0 || nload == 0)
+            nbad++;
+`ifdef TB_SKEW
+        $display("  skew: the copy's bits and the request reach clk 0.5 to 19.75 ns after they change");
+`endif
 
         $display("TB_INPUT %s", (nbad == 0 && nvec + ngrp > 0) ? "pass" : "FAIL");
         $finish;

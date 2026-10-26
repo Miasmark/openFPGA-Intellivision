@@ -216,13 +216,15 @@ between 12.5 and 14.5 ns) and drives the inputs as clk_74a signals; each
 vector is checked 16 clocks after it is driven.
 For all but the spec rows and the grid the expected bytes are the model's,
 and the model must equal MAME's `read_ctrl()` on every vector. `--all`
-then builds 15 planted faults (Swap ignored, a disc code, the dead zone's
+then builds 18 planted faults (Swap ignored, a disc code, the dead zone's
 edge, a sector slope, stick y flipped, L beating R, no cancel on the ring,
 the face buttons' left and right swapped, Backspace, the keyboard on any
 slot type, the keyboard's sixth byte, any slot type a controller, no R3,
 the right stick in every mode, sticks on the Pocket, and `bitwise_sync`:
-the crossing before 0.0.5, every bit through two flip-flops on its own);
-each must fail.
+the crossing before 0.0.5, every bit through two flip-flops on its own;
+`copy_while_in_flight`: the copy retaken at every clk_74a edge;
+`reg_then_bitwise`: a registered copy crossed bit by bit); each must fail.
+The plants run on the skew build (below).
 
 The crossing (`sim/work/tb_input/tear.txt`, 2,000 groups of 2-4 vectors:
 keyboard codes such as 1E and 21, button sets, Keypad Mode and Swap, the
@@ -230,6 +232,22 @@ sticks, slot types, random words): the bench changes the inputs among a
 group's vectors at random clk_74a edges, 64 changes per group, each bit
 taking its new value at one of four moments within the clk_74a cycle (the
 routing of a clk_74a bus), and at every clk edge both bytes must be the
-bytes of one of the group's vectors. `intv_input.sv` loads the words as a
-whole (a toggle handshake), so no torn word reaches the bytes;
-`bitwise_sync` shows about 27,000 torn bytes over the 930,000 clk edges.
+bytes of one of the group's vectors. This model skews only the raw
+clk_74a inputs: it shows that `intv_input.sv` does not sample the inputs
+bit by bit (`bitwise_sync` shows about 27,000 torn bytes over the 930,000
+clk edges), but the held copy is a register and changes all at once here,
+so it says nothing about the handshake. Two more checks do:
+- the handshake rule, in every run: the copy (`hold_74`) must not change at
+  a clk_74a edge while a transfer is in flight (`req_74 != ack`); the bench
+  counts copies and loads (`copy_while_in_flight` breaks it);
+- the skew build: `tb_input.py` builds `intv_input.sv` a second time with
+  its clk blocks reading the copy and the request through views the bench
+  drives (`-DTB_SKEW`), each bit arriving at one of eight moments 0.5 to
+  19.75 ns after it changes (twice the SDC's 10 ns bound, just under one
+  clk period; drawn per group), and runs the crossing groups on it. A clk
+  side that loads before every bit has arrived, or crosses a registered
+  copy bit by bit (`reg_then_bitwise`), shows torn bytes.
+Neither shows metastability: a load decided on the request's first
+flip-flop (`req_s[0]`) passes both. That, and the 10 ns net-delay bound,
+are checked on the fit: `sim/check/fit_crossing_check.py` reads
+`ap_core.sta.rpt` (DEVELOPING, Build).

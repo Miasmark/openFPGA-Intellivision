@@ -69,7 +69,9 @@ set_multicycle_path -from [get_ports {sram_dq[*]}] -hold -end 2
 # 0.0.5 fit). The fit's Timing Analyzer lists the net delays in
 # ap_core.sta.rpt (panels "Input crossing net delay", core/sta_reports.tcl).
 # The single-bit synchronisers (req_74 -> req_s, ack -> ack_74) need nothing
-# more; the metastability report lists them as synchronizer chains.
+# more; the metastability report (panel "Synchronizer chains") lists them as
+# chains of two flip-flops. sim/check/fit_crossing_check.py checks both
+# after a fit (DEVELOPING, Build).
 set in_from [get_keepers {*intv_input:*|hold_74[*] *intv_input:*|req_74}]
 set in_to   [get_keepers {*intv_input:*|word[*] *intv_input:*|req_s[0]}]
 set_net_delay -from $in_from -to $in_to -max 10.0

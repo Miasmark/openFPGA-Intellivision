@@ -42,10 +42,24 @@ clk_74a cycle, and at every clk edge both bytes must be one of the group's
 vectors' bytes (the model's): no torn word may reach the pad bytes. The
 plant bitwise_sync (the step-6 crossing before 0.0.5: two flip-flops per
 bit) must fail there.
+
+That model only skews the raw clk_74a inputs, so it cannot see a fault in
+the handshake itself (the held copy is a register). Two more checks:
+the bench's handshake rule (the copy must not change while a transfer is
+in flight), and the skew build: a second build of intv_input.sv where the
+clk side reads the copy and the request through views the bench drives,
+each bit arriving 0.5 to 19.75 ns after it changes (tb_input.sv, -DTB_SKEW),
+run over the crossing groups. The plants run on the skew build;
+copy_while_in_flight (the copy retaken at every clk_74a edge) and
+reg_then_bitwise (a registered copy crossed bit by bit) must fail. A load
+decided on the request's first flip-flop is metastability, which no
+simulation here shows: sim/check/fit_crossing_check.py checks the fit's
+metastability report for two flip-flops on each flag instead.
 """
 import argparse
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -372,11 +386,36 @@ def generate_tear(path, groups=2000):
     return kinds
 
 
-def build(work, rtl_dir, verilator, strict=True):
+SKEW_DECL = ("    localparam int W = 6 * 32 + 16 + 2 + 1;\n",
+             "    localparam int W = 6 * 32 + 16 + 2 + 1;\n"
+             "    logic [W-1:0] hold_v;      // tb_input skew build: the clk side's view of hold_74\n"
+             "    logic         req_v;       // and of req_74, driven by tb_input.sv\n")
+CLK_BLOCK = re.compile(r'(    always_ff @\(posedge clk\) begin\n)(.*?)(\n    end\n)', re.S)
+
+
+def skew_view(src):
+    """The skew build's intv_input.sv: in the always_ff @(posedge clk) blocks, hold_74 and req_74 become the
+    views hold_v and req_v. Returns (text, number of references replaced)."""
+    n = 0
+
+    def sub(mo):
+        nonlocal n
+        body, k1 = re.subn(r'\bhold_74\b', 'hold_v', mo.group(2))
+        body, k2 = re.subn(r'\breq_74\b', 'req_v', body)
+        n += k1 + k2
+        return mo.group(1) + body + mo.group(3)
+    if src.count(SKEW_DECL[0]) != 1:
+        return src, -1
+    src = src.replace(SKEW_DECL[0], SKEW_DECL[1])
+    return CLK_BLOCK.sub(sub, src), n
+
+
+def build(work, rtl_dir, verilator, strict=True, defines=()):
     obj = os.path.join(work, 'obj')
     os.makedirs(work, exist_ok=True)
     cmd = [verilator, '--binary', '--timing', '-j', '2', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD',
            '-Wno-PROCASSINIT', '--top-module', 'tb_input', '-Mdir', obj, '-o', 'tb_input']
+    cmd += ['-D' + d for d in defines]
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + [TB]
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:
@@ -393,8 +432,9 @@ def build(work, rtl_dir, verilator, strict=True):
 
 
 def run(binary, vectors, tear, log):
+    args = [binary] + (['+vec=' + vectors] if vectors else []) + ['+tear=' + tear]
     with open(log, 'w') as f:
-        subprocess.run([binary, '+vec=' + vectors, '+tear=' + tear], stdout=f, stderr=subprocess.STDOUT)
+        subprocess.run(args, stdout=f, stderr=subprocess.STDOUT)
     text = open(log).read()
     return 'TB_INPUT pass' in text.splitlines(), text
 
@@ -423,6 +463,17 @@ PLANTS = [
      [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),
       ("        if (req_s[1] != ack) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
        "        w_s  <= in_74;\n        word <= w_s;\n        ack  <= req_s[1];\n")], None),
+    # handshake faults the input skew alone cannot show (the step-6 review of 0.0.5): the copy retaken at
+    # every clk_74a edge, so it can change while clk loads it; a registered copy crossed bit by bit
+    ('copy_while_in_flight', 'intv_input.sv',
+     "        if (ack_74[1] == req_74) begin\n            hold_74 <= in_74;\n            req_74  <= !req_74;\n        end\n",
+     "        hold_74 <= in_74;\n        req_74  <= !req_74;\n"),
+    ('reg_then_bitwise', 'intv_input.sv',
+     [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),
+      ("        if (ack_74[1] == req_74) begin\n            hold_74 <= in_74;\n            req_74  <= !req_74;\n        end\n",
+       "        hold_74 <= in_74;\n"),
+      ("        if (req_s[1] != ack) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
+       "        w_s  <= hold_74;\n        word <= w_s;\n")], None),
 ]
 
 
@@ -466,6 +517,25 @@ def main():
         if not ok:
             fails.append('RTL')
 
+        print('-- RTL, skew build')
+        d = os.path.join(work, 'skew')
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(os.path.join(d, 'rtl'))
+        s, n = skew_view(open(os.path.join(CORE, 'intv_input.sv')).read())
+        if n < 2:
+            print(f'  FAIL  skew view: {n} references of hold_74 / req_74 in the clk blocks')
+            fails.append('skew view')
+        else:
+            open(os.path.join(d, 'rtl', 'intv_input.sv'), 'w').write(s)
+            b = build(d, os.path.join(d, 'rtl'), verilator, strict=False, defines=['TB_SKEW'])
+            if not b:
+                fails.append('skew build')
+            else:
+                ok, text = run(b, None, tear, os.path.join(d, 'run.log'))
+                print('\n'.join(ln for ln in text.splitlines() if ln.strip() and not ln.startswith('- ')))
+                if not ok:
+                    fails.append('RTL skew')
+
     if a.all and not fails:
         print('-- planted faults')
         names = a.plant.split(',') if a.plant else None
@@ -487,8 +557,13 @@ def main():
                 continue
             for x, y in subs:
                 s = s.replace(x, y)
+            s, n = skew_view(s)
+            if n < 0:
+                print(f'  FAIL  PLANT {name}: no place for the skew views')
+                fails.append('plant ' + name)
+                continue
             open(p, 'w').write(s)
-            b = build(d, os.path.join(d, 'rtl'), verilator, strict=False)
+            b = build(d, os.path.join(d, 'rtl'), verilator, strict=False, defines=['TB_SKEW'])
             if not b:
                 print(f'  FAIL  PLANT {name}: build failed')
                 fails.append('plant ' + name)

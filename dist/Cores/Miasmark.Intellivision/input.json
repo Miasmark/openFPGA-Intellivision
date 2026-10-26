@@ -9,7 +9,7 @@
           { "id": 1, "name": "Side lower left", "key": "pad_btn_b" },
           { "id": 2, "name": "Side top", "key": "pad_btn_x" },
           { "id": 3, "name": "Enter (with R)", "key": "pad_btn_y" },
-          { "id": 4, "name": "Layer 5 / Clear / 0", "key": "pad_trig_l" },
+          { "id": 4, "name": "5/Clear/0 disc turn", "key": "pad_trig_l" },
           { "id": 5, "name": "Layer 1-9 / Enter", "key": "pad_trig_r" }
         ]
       }

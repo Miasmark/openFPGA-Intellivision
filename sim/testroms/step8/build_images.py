@@ -7,6 +7,10 @@ committed sources in this directory, never committed themselves:
   cfgmap.asm, rombank.asm, rombankw.asm    as1600 (jzIntv's SDK-1600, run as a program:
                                            AS1600, default the owner's build) -> BIN + CFG
                                            or Intellicart .rom
+  pocket/cart8pages.bas, cart8bank.bas     IntyBASIC (run as a program: INTYBASIC, default the
+                                           owner's build, and its directory for the prologue and
+                                           epilogue) then as1600 -> the Pocket test cartridges
+                                           (BIN + CFG; .rom), which check themselves on screen
   cfg/zoo*.cfg                             hand-written CFGs, each with a synthetic .bin
                                            (a word pattern, no game data)
   the refusal set                          made here from the above: CFG text with one
@@ -31,6 +35,26 @@ import cartfmt as cf  # noqa: E402
 
 AS1600 = os.environ.get('AS1600', os.path.expanduser(
     '~/daria_work/intv/refs/jzintv/src-tree/jzintv-20200712-src/bin/as1600'))
+INTYBASIC = os.environ.get('INTYBASIC', os.path.expanduser(
+    '~/pocket_projects/intellivision/tools-ext/IntyBASIC/intybasic'))
+
+
+def intybasic(src, out_ext, work):
+    """Compile pocket/src with IntyBASIC, then as1600 -> (data, cfg)."""
+    base = os.path.join(work, os.path.splitext(os.path.basename(src))[0])
+    r = subprocess.run([INTYBASIC, os.path.join(HERE, 'pocket', src), base + '.asm',
+                        os.path.dirname(INTYBASIC) + '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       text=True)
+    if r.returncode != 0 or 'Compilation finished' not in r.stdout:
+        sys.exit('IntyBASIC %s: %s' % (src, r.stdout[-800:]))
+    out = base + out_ext
+    r = subprocess.run([AS1600, '-o', out, base + '.asm'], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, text=True)
+    if r.returncode != 0 or 'ERRORS DETECTED 0' not in r.stdout:
+        sys.exit('as1600 %s: %s' % (src, r.stdout[-800:]))
+    data = open(out, 'rb').read()
+    cfg = open(base + '.cfg', 'rb').read() if out_ext == '.bin' else None
+    return data, cfg
 
 
 def as1600(src, out_ext, work):
@@ -85,6 +109,12 @@ def images(work=None):
     add('rombank', rb)
     rbw, _ = as1600('rombankw.asm', '.rom', work)
     add('rombankw', rbw)
+
+    # ---- the Pocket test cartridges (IntyBASIC)
+    d, c = intybasic('cart8pages.bas', '.bin', work)
+    add('cart8pages', d, c, pocket=True)
+    d, _ = intybasic('cart8bank.bas', '.rom', work)
+    add('cart8bank', d, pocket=True)
 
     # ---- the CFG zoo, each with a synthetic image
     zoo = sorted(f for f in os.listdir(os.path.join(HERE, 'cfg')) if f.endswith('.cfg'))

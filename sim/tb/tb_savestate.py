@@ -472,8 +472,8 @@ def corrupt_blobs(work, name, good):
     x[ss.MOD_BYTE + 4 * ss.MOD_WORDS + 8] = 0x01
     struct.pack_into('>I', x, 4 * ss.H_CRC, ss.crc32(x[ss.MOD_BYTE:ss.MOD_BYTE + ss.PAYLOAD_BYTES]))
     put('gap', bytes(x))
-    for p in out:
-        if not ss.verify(open(p, 'rb').read()):
+    for p in out:                       # the core expects the good blob's CFG CRC
+        if not ss.verify(open(p, 'rb').read(), cfg_crc=ss.header(b)[ss.H_CFG_CRC]):
             raise SystemExit('corrupt blob %s passes the model' % p)
     return out
 

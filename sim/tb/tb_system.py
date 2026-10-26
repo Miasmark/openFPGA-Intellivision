@@ -205,6 +205,10 @@ SCREENS = [('nocart', None, 600),
            ('dracula', 'Dracula (USA, Europe).zip', 700),
            ('dragonfire', 'Dragonfire (USA, Europe).zip', 700),
            ('icetrek', 'Ice Trek (USA, Europe).zip', 700),
+           # step 8: our Pocket test cartridges (IntyBASIC; BIN + CFG with pages and RAM,
+           # .rom with bank windows and RAM) with the real EXEC, through their checks
+           ('cart8pages', ('step8', 'cart8pages'), 200),
+           ('cart8bank', ('step8', 'cart8bank'), 200),
            ('tropicaltrouble', 'Tropical Trouble (USA, Europe).zip', 700)]
 # the play bench (step 6, --play): each game started with a key press and
 # played for a few seconds with the same scripted keys on both hand
@@ -410,7 +414,7 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
     address)] of scratchpad or System RAM, read at the first step start in
     that frame (cycle >= frame * FRAME); their values are returned in
     model_stream.peeked (a dict)."""
-    cart = isys.load_cart(cart_path)
+    cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
     bus.vid.mobs = STIC_MOBS
@@ -893,6 +897,8 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
 def screen_cart(work, name, zipname, lib):
     if not zipname:
         return None
+    if isinstance(zipname, tuple):            # a step-8 image from our sources
+        return step8_image(zipname[1], work)[0]
     cart = os.path.join(work, 'screen_%s.bin' % name)
     with open(cart, 'wb') as f:
         f.write(m.load_image_bytes(os.path.join(lib, zipname)))
@@ -925,6 +931,8 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
            '+dump=%d' % DUMP1, '+log=' + log, '+pic=' + pic, '+bushash=1', '+busrq=1']
     if cart:
         cmd.append('+cart=' + cart)
+        if CFG_OF.get(cart):
+            cmd.append('+cfg=' + CFG_OF[cart])
     if presses:
         kf = os.path.join(work, 'screen_%s.keys' % name)
         with open(kf, 'w') as f:

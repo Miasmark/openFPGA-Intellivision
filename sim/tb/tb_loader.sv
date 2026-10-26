@@ -43,7 +43,10 @@
 //            complete" (0x008F) again without a cartridge stream: the
 //            loader must not run its finish again (busy stays low, the page
 //            selects stay): "hazard busy B ready R" and the select words
-//   reload   with +cart2=, a user reload of another cartridge in the same
+//   reload   (+cfgclear2=1: the data table lists the CFG slot with size 0
+//            for the reload, as with no CFG chosen; without it, a CFG of the
+//            first load stays listed and applies to the second cartridge)
+//            with +cart2=, a user reload of another cartridge in the same
 //            session (no power-on reset): reset enter, its 0x0082 with its
 //            own size, its bytes, the data table with its length (or no
 //            entry with +notable2=1), all complete, reset exit; the loader
@@ -562,6 +565,7 @@ module tb_loader;
             lenadj = 0;
             notable = 0;
             void'($value$plusargs("notable2=%d", notable));
+            if ($test$plusargs("cfgclear2")) floaded[1] = 1'b0;   // the table lists no CFG now
             host_cmd(16'h0010, 32'd0, 32'd0);
             if (dtfirst != 0) send_table();
             send_slot(0);

@@ -839,8 +839,9 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
     """The loader: an image's bytes (and a CFG's bytes, or None) -> Loaded.
 
     tables: intv_mapper.Tables (CRC table lookup); layout_pages: its .pages. cfg_len: the
-    CFG's length in the data table (None: the CFG's own length); longer than the CFG, or
-    more than 3 bytes shorter, refuses the CFG (ERR_CFG_SHORT); shorter cuts it.
+    CFG's length in the data table (None: the CFG's own length); 0: no CFG (a stale one is
+    not used); longer than the CFG, or more than 3 bytes shorter, refuses the CFG
+    (ERR_CFG_SHORT); shorter cuts it.
     """
     ld = Loaded()
     data = bytes(image)
@@ -883,6 +884,8 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
         lid, flags, ok, hit = tables.lookup(ld.crc, ld.words)
         if not ok:
             lid, flags, hit = 1, FLAG_ESTIMATED, False
+        if cfg is not None and cfg_len == 0:
+            cfg = None                          # the data table lists no CFG: none is used
         if cfg is not None and cfg_len is not None:
             if cfg_len > len(cfg) or len(cfg) - cfg_len > 3:
                 ld.err = ERR_CFG_SHORT

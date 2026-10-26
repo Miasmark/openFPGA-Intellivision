@@ -270,8 +270,8 @@ def expect(img, tab, bios):
     # its own 0x0082 size, in the table or not (img['notable2'])
     if img.get('reload'):
         rimg = dict(img['reload'])
-        rimg.pop('cfg', None)
-        rl = cf.load(rimg['data'], None, tab, tab.pages)
+        rcfg = img.get('cfg') if not img.get('cfgclear2') else None   # a CFG kept in the table
+        rl = cf.load(rimg['data'], rcfg, tab, tab.pages, cfg_len=len(rcfg) if rcfg is not None else None)
         rsram = dict(sram)
         # the session's SRAM: the first image's words stay where the second does not write
         for a, v in mi.sram.items():
@@ -335,6 +335,8 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
         args.append('+cart2=' + path2)
     if img.get('notable2'):
         args.append('+notable2=1')
+    if img.get('cfgclear2'):
+        args.append('+cfgclear2=1')
     if img.get('neg') != 'nocart':
         args.append('+cart=' + path)
     if img.get('lenadj'):
@@ -469,9 +471,14 @@ PLANTS = [
      "if (!(rp_tq[6:4] <= b[2:0] && b[2:0] < rp_tq[2:0]))", '.rom fine range one block short'),
     ('cfg_lag', 'intv_loader.sv', "o = st == F_CF0 ? cfg_n - 25'd3 : st == F_CF1 ? cfg_n - 25'd2 : cfg_n - 25'd1;",
      "o = st == F_CF0 ? cfg_n - 25'd3 : st == F_CF1 ? cfg_n - 25'd2 : cfg_n;", 'the CFG\'s last byte dropped'),
+    ('cfg_stale', 'intv_loader.sv', "cfg_on <= cnt[1] != 25'd0 && !(cinl && clen == 32'd0);",
+     "cfg_on <= cnt[1] != 25'd0;", 'a CFG the data table no longer lists applied to a reload'),
+    ('cfg_refeed', 'intv_loader.sv', "if (cfg_n != 25'd0 && !cfg_fin) begin   // once per CFG stream",
+     "if (cfg_n != 25'd0) begin", 'a kept CFG\'s last bytes fed again at a reload'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
-                'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc')
+                'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
+                'RELOAD2', 'RELOAD3')
 
 
 def main():
@@ -528,6 +535,15 @@ def main():
         import build_images
         for im in build_images.images():
             imgs.append(dict(im, crc=im['name'], image=im['name'], step8=True))
+        # reloads with a CFG (step 8): the CFG listed with size 0 for the second cartridge (none
+        # applies), or still listed (it applies to the second cartridge too)
+        s8 = {i['name']: i for i in imgs if i.get('step8')}
+        if 'zoo1' in s8 and 'synthetic:b' in byname:
+            imgs.append(dict(s8['zoo1'], name='reload:zoo1 + CFG then synthetic:b, CFG cleared', crc='RELOAD2',
+                             reload=byname['synthetic:b'], cfgclear2=True, dtfirst=0))
+        if 'zoo5' in s8 and 'zoo3' in s8:
+            imgs.append(dict(s8['zoo5'], name='reload:zoo5 + CFG then zoo3\'s image, CFG kept', crc='RELOAD3',
+                             reload=dict(s8['zoo3'], cfg=None), dtfirst=1))
     if a.only:
         keep = set(a.only.split(','))
         imgs = [i for i in imgs if i['crc'] in keep or i['name'] in keep]

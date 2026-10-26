@@ -40,7 +40,8 @@
 //      most 1 MiB; else no cartridge (layout 0) and err says why. err[4]:
 //      the data table's length and the host's 0x0082 size disagree.
 //   2. the CFG's last bytes and its end; the CFG's length: the data table's
-//      (slot 0x101), or the bytes that came if the table has none
+//      (slot 0x101), or the bytes that came if the table has none; a table
+//      entry of size 0 means no CFG (one streamed before is not used)
 //   3. CRC table (cart_crc.hex, 256 x 64): binary search, 8 probes, as
 //      step 2 (raw and BIN + CFG; a .rom is not looked up)
 //   4. the format's verdict: a .rom's errors, the CFG's, or the source of
@@ -230,6 +231,7 @@ module intv_loader #(
     logic [7:0]  cp_in_c;
     logic        cfg_clr;
     logic [31:0] cfg_crc = 32'hFFFFFFFF;
+    logic        cfg_fin = 1'b0;               // the CFG's last bytes and end were fed
     logic        cp_we;
     logic [4:0]  cp_idx;
     logic [58:0] cp_d;
@@ -457,6 +459,7 @@ module intv_loader #(
                     lag <= {lag[15:0], ld_data};
                     if (off == 24'd0) begin
                         cfg_clr <= 1'b1;
+                        cfg_fin <= 1'b0;
                         cfg_crc <= 32'hFFFFFFFF;
                         if (!rom_mode) pending <= 1'b1;   // a new CFG remaps a raw image
                     end else if (off >= 24'd3) begin
@@ -498,7 +501,10 @@ module intv_loader #(
                 fmt_err <= 8'd0;
                 noss <= 1'b0; anyw <= 1'b0; paged <= 16'd0; conf <= 8'd0; ram_next <= 7'd0; pool_next <= 6'd0;
                 nasm <= 7'd0; hitf <= 1'b0; lid <= 8'd0; tflg <= 8'd0;
-                cfg_on <= cnt[1] != 25'd0;
+                // a CFG streamed (in this session) and not cleared: the data
+                // table lists the slot with size 0 when the user has no CFG,
+                // and a cartridge reloaded alone must not take a stale one
+                cfg_on <= cnt[1] != 25'd0 && !(cinl && clen == 32'd0);
                 if (!started || len == 32'd0 || {7'd0, cnt[0]} < len || {7'd0, cnt[0]} - len > 32'd3
                     || seq_err || big || (!rom_mode && len > 32'h20000)) begin
                     err <= {1'b0, len_st == 2'd2, ovr, big || (!rom_mode && len > 32'h20000), seq_err,
@@ -518,7 +524,7 @@ module intv_loader #(
                 st <= F_CF0;
             // the CFG's last (up to three) bytes, cut at its length, then its end
             F_CF0, F_CF1, F_CF2: begin
-                if (cfg_n != 25'd0) begin
+                if (cfg_n != 25'd0 && !cfg_fin) begin   // once per CFG stream
                     logic [24:0] o;
                     o = st == F_CF0 ? cfg_n - 25'd3 : st == F_CF1 ? cfg_n - 25'd2 : cfg_n - 25'd1;
                     if (!o[24] && {7'd0, o} < clen && {7'd0, o} < {7'd0, cfg_n}) begin
@@ -530,7 +536,8 @@ module intv_loader #(
                 st <= st == F_CF0 ? F_CF1 : st == F_CF1 ? F_CF2 : F_CFE;
             end
             F_CFE: begin
-                if (cfg_n != 25'd0) cp_end <= 1'b1;
+                if (cfg_n != 25'd0 && !cfg_fin) cp_end <= 1'b1;
+                if (cfg_n != 25'd0) cfg_fin <= 1'b1;
                 st <= F_CFW;
             end
             F_CFW: st <= refused ? F_SRC : rom_mode ? F_SRC : F_LK;

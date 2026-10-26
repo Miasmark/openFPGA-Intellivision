@@ -85,7 +85,7 @@ SS_IMAGES = [
      [(200, 'busrq'), (250, 'rowfetch'), (290, 'midinst'), (300, 'any')], (310, 20), 330),
     ('buzzbombers', 'Buzz Bombers (USA, Europe).zip', None, (0xFF, 0xFF), 360,
      '150-156:1,250-300:Left,300-330:Upper',
-     [(200, 'busrq'), (260, 'rowfetch'), (290, 'sound'), (300, 'midinst')], (310, 20), 330),
+     [(200, 'sound'), (260, 'rowfetch'), (290, 'busrq'), (300, 'midinst')], (310, 20), 330),
     ('sticmob', None, 'sticmob.asm', (0xFF, 0xFF), 46, None,
      [(10, 'rowfetch'), (20, 'busrq'), (30, 'midinst'), (34, 'any')], (36, 10), 40),
     ('psgtest', None, 'psgtest.asm', (0x5A, 0xC3), 22, None,
@@ -353,6 +353,9 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, pause=True, wha
     nframes = img[4]
     probs += compare_frames(ref, run.frames, 0, nframes, what)
     probs += check_menu(run, pause, what)
+    for ln in run.lines:              # a save asked for at its moment's end: never in it
+        if ln.startswith('R kind '):
+            probs.append('%s: %s' % (what, ln))
     saves = run.tagged('SAVE')
     if len(saves) != len(blobs) or any(s.split()[1] != 'ok' for s in saves):
         probs.append('S: saves %s' % saves)

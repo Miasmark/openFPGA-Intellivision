@@ -92,7 +92,7 @@ The wiki gives 1.6 MHz for the SP0256. **(review)** Resolved: the SP0256 has a 1
 | /10 | 85.9 MHz | 96 MHz | spare (memory) |
 | /240 and /240 +90 deg | 3.579545 MHz | 4.000 MHz | Pocket video pixel clock |
 
-Clock enables from `clk_sys`: pixel every 12, PSG every 24, CPU microcycle every 48 [estimated, from the ratios above]. The SP0256 runs from a DDS clock enable, not a PLL output [from L-PSS].
+Clock enables from `clk_sys`: pixel every 12, PSG every 24, CPU microcycle every 48 [estimated, from the ratios above]. **(build step 6)** The PSG divides its master / 2 clock by 8 before any generator, so `intv_psg` steps on every 4th CPU cycle enable instead of using the PSG enable: the same rate, locked to the CPU cycle count that the model uses. The SP0256 runs from a DDS clock enable, not a PLL output [from L-PSS].
 
 ### 2.4 Frame timing (NTSC)
 
@@ -376,6 +376,7 @@ File sizes are the owner's files [measured]. They match MAME's expected CRCs: EX
 - Volume curve: the AY 16-level DAC curve from the datasheet, cross-checked with MAME's table [from S4; MAME ay8910.cpp].
 - Speech level against the PSG is unknown (no Intellivoice schematic) [from L-PSS].
 - **Noise LFSR:** use bit0 ^ bit3 (maximal, period 131,071), as MAME does for the AY-3-8910 and YM2149 [from MAME ay8910.h:263-272]. The wiki's formula is bit0 ^ bit2 with period 114,681, which is not maximal [measured, L-WIKI, L-DSL]. GI datasheets say only "pseudo random" [from S4 p.7-101; S2 p.302]. Nothing verifies the taps on the 8914 die itself. This stays a decision until there is a hardware recording (section 11).
+- **(build step 6)** As built (`intv_psg.sv`, model `tools/psg.py`; facts, sources and the differences from MAME in docs/PSG_NOTES.md): the generators step once every 4 CPU cycles (master / 16), counted from the CPU's first cycle, and a write lands at the end of its DW cycle. The 48 kHz output is two one-pole low passes at the step rate (-3 dB near 16.5 kHz), the box filter and an exact 48 kHz phase accumulator; the DAC is MAME's AY-3-8910 curve for fixed and envelope volumes alike; no DC: silence is 0. Register logs equal MAME's for eight games, and with MAME's tone counter and step grid every PSG step equals MAME's own stream; the core's tone counter restarts at 0 when a smaller period is written, as MAME's notes describe the chip, where MAME keeps the remainder (PSG_NOTES P1).
 
 ---
 

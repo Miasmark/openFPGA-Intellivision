@@ -53,6 +53,18 @@ to `sim/work*` and are not committed.
   (docs/STIC_NOTES.md 6). The image is what a flash cartridge would take on
   the console; it is built, not committed.
   `tb_system.py` runs it as "sticmob" (STICMOB_SELFCHECK).
+- `psgtest.asm`: step 6, the PSG test (EXEC slot, ROMW 10). The ISR
+  writes one group of PSG registers a frame from a table (every register
+  with its unused bits set, tones at periods 0, 1, $00D, $FFF and a small
+  period written while the count is far past it, noise at periods 0, 31
+  and 5, tone and noise both off, all 16 envelope shapes, envelope periods
+  0, 1, 2, $40 and $110, a shape rewritten with the same value, all four
+  volume selects, the port-direction bits) and reads the hand controllers
+  and the shape back; the main loop writes channel C's and the noise
+  period after a delay that changes every pass, so writes land in every
+  phase of the PSG's 4-cycle step. It checks nothing itself: `tb_system.py`
+  compares every PSG step and sample with `tools/psg.py` (image
+  "psgtest", round trips rt9 and rt10 inside its slow envelope).
 - With ROMW 10 the EXEC ROM keeps 10 bits, so an address above $3FF must
   go through a pointer register; `tb_system.py` refuses a program with a
   word over 10 bits.

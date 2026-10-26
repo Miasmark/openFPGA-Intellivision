@@ -41,6 +41,12 @@ import sys
 SPIRIT_PLATFORM = {"category": "Console", "name": "Intellivision", "year": 1979,
                    "manufacturer": "Mattel Electronics"}
 
+# The Pocket's menu, as measured on the owner's Pocket (openFPGA-2600,
+# 2026-10-25): at most 15 options in a list (the docs say 16), and
+# interact.json loads at 8,740 bytes but not at 10,213.
+POCKET_MAX_OPTIONS = 15
+POCKET_MAX_INTERACT = 8740
+
 # DESIGN.md 5.6: (name, id, filename, size, required). Sizes are the owner's
 # files, MAME's expected CRCs.
 SLOTS = [
@@ -403,6 +409,13 @@ def main():
     reload = sum(1 for s in slots if int(s["parameters"], 16) & 1)
     check(len(var) <= 16 and len(var) + reload <= 20, f"{len(var)} entries + {reload} reloadable slots (limits 16, 20)")
     check(len({v["id"] for v in var}) == len(var), "entry ids unique")
+    # Measured on the owner's Pocket (openFPGA-2600, 2026-10-25), stricter
+    # than the docs: a list with 16 options fails, and so does an
+    # interact.json of 10,213 bytes (8,740 loaded); keep it minified
+    nopt = max((len(v.get("options", [])) for v in var), default=0)
+    check(nopt <= POCKET_MAX_OPTIONS, f"longest option list {nopt} (Pocket limit {POCKET_MAX_OPTIONS}, docs 16)")
+    isz = len(js[f"Cores/{cname}/interact.json"][1])
+    check(isz <= POCKET_MAX_INTERACT, f"interact.json {isz} bytes (Pocket limit about {POCKET_MAX_INTERACT})")
     blk = core_top.split("bridge_addr[31:24] == 8'h10", 1)[1].split("endcase", 1)[0]
     decoded = {int(x, 16) for x in re.findall(r"12'h([0-9A-Fa-f]{3}):", blk)}
     for v in var:

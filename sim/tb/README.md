@@ -8,7 +8,7 @@ to `sim/work*`.
 | `tb_timing.sv` | 1: timing, video port, timing state port | `sim/tb/run_tb_timing.sh --all` |
 | `tb_loader.sv` | 2: loader, CRC table, page table, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` |
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
-| `tb_system.sv` | 3-5: the machine (CPU, bus fabric, RAMs, STIC, PSG stub) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-5) `--screens` |
+| `tb_system.sv` | 3-6: the machine (CPU, bus fabric, RAMs, STIC, PSG) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-6) `--screens` |
 
 `tb_loader.py` builds `tb_loader.sv` with the real `core_bridge_cmd.v`,
 agg23's `data_loader.sv`, `apf_datatable.sv` and `intv_media.sv`, plus our
@@ -165,3 +165,22 @@ and the frame's end dropping a CPU write to $18-$1F (systest p11): 128
 plants in all. `--screens` adds
 the ten MOB games of docs/STIC_NOTES.md 5.4 (700 pictures each, MTE201
 900).
+
+Step 6 (the PSG, `intv_psg.sv`; docs/PSG_NOTES.md 5). The model's PSG
+(`tools/psg.py`) steps with the system model's cycle count. The bench
+writes an A line at every frame's end: a hash of every PSG step's three
+levels in the frame (before the step: the 48 kHz filter's input) and a
+hash of the 48 kHz samples the frame's steps ended; the driver compares
+them with the model, steps in every run, samples in straight runs (the
+filter is not state, so a round trip may move them), and frame by frame
+in the frame gate. The dumps add the PSG's seven new state words (tone
+counts and outputs, noise count and prescaler, LFSR, envelope count, step,
+attack, holding, tick phase); the state port grows to 21 words. Image
+`psgtest` runs `sim/testroms/psgtest.asm` (22 frames, two different
+hand-controller bytes) with two more round trips in the middle of a slow
+envelope: rt9 into a reset machine, rt10 over a later state. `--all` adds
+18 PSG plants (LFSR tap, tone compare, envelope period, volume selects,
+shape restart, alternate, tone-off bit, tick phase, write before the
+step, filter reciprocal, one low pass, a DAC level; state port: tone,
+noise, LFSR, envelope count, envelope step, tick phase) and keeps the
+step-3 PSG ones (mask, registers lost, ports swapped) on `intv_psg.sv`.

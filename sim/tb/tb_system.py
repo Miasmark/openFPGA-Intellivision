@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Miasmark and contributors
-"""Steps 3-5 bench driver (DESIGN.md 9): the machine RTL against the system model.
+"""Steps 3-6 bench driver (DESIGN.md 9): the machine RTL against the system model.
 
 "EXEC runs with no cartridge; bus log matches the Python model in lockstep",
 plus the save/restore round trip of DESIGN 8.4; from step 4 also the STIC:
@@ -9,7 +9,10 @@ its pictures pixel by pixel, its row fetches (cycle, loaded or missed,
 address counter, the 20 words) and its card reads (the card row's GROM /
 GRAM card or squares), against tools/stic.py in mode "stic" (BUSRQ on, as
 the core runs) or "none" (BUSRQ off; image astro_nobusrq); from step 5 the
-MOBs in those pictures and every frame's collision bits (the K lines). For
+MOBs in those pictures and every frame's collision bits (the K lines); from
+step 6 the PSG: every step's levels and every 48 kHz sample, hashed per
+frame (the A lines; samples in straight runs only), and its state words
+(docs/PSG_NOTES.md 5; image psgtest, sim/testroms/psgtest.asm). For
 each image (no
 cartridge; Astrosmash from the owner's library; our sim/testroms/systest.asm
 in the EXEC slot; our sim/testroms/carttest.asm with two synthetic
@@ -87,7 +90,7 @@ import stic                 # noqa: E402
 import intvcart as m        # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
-RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg_regs.sv', 'intv_ram.sv',
+RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_media.sv']
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
@@ -113,6 +116,8 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('sticbus', None, 'sticbus.asm', 24, (0xFF, 0xFF), 'stic'),
           # step 5: our MOB test (sim/testroms/sticmob.asm), BUSRQ on
           ('sticmob', None, 'sticmob.asm', 46, (0xFF, 0xFF), 'stic'),
+          # step 6: our PSG test (sim/testroms/psgtest.asm)
+          ('psgtest', None, 'psgtest.asm', 22, (0x5A, 0xC3), 'stic'),
           ('cartram', ('forced', 0xCE8FC699, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic'),
           ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic')]
 # the step-4 frame gate: (name, library file or None, pictures)
@@ -244,6 +249,7 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
         mpush(cycle + 1, mval(cycle + 1))
 
     bus.read, bus.write = rd, wr
+    audio = psg_hooks(bus)
     steps = []
     prev = (list(cpu.r), cpu.flags << 2 | cpu.I << 1 | cpu.D)
     while cpu.cycle < ncyc:
@@ -253,13 +259,47 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
             steps.append((ev.cycle, prev[0], prev[1]))
         prev = (list(ev.regs), ev.flags << 2 | ev.i << 1 | ev.d)
     snap(ncyc)
+    bus.snd.advance(ncyc - 1)
     bus.vid.advance(ncyc + FRAME)     # draw the last frame
     advance(ncyc - 1)
     blog = [(c, PHASE[p], a or 0, d or 0) for (c, p, a, d) in cpu.buslog
             if c < ncyc and p != 'NACT']
     steps = [s for s in steps if s[0] < ncyc]
     mlog = [x for x in mlog if x[0] < ncyc]
-    return Exp(blog, steps, snaps, bus, mlog, ncyc, pics, sinfo, mode)
+    exp = Exp(blog, steps, snaps, bus, mlog, ncyc, pics, sinfo, mode)
+    exp.audio = audio
+    return exp
+
+
+def psg_hooks(bus):
+    """The PSG's per-frame fingerprint as the bench's A lines give it:
+    {k: [ha, na, hq, nq, steps with a level]} over the steps that end
+    cycles of frame k (each step's levels before it, A | B << 4 | C << 8)
+    and the 48 kHz samples they end (tools/psg.py: steps end cycles 0, 4,
+    8, ...)."""
+    audio = {}
+    snd = bus.snd
+
+    def cur():
+        k = 4 * (snd.ticks - 1) // FRAME
+        a = audio.get(k)
+        if a is None:
+            a = audio[k] = [FNV0, 0, FNV0, 0, 0]
+        return a
+
+    def on_level(lv):
+        a = cur()
+        a[0] = fnv(a[0], lv)
+        a[1] += 1
+        a[4] += lv != 0
+
+    def on_sample(v):
+        a = cur()
+        a[2] = fnv(a[2], v)
+        a[3] += 1
+    snd.on_level = on_level
+    snd.on_sample = on_sample
+    return audio
 
 
 def fnv(h, *xs):
@@ -278,6 +318,7 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic'):
     bus.vid.mobs = STIC_MOBS
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
+    audio = psg_hooks(bus)
     ncyc = (npics + 1) * FRAME
     hashes = {}
     acc = {'k': 0, 'hb': FNV0, 'nb': 0, 'hs': FNV0, 'ns': 0}
@@ -304,7 +345,8 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic'):
         cpu.buslog.clear()
     close(ncyc)
     bus.vid.advance(ncyc + FRAME)
-    return hashes, pics, sinfo
+    bus.snd.advance(ncyc - 1)
+    return hashes, pics, sinfo, audio
 
 
 def check_sect7(exp, symbols):
@@ -363,7 +405,7 @@ class Got(tuple):
 
 def parse_log(path, pic_path=None):
     blog, steps, dumps, notes, fails, mlog = [], [], {}, [], [], []
-    gl, gw, cl, hl, kl = [], {}, [], {}, []
+    gl, gw, cl, hl, kl, al = [], {}, [], {}, [], {}
     mark = (0, 0, 0)
     for ln in open(path):
         t = ln.split()
@@ -379,6 +421,8 @@ def parse_log(path, pic_path=None):
             kl.append((int(t[1]), tuple(int(x, 16) for x in t[2:10])))
         elif t[0] == 'H':
             hl[int(t[1])] = (int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5]))
+        elif t[0] == 'A':
+            al[int(t[1])] = [int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5])]
         elif t[0] == 'B':
             blog.append((int(t[1]), int(t[2]), int(t[3], 16), int(t[4], 16)))
         elif t[0] == 'S':
@@ -418,8 +462,34 @@ def parse_log(path, pic_path=None):
         got.cards.setdefault(c // FRAME, []).append((r, col, k, base))
     got.colls = {c // FRAME: b for c, b in kl}
     got.hashes = hl
+    got.audio = al
     got.pics = read_pics(pic_path) if pic_path else {}
     return got
+
+
+def compare_audio(got, exp, frames, samples):
+    """The PSG's per-frame fingerprint (A lines) against the model: the
+    steps' levels in every run, the 48 kHz samples only with `samples` (the
+    filter is not in the state, DESIGN 4.4, so a round trip may move them)."""
+    for k in frames:
+        g, e = got.audio.get(k), exp.audio.get(k)
+        if g is None or e is None:
+            if g != e:
+                return ['frame %d PSG: RTL %s, model %s' % (k, g, e)]
+            continue
+        if g[:2] != e[:2] or (samples and g[2:4] != e[2:4]):
+            return ['frame %d PSG (step hash, steps, 48 kHz hash, samples): RTL %s, model %s' % (
+                k, ' '.join('%X' % x for x in g[:4]), ' '.join('%X' % x for x in e[:4]))]
+    return []
+
+
+def audio_summary(exp):
+    """How much the PSG did in the model's run: steps, steps with a
+    channel on, frames with sound."""
+    a = exp.audio
+    return 'PSG %d steps (%d with a channel on), %d samples, %d frames with sound' % (
+        sum(v[1] for v in a.values()), sum(v[4] for v in a.values()),
+        sum(v[3] for v in a.values()), sum(1 for v in a.values() if v[4]))
 
 
 def read_pics(path):
@@ -539,6 +609,7 @@ def compare(name, run, got, exp):
         checks += [('stic %02X' % i, d[(SS['stic'], i)], st['stic'][i]) for i in range(0x33)]
         checks.append(('stic hs/csmode', d[(SS['stic'], 0x33)], st['handshake'] << 1 | st['csmode']))
         checks += [('psg %d' % i, d[(SS['psg'], i)], st['psg'][i]) for i in range(14)]
+        checks += [('psg %d' % (14 + i), d[(SS['psg'], 14 + i)], st['psgx'][i]) for i in range(7)]
         sel = st['sel']
         checks.append(('page selects 0-7', d[(SS['cart'], 19)],
                        sum(sel[i] << 4 * i for i in range(8))))
@@ -552,6 +623,7 @@ def compare(name, run, got, exp):
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (
                 k, cyc, len(bad), '; '.join('%s RTL %X model %X' % b for b in bad[:4])))
     probs += compare_stic(got, exp, range(exp.ncyc // FRAME - 1))
+    probs += compare_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
     return probs
 
 
@@ -628,6 +700,14 @@ def rt_runs(exp):
     # picture line 169 of frame 34 (scene S11 of 22, second pass), the one
     # line where MOBs 4 and 5 overlap: the sweep's masks of that line must
     # come back
+    # psgtest: round trips in the middle of the slow triangle envelope
+    # (its group 11, steps every 512 cycles; tools/psg.py): rt9 restores
+    # into a reset machine, rt10 over a state 20,000 cycles later, each at
+    # a clk_sys inside a CPU cycle and a step's 4-cycle phase other than 0
+    if exp.name == 'psgtest':
+        k = [n for n in sorted(exp.audio) if n >= 11][0]
+        runs += [('rt9', ['+rt=1', '+rtcyc=%d' % (k * FRAME + 7002), '+rtsub=29']),
+                 ('rt10', ['+rt=2', '+rtcyc=%d' % (k * FRAME + 12002), '+rtsub=7', '+rton=20000'])]
     if exp.name == 'sticmob':
         t = 34 * FRAME * 48 + sweep_clock(169)
         runs.append(('rt8', ['+rt=1', '+rtcyc=%d' % (t // 48), '+rtsub=%d' % (t % 48)]))
@@ -723,7 +803,7 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
     out = open(os.path.join(work, 'screen_%s.out' % name), 'w')
     proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=work)
     try:
-        hashes, pics, sinfo = model_stream(exec_path, grom_path, cart, npics)
+        hashes, pics, sinfo, audio = model_stream(exec_path, grom_path, cart, npics)
         t1 = time.time() - t0
         r = proc.wait(timeout=7200)
     finally:
@@ -736,15 +816,18 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
     os.remove(pic)
     exp = Exp([], [], {}, None, [], ncyc, pics, sinfo)
     exp.hashes = hashes
+    exp.audio = audio
     probs = list(got[4]) + compare_stic(got, exp, range(npics), check_hash=True)
+    probs += compare_audio(got, exp, range(npics + 1), True)
     if verbose:
         en = sum(1 for n in range(1, npics + 1) if exp.sinfo.get(n, ([], []))[1])
         print('  %s: %d pictures (%d with the display on, %d of them not blank), %d row fetches '
-              '(%d missed), %d card rows, %d frames of bus hashes; model %.0fs, bench %.0fs%s' % (
+              '(%d missed), %d card rows, %d frames of bus hashes; %s; model %.0fs, bench %.0fs%s' % (
                   name, len(got.pics), en, got.shown,
                   sum(len(v) for v in got.fetches.values()),
                   sum(1 for v in got.fetches.values() for f in v if not f[1]),
-                  sum(len(v) for v in got.cards.values()) // 20, len(got.hashes), t1,
+                  sum(len(v) for v in got.cards.values()) // 20, len(got.hashes),
+                  audio_summary(exp), t1,
                   time.time() - t0, ('\n    FAIL ' + '\n    FAIL '.join(probs)) if probs else ''))
     return probs
 
@@ -773,7 +856,7 @@ PLANTS = [
                                          "assign stic_we = wr && a[15:6] == 10'd0;")], 'systest', None),
     ('gram_no_mirror', 'intv_bus.sv', [("assign gram_we = wr && a[13:11] == 3'b111 && stic_open;",
      "assign gram_we = wr && a[15:11] == 5'b00111 && a[10:9] == 2'b00 && stic_open;")], 'systest', None),
-    ('psg_mask', 'intv_psg_regs.sv', [("4'd9:                    mask = 8'h1F;",
+    ('psg_mask', 'intv_psg.sv', [("4'd9:                    mask = 8'h1F;",
                                        "4'd9:                    mask = 8'hFF;")], 'systest', None),
     # state port: a flip-flop left out of the port (neither saved nor restored),
     # shown by the run after the restore
@@ -781,9 +864,9 @@ PLANTS = [
                                      "wire logic          wa = ss_en ? 1'b0 : we;"),
                                     ("assign ss_rdata = hit_q ? 32'(q) : 32'd0;", "assign ss_rdata = 32'd0;")],
      'systest', ['rt2']),
-    ('ss_psg_lost', 'intv_psg_regs.sv', [("            r[ss_w] <= ss_wdata[7:0] & mask(ss_w);", "            ;"),
-                                         ("assign ss_rdata = ss_hit ? {24'd0, r[ss_w]} : 32'd0;",
-                                          "assign ss_rdata = 32'd0;")], 'systest', ['rt1']),
+    ('ss_psg_lost', 'intv_psg.sv', [("                r[ss_w[3:0]] <= ss_wdata[7:0] & mask(ss_w[3:0]);", "                ;"),
+                                    ("ss_rdata = {24'd0, r[ss_w[3:0]]};", "ss_rdata = 32'd0;")],
+     'systest', ['rt1']),
     ('ss_cart_q_lost', 'intv_bus.sv', [("            end else if (ss_w == 8'd1)\n                cart_q <= ss_wdata[15:0];",
                                         "            end else if (ss_w == 8'd1)\n                ;"),
                                        ("8'd1: ss_rdata = {16'd0, cart_q};", "8'd1: ss_rdata = 32'd0;")],
@@ -827,8 +910,56 @@ PLANTS = [
     ('intrm_end_m1', 'intv_bus.sv', [("vb_next = last || slot < 16'(VB_CYCLES - 1);",
                                       "vb_next = last || slot < 16'(VB_CYCLES - 2);")], 'systest', None),
     # hand controllers swapped (systest drives two different pads)
-    ('pads_swapped', 'intv_psg_regs.sv', [("4'd14:   q = pad_r;\n            4'd15:   q = pad_l;",
+    ('pads_swapped', 'intv_psg.sv', [("4'd14:   q = pad_r;\n            4'd15:   q = pad_l;",
                                            "4'd14:   q = pad_l;\n            4'd15:   q = pad_r;")], 'systest', None),
+    # the PSG (build step 6): its steps' levels and 48 kHz samples (psgtest)
+    ('psg_lfsr_tap_2', 'intv_psg.sv', [("rng <= {rng[0] ^ rng[3], rng[16:1]};",
+                                        "rng <= {rng[0] ^ rng[2], rng[16:1]};")], 'psgtest', None),
+    ('psg_tone_period_p1', 'intv_psg.sv', [("13'(tcnt[c]) + 13'd1 >= {1'b0, r[4 + c][3:0], r[c]}",
+                                            "13'(tcnt[c]) >= {1'b0, r[4 + c][3:0], r[c]}")], 'psgtest', None),
+    ('psg_env_period_x1', 'intv_psg.sv', [("wire logic [16:0] eper2  = {r[7], r[3], 1'b0};",
+                                           "wire logic [16:0] eper2  = {1'b0, r[7], r[3]};")], 'psgtest', None),
+    ('psg_env_select_swapped', 'intv_psg.sv', [("2'd1: l = ev >> 2;\n                2'd2: l = ev >> 1;",
+                                                "2'd1: l = ev >> 1;\n                2'd2: l = ev >> 2;")],
+     'psgtest', None),
+    ('psg_shape_no_restart', 'intv_psg.sv', [("                    estep <= 4'd15;\n                    ehold <= 1'b0;\n"
+                                              "                    eatt  <= wdata[2];",
+                                              "                    eatt  <= wdata[2];")], 'psgtest', None),
+    ('psg_env_no_alternate', 'intv_psg.sv', [("if (s_alt) eatt <= !eatt;", ";")], 'psgtest', None),
+    ('psg_tone_off_is_off', 'intv_psg.sv', [("on = (tout[c] | r[8][c]) & (rng[0] | r[8][3 + c]);",
+                                             "on = tout[c] & (rng[0] | r[8][3 + c]);")], 'psgtest', None),
+    ('psg_step_phase', 'intv_psg.sv', [("ehold <= 1'b0; tph <= 2'd3;", "ehold <= 1'b0; tph <= 2'd2;")],
+     'psgtest', None),
+    ('psg_write_after_step', 'intv_psg.sv', [("            if (we && n < 4'd14) begin",
+                                              "            if (we && n < 4'd14 && !tick) begin")], 'psgtest', None),
+    ('psg_filter_recip', 'intv_psg.sv', [("15'd13107", "15'd13108")], 'psgtest', None),
+    ('psg_lowpass_single', 'intv_psg.sv', [("box + 18'(lp2_n[22:8]);", "box + 18'(lp1_n[22:8]);")],
+     'psgtest', None),
+    ('psg_dac_level', 'intv_psg.sv', [("4'd13: dac = 14'd6539;", "4'd13: dac = 14'd6540;")], 'psgtest', None),
+    # the PSG's state words left out of the port (rt9: reset restore in the
+    # slow envelope, at a step phase other than the reset's)
+    ('ss_psg_tone_lost', 'intv_psg.sv', [("tcnt[ss_ch] <= ss_wdata[11:0];\n                    tout[ss_ch] <= ss_wdata[12];", ""),
+                                         ("ss_rdata = {19'd0, tout[ss_ch], tcnt[ss_ch]};", "ss_rdata = 32'd0;")],
+     'psgtest', ['rt9']),
+    ('ss_psg_noise_lost', 'intv_psg.sv', [("5'd17: {npre, ncnt} <= ss_wdata[5:0];", "5'd17: ;"),
+                                          ("5'd17: ss_rdata = {26'd0, npre, ncnt};", "5'd17: ss_rdata = 32'd0;")],
+     'psgtest', ['rt9']),
+    ('ss_psg_lfsr_lost', 'intv_psg.sv', [("5'd18: rng <= ss_wdata[16:0];", "5'd18: ;"),
+                                         ("5'd18: ss_rdata = {15'd0, rng};", "5'd18: ss_rdata = 32'd0;")],
+     'psgtest', ['rt9']),
+    ('ss_psg_env_count_lost', 'intv_psg.sv', [("5'd19: ecnt <= ss_wdata[16:0];", "5'd19: ;"),
+                                              ("5'd19: ss_rdata = {15'd0, ecnt};", "5'd19: ss_rdata = 32'd0;")],
+     'psgtest', ['rt9']),
+    ('ss_psg_env_step_lost', 'intv_psg.sv', [("default: {tph, ehold, eatt, estep} <= ss_wdata[7:0];",
+                                              "default: {tph, ehold, eatt} <= ss_wdata[7:4];"),
+                                             ("default: ss_rdata = {24'd0, tph, ehold, eatt, estep};",
+                                              "default: ss_rdata = {24'd0, tph, ehold, eatt, 4'd0};")],
+     'psgtest', ['rt9']),
+    ('ss_psg_phase_lost', 'intv_psg.sv', [("default: {tph, ehold, eatt, estep} <= ss_wdata[7:0];",
+                                           "default: {ehold, eatt, estep} <= ss_wdata[5:0];"),
+                                          ("default: ss_rdata = {24'd0, tph, ehold, eatt, estep};",
+                                           "default: ss_rdata = {24'd0, 2'd0, ehold, eatt, estep};")],
+     'psgtest', ['rt9']),
     # a closed GRAM read gives 11 offset bits (systest reads through $3A00 / $3E00)
     ('gram_closed_11', 'intv_bus.sv', [("din &= stic_open ? {8'h00, gram_q} : {7'd0, a[8:0]};",
                                         "din &= stic_open ? {8'h00, gram_q} : {5'd0, a[10:0]};")],
@@ -1092,7 +1223,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--all', action='store_true', help='images, MAME, then planted faults')
     ap.add_argument('--only', help='comma-separated image names (nocart, astrosmash, systest, '
-                                   'cartram, cartpaged)')
+                                   'psgtest, cartram, cartpaged, ...)')
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names')

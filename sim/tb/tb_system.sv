@@ -1,5 +1,5 @@
-// Step 3-5 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
-// fabric, RAMs, the STIC, the PSG register stub) with the real timing
+// Step 3-6 bench (DESIGN.md 9): the machine (intv_machine: CP1610, bus
+// fabric, RAMs, the STIC, the PSG) with the real timing
 // (intv_timing) and cartridge side (intv_media and our SRAM model), running
 // the EXEC with or without a cartridge. The bench writes what the bus does,
 // what the STIC fetches and the pictures it draws; sim/tb/tb_system.py
@@ -52,6 +52,12 @@
 //   K c b0 .. b7        the frame's end (cycle c): the collision bits the
 //                       frame gathered for MOBs 0-7 (hex; ORed into
 //                       $18-$1F now)
+//   A k ha na hq nq     the end of frame k: the PSG's steps in it (na, FNV-1a
+//                       ha over each step's three levels before it, A | B
+//                       << 4 | C << 8: the filter's input) and its 48 kHz
+//                       samples (nq, hash hq); a rewind (+rt=2) restores
+//                       the sums of the mark, and the last line of a frame
+//                       counts
 //   H k hb nb hs ns     +bushash: frame k's B lines (hb, count nb) and S
 //                       lines (hs, ns), FNV-1a over 32-bit words: B c ph a
 //                       d, S c r0 .. r7 f; S lines of cycle 0 are left out
@@ -187,6 +193,8 @@ module tb_system;
     int     bushash = 0;
     logic [31:0] hb = 32'h811C9DC5, hs_ = 32'h811C9DC5;
     int     nb = 0, ns = 0;
+    logic [31:0] ha = 32'h811C9DC5, hq = 32'h811C9DC5, ha_s, hq_s;
+    int     na = 0, nq = 0, na_s, nq_s;
     localparam longint FRAME = 14934;
 
     function automatic logic [31:0] fnv(input logic [31:0] h, input logic [31:0] x);
@@ -230,6 +238,19 @@ module tb_system;
             if (bushash != 0 && cyc >= 0 && (cyc + 1) % FRAME == 0) begin
                 $fdisplay(fd, "H %0d %08x %0d %08x %0d", cyc / FRAME, hb, nb, hs_, ns);
                 hb = 32'h811C9DC5; hs_ = 32'h811C9DC5; nb = 0; ns = 0;
+            end
+            // the PSG: a step ends this cycle (and maybe a 48 kHz sample)
+            if (cyc >= 0 && dut.psg.tick) begin
+                ha = fnv(ha, {20'd0, dut.psg.lv[2], dut.psg.lv[1], dut.psg.lv[0]});
+                na++;
+                if (dut.psg.srph_n >= 23'd3579545) begin
+                    hq = fnv(hq, 32'(dut.psg.prod[31:16]));
+                    nq++;
+                end
+            end
+            if (cyc >= 0 && (cyc + 1) % FRAME == 0) begin
+                $fdisplay(fd, "A %0d %08x %0d %08x %0d", cyc / FRAME, ha, na, hq, nq);
+                ha = 32'h811C9DC5; hq = 32'h811C9DC5; na = 0; nq = 0;
             end
             cyc <= cyc + 1;
         end
@@ -316,7 +337,7 @@ module tb_system;
     // module id, word count (the order is the write order)
     localparam int NMOD = 13;
     int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 14, 256, 256, 96, 256, 256, 21, 20, 64};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 21, 20, 64};
     logic [31:0] saved [NMOD][256];
     logic [3:0]  pbuf_saved [2][45360];
 
@@ -382,6 +403,7 @@ module tb_system;
     task automatic save_all();
         for (int b = 0; b < 2; b++)               // the bench's own picture capture (rewind)
             for (int i = 0; i < 45360; i++) pbuf_saved[b][i] = pbuf[b][i];
+        ha_s = ha; hq_s = hq; na_s = na; nq_s = nq;   // and its PSG sums
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
@@ -537,6 +559,7 @@ module tb_system;
                     rw_req = 1'b0;
                     for (int b = 0; b < 2; b++)
                         for (int i = 0; i < 45360; i++) pbuf[b][i] = pbuf_saved[b][i];
+                    ha = ha_s; hq = hq_s; na = na_s; nq = nq_s;
                     $fdisplay(fd, "R rewind %0d", rtcyc);
                 end
                 resume();

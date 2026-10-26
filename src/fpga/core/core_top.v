@@ -21,6 +21,7 @@
 // Step 4: the STIC (backgrounds, BUSRQ) draws the picture once the machine
 // runs; the test pattern shows while it is held (loading, a required slot
 // missing or refused). The step-3 status register at 0x60000000 is gone.
+// Step 6: the PSG (intv_psg) gives the sound, 48 kHz, on both channels.
 //
 
 `default_nettype none
@@ -786,6 +787,7 @@ intv_timing timing (
     wire    [15:0]  m_dout, m_din, m_addr;
     wire            m_fetch, m_hold, m_halted;
     wire    [3:0]   stic_colour;
+    wire    [15:0]  psg_audio;
     wire    [31:0]  ss_rdata_machine;
 
 intv_machine machine (
@@ -815,6 +817,8 @@ intv_machine machine (
     .vgrom_addr     ( vgrom_addr ),
     .vgrom_q        ( vgrom_q ),
     .colour         ( stic_colour ),
+    .audio          ( psg_audio ),
+    .audio_stb      ( ),
     .phase          ( m_phase ),
     .dout           ( m_dout ),
     .din            ( m_din ),
@@ -873,8 +877,9 @@ assign video_rgb_clock_90 = clk_vid_90;
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Audio: silent until the PSG (step 6). agg23's sound_i2s (MIT) drives the
-// Pocket's I2S DAC at 48 kHz.
+// Audio: the PSG's 48 kHz sound (intv_psg: box filter from its 223.7 kHz
+// steps, 0..32766, silence 0) on both channels. agg23's sound_i2s (MIT)
+// takes it across to clk_74a and drives the Pocket's I2S DAC at 48 kHz.
 ////////////////////////////////////////////////////////////////////////////////
 
 sound_i2s #(
@@ -883,8 +888,8 @@ sound_i2s #(
 ) sound (
     .clk_74a    ( clk_74a ),
     .clk_audio  ( clk_sys ),
-    .audio_l    ( 16'd0 ),
-    .audio_r    ( 16'd0 ),
+    .audio_l    ( psg_audio ),
+    .audio_r    ( psg_audio ),
     .audio_mclk ( audio_mclk ),
     .audio_lrck ( audio_lrck ),
     .audio_dac  ( audio_dac )

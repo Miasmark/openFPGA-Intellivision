@@ -251,3 +251,38 @@ Neither shows metastability: a load decided on the request's first
 flip-flop (`req_s[0]`) passes both. That, and the 10 ns net-delay bound,
 are checked on the fit: `sim/check/fit_crossing_check.py` reads
 `ap_core.sta.rpt` (DEVELOPING, Build).
+
+`tb_savestate.py` runs `tb_savestate.sv` (step 7): `intv_core` (media,
+timing, machine and the save-state controller `intv_ss_ctl`) with the SRAM
+model behind the template's `core_bridge_cmd.v` and core_top's bridge
+multiplexer; the bench is the Pocket's host (command words at 0xF8000000,
+the blob at 0x50000000, one bridge access every 88 clk_74a). For each image
+of the regression set and USCF Chess (cart RAM) it runs a straight
+reference (R), the same run with saves at chosen moments, a menu pause and
+a save inside a menu pause (S: every frame equal to R, every blob verified
+by `tools/savestate.py`, its cart RAM equal to the SRAM model's at the
+freeze; in each menu window the machine's cycle stands still from the
+freeze to the resume, which spans the wait's raster frames), each state
+loaded into a fresh core (L: every frame after the restore equal to R's,
+the SRAM's cart RAM equal to the blob's), the first state loaded into a
+core that has run 40 frames past it (D), the wake with the host's reset
+held (W1: reset released after the answer; W2: released while the staged
+blob is checked), another image's state (F: refused, untouched) and five
+bad blobs (C: refused, then the good one loads). psgtest also runs S with
+Pause in Menu off (S0: the machine runs through the menu) and B (two blob
+reads while a save reads the state: one overwritten access counted, the
+save unharmed; then six blob reads, each with a blob write arriving while
+the read is served: every read answered with its own word, every write
+landed). On every clk the bench checks: never live while frozen,
+the sound 0 once the machine has not been live for 4 ms, no state access
+while the machine runs; every run ends with `E drops 0` (B: 1).
+`--plants` builds eleven planted faults (a module dropped, a word off by
+one, no CRC check, the resume one CPU cycle late, no cartridge check, no
+system-ROM check, the cart RAM not restored, the cart RAM one word off,
+the menu ignored, a bridge access's direction not latched, the PSG's
+envelope counter ignored on restore), each of which must fail for its own
+reason (a pattern per plant in `PLANTS`).
+Frames are machine frames (H, A, P lines: bus and CPU steps, PSG, picture);
+after a load the PSG's 48 kHz sample values are left out (its output filter
+is not machine state; docs/SAVESTATE.md 5). Last line
+`TB_SAVESTATE_ALL pass`.

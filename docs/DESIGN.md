@@ -181,7 +181,7 @@ Sizes are ALMs on the 5CEBA4 (18,480 ALMs, 308 M10K) [from L-PSS]. All sizes are
 | 13 | `ecs` | ECS ROM (12K x 10, paged), 2 KiB RAM, PSG #2, ports 3/4, keyboards | CPU bus | page registers, RAM, PSG #2 state | MAME ecs.cpp; wiki ECS; AA | 200-400 + PSG | ECS BASIC boots; keyboard tests |
 | 14 | `ivoice` | SPB640 FIFO (**(review)** 64 decles of 10 bits; writes when full are dropped [from MAME sp0256.cpp:1235-1242]) and SP0256 (microsequencer, 12-pole LPC filter) | CPU bus $0080-$0081; audio | FIFO, PC, stack, mode, page, coefficients, filter delay line, repeat and pitch counters, LRQ/SBY | S6 sheets 18-22; S7; S8; MAME sp0256.cpp | 500-1,000 + 1-2 DSP | per-opcode tests; resident phrases vs MAME audio |
 | 15 | `jlp` | RAM, multiply/divide, CRC, random numbers, flash | CPU bus; SRAM; flash slot | registers; RAM in SRAM | S9 jlp.c header (spec only); JLP Developer's Guide wanted | 300-600 | homebrew that uses JLP |
-| 16 | `ss_ctl` | save/load protocol, freeze, state bus | APF bridge; all `ss` ports | none | section 4 | 450-850 (all taps) | round-trip test (section 8) |
+| 16 | `ss_ctl` | save/load protocol, freeze, state bus | APF bridge; all `ss` ports | none | section 4 | 450-850 (all taps) **(build step 7: measured 749 for the controller and about 2,470 with all taps; section 4.5)** | round-trip test (section 8) |
 | 17 | `audio_out` | mix, filter, 48 kHz I2S | PSGs, speech | none (filters) | agg23 sound_i2s.sv (MIT) | 200 | sim spectrum; listen |
 | 18 | `osd_keypad` (later) | on-screen 3 x 4 keypad, overlay slot | video path; input | none | IN | 300-600 | hand test |
 
@@ -209,12 +209,15 @@ Behaviour seen in agg23's cores (not in the docs) [from L-PSS: AGG NES core_top.
 - On save, the core raises `ok` when the first word is ready. Then it gives one word per new bridge read address. Repeated reads of one address must return the same word.
 - Both put the blob at bridge address 0x40000000. The 7800 uses 0x40000000 for FA2 flash [from 7800 data.json], so this core picks its own free address (proposed 0x50000000) [estimated].
 
+**(build step 7)** As built: `intv_ss_ctl.sv`, the blob at 0x50000000, and every detail of the protocol, the freeze, the checks on load and the bench in docs/SAVESTATE.md. The bridge's reads are one word behind (Analogue's `io_bridge_peripheral.v`), so the core holds each read's word until the next read, as the template's command registers do; it serves any read or write order.
+
 ### 4.2 Freezing the machine
 
 1. On 0x00A0 or 0x00B0 (menu open), `ss_ctl` asks for a freeze.
 2. The freeze waits for a quiet point: the CPU at an interruptible instruction boundary, and the frame counter inside VBlank before the first row fetch (NTSC cycles 0 to about 3,790 of 14,934) [from L-PSS; MAME stic.h:50].
 3. Then one clock enable stops the whole machine. Nothing is half-done on the bus.
 4. If no quiet point comes within 3 frames, reply "error" [estimated].
+5. **(build step 7)** A load asked for while the host holds the core in reset (a wake whose load comes before the reset exit) is checked at once and staged; it is applied at the first quiet point after the reset exit (docs/SAVESTATE.md 1).
 
 Because the freeze always lands in the same frame phase, the STIC row buffer and the BUSRQ machinery are idle. This makes the saved state smaller and the restore simpler. The STIC registers and the row buffer are still saved, so a later change of freeze point stays possible.
 
@@ -225,8 +228,8 @@ Because the freeze always lands in the same frame phase, the STIC row buffer and
 - ~~Block RAMs are read and written through their second port. They cost no logic.~~ **(build step 3)** Block RAMs (scratchpad, System RAM, GRAM: `intv_ram.sv`) are read and written through their bus-side port A: `ss_en`, high only while the machine is frozen, hands that port from the CPU bus to the state port (one clock of read latency) and must drop two clocks before the machine runs again. Port B stays free for the STIC's reads (build step 4). The switch costs a few multiplexers per RAM, no RAM. **(build step 4)** Port B is read only and belongs to the STIC (System RAM rows, GRAM patterns); the STIC's row buffer (20 words, id $0C) and line buffer (64 words, id $0D) are `intv_ram`s too, and GROM has a second read port for it. Every port-B word is used only after its address has been stable for a clock, so a freeze may land in any clk_sys (docs/STIC_NOTES.md 4).
 - The freeze must wait until no cartridge access is in flight: `intv_bus` asks the cartridge port the clock after each address latch and holds the answer in its state, but the request and the SRAM read take about 6 clk_sys and are not in the state. The quiet point of section 4.2 (an instruction boundary) has none in flight; a freeze anywhere else must wait at least 16 clk_sys after the last CPU microcycle before reading state (the step-3 bench does this).
 - Cart RAM and JLP RAM live in SRAM. `ss_ctl` reads them directly while the machine is frozen.
-- One package file lists every module id and word count. A Python script checks that the RTL package and the blob layout agree.
-- **Rule:** a module is not finished until its `ss` port covers every flip-flop that changes at run time. The round-trip test (section 8.4) enforces this.
+- One package file lists every module id and word count. A Python script checks that the RTL package and the blob layout agree. **(build step 7)** `tools/savestate.py` holds the ids, counts and layout and generates `intv_ss_pkg.sv` and the table in docs/SAVESTATE.md; `gen --check` fails if either, or a module's id default, differs.
+- **Rule:** a module is not finished until its `ss` port covers every flip-flop that changes at run time, or the flip-flop is listed in docs/SAVESTATE.md 5 as quiescent at the quiet point (section 4.2), with the reason it holds nothing the machine needs again there. The round-trip test (section 8.4) enforces this. **(build step 7)** Amended after the step-7 review: the cartridge port's per-access registers (intv_bus, intv_cart) and the block RAMs' read registers are such flip-flops; a change of the freeze point must re-check that list.
 
 ### 4.4 Blob layout (fixed size)
 
@@ -248,11 +251,29 @@ Because the freeze always lands in the same frame phase, the STIC row buffer and
 | Cart RAM window (all 64K words of the cart plane, RAM pages only written back) | 131,072 | L-PSS |
 | **Total, padded** | **153,600 (0x25800, 150 KiB)** | L-PSS |
 
-The header holds the cart CRC32. A load with the wrong cartridge is refused with code 3. The input module, audio filters and all ROMs are not saved. Inputs are re-sampled after a restore [from L-PSS].
+The header holds the cart CRC32. A load with the wrong cartridge is refused with code 3. **(build step 7)** Version 1 of the blob keeps the fixed 153,600 bytes but uses only what the core has so far: a 64-byte header (with the payload CRC32 and the EXEC's and GROM's CRC32s too, so that a state made with other system ROMs is refused), the 1,324 module words, and the 16K cells of the SRAM's cart RAM area; the rest is zero and reserved for the ECS, the Intellivoice and JLP (docs/SAVESTATE.md 3). The input module, audio filters and all ROMs are not saved. Inputs are re-sampled after a restore [from L-PSS].
 
 ### 4.5 Expected cost
 
 The NES study measured about 570 ALMs for its save-state engine, controller and 22 register taps [measured, from L-PSS: fitstudy/nes/reports/pr1_parity]. The SNES study measured +4,754 ALUTs for state muxes added after the fact [from L-PSS]. Designing the taps in from the start is what keeps this core near the NES figure: 450-850 ALMs [estimated].
+
+**(build step 7) Measured** (seed-1 fits, 0.0.5 against 0.0.6 with the step-7 review fixes; ALMs per module from the fit report's entity table): the save states cost about 2,470 ALMs (4,020 -> 6,488, 22 % -> 35 % of the device), three times the estimate. Most of it is not the controller but the state read-back of flip-flop state, which the earlier fits pruned because core_top tied the state ports off:
+
+| Module | 0.0.5 | 0.0.6 | Cost | What it is |
+|---|---|---|---|---|
+| `intv_ss_ctl` | - | 749 | 749 | the controller: command handshakes, freeze, the blob's CRC32 and header checks, bridge crossings, SRAM sequencing |
+| `intv_stic` | 1,160 | 1,827 | 667 | 67 state words of flip-flops (registers, row fetch, card engine, MOB sweep) through a 32-bit read multiplexer and the restore writes: about 10 ALMs a word |
+| `intv_cart` | 276 | 800 | 524 | the 32 x 16 page table in flip-flops (read by the bus combinationally, so a block RAM would add a clock to every cartridge access) and its state read and write: about 25 ALMs a word |
+| `cp1610` | 621 | 769 | 148 | 8 state words (R0-R7 are 16 bits; sequence state, flags, request lines) |
+| `intv_psg` | 330 | 417 | 87 | 21 narrow state words: about 4 ALMs a word |
+| `intv_core` (own logic) | - | about 186 | 186 | the OR of the state buses, the EXEC and GROM CRC32s, the sound decay |
+| block RAMs (`intv_ram` x 5) | 0 | 52 | 52 | port A handed to the state port while frozen (`ss_en`) |
+| `core_bridge_cmd` | 181 | 227 | 46 | the save, load and menu commands no longer tied off |
+| others (`intv_bus`, `intv_timing`, `intv_media`, loader, input) | | | about 40 | |
+
+The rule of thumb for later steps: state kept in block RAM or SRAM costs almost nothing (a port multiplexer); state in flip-flops costs about 4 ALMs per 8-16-bit word and 10-25 per 32-bit or table word.
+
+Budget for steps 9-11, updated from these figures [estimated]: ECS (step 9) state taps about 150 ALMs (PSG #2 as PSG #1, 87; page selects and ports about 40; ECS RAM in block RAM through `ss_en`, about 10); Intellivoice (step 10) about 300-450 if the SP0256's filter coefficients and delay line stay in flip-flops (about 30 words), about 60 if they are kept in a block RAM (the plan); JLP (step 11) about 150 for its registers (its RAM is in SRAM, which `ss_ctl` reads directly). With the modules themselves (section 3: ECS 200-400 plus PSG #2 about 420, Intellivoice 500-1,000, JLP 300-600) the core would end at about 8,300-10,100 ALMs (45-55 %), inside section 3's 7,000-11,500. If it ever runs short, moving `intv_cart`'s page table into a block RAM saves about 450 ALMs, at the cost of a clock on every cartridge access and a re-run of the bus and screen gates; it was considered in step 7 and not done, because it is not needed and is not a small change to the cartridge port's timing.
 
 ---
 
@@ -502,7 +523,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | 4 | STIC backgrounds (three modes), SR1/INTRM, BUSRQ, GROM/GRAM | EXEC title screen and 5 games' frame CRCs match MAME (palette aside) |
 | 5 | MOBs and collisions | 10 more games match; STIC test ROM passes |
 | 6 | PSG #1 and input module | register logs match MAME; games playable on the Pocket |
-| 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set |
+| 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set **(build step 7: in simulation, `sim/tb/tb_savestate.py`; on the Pocket, the owner's test sheet)** |
 | 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) |
 | 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test |
 | 10 | Intellivoice | resident phrases and B-17 speech sound right; per-opcode tests pass |

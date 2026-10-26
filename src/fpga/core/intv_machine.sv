@@ -25,8 +25,10 @@
 // busrq_en = 1 is the hardware (the STIC holds the CPU for its row
 // fetches); 0 is the step-3 system without BUSRQ (benches only).
 //
-// Save state (DESIGN.md 4.3; the ids are provisional until the step 7
-// package file): all ports are OR-combined into ss_rdata. Write only while
+// Save state (DESIGN.md 4.3; the ids are intv_ss_pkg's, from
+// tools/savestate.py, passed in by intv_core; the defaults here are the
+// same, checked by `savestate.py gen --check`): all ports are OR-combined
+// into ss_rdata. Write only while
 // the machine is frozen and mreset is low. ss_en hands the block RAMs' port
 // to the state port (their words read one clock after ss_addr; the others
 // at once); it must drop two clocks before the machine runs again.

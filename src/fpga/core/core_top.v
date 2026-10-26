@@ -25,6 +25,12 @@
 // intv_input turns the Pocket's controllers and USB keyboard into
 // the two hand controllers on the PSG's ports; settings Keypad Mode (0x208)
 // and Swap Controllers (0x20C).
+// Step 7: save states (DESIGN.md 4; docs/SAVESTATE.md). The clk_sys side
+// (intv_media, intv_timing, intv_machine and the save-state controller
+// intv_ss_ctl) is in intv_core, which the bench sim/tb/tb_savestate.sv
+// uses too. 0x00A0 / 0x00A4 save and load the 150 KiB blob at 0x50000000,
+// 0x00B0 freezes the machine while the menu is open (setting Pause in
+// Menu, 0x210), sleep is supported.
 //
 
 `default_nettype none
@@ -394,15 +400,16 @@ localparam [15:0] SLOT_IVOICE = 16'h0105;
 localparam [15:0] SLOT_JLP    = 16'h0106;
 
 // Save state (DESIGN.md 4.1, 4.4): the blob's bridge address and its fixed
-// size, reported once ss_ctl exists (step 7). Until then the core answers
-// 0x00A0 / 0x00A4 with "not supported".
+// size (tools/savestate.py, intv_ss_pkg), served by intv_ss_ctl.
 localparam [31:0] SS_ADDR = 32'h50000000;
+    wire    [31:0]  ss_bridge_rd_data;     // intv_ss_ctl, held from its last read
 localparam [31:0] SS_SIZE = 32'd153600;
 
 // Settings, written by the host from interact.json (clk_74a).
     reg             set_border = 1'b1;      // Border: 1 = show (slot 1), 0 = playfield only (slot 0)
     reg     [1:0]   set_kp_mode = 2'd0;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick
     reg             set_swap = 1'b0;        // Swap Controllers: 1 = player 1 on the right controller
+    reg             set_pause = 1'b1;       // Pause in Menu: 1 = the machine freezes while the menu is open
     reg     [7:0]   menu_reset_cnt = 8'd0;
 
 always @(posedge clk_74a) begin
@@ -415,6 +422,7 @@ always @(posedge clk_74a) begin
             12'h204: set_border     <= bridge_wr_data[0];
             12'h208: set_kp_mode    <= bridge_wr_data[1:0];
             12'h20C: set_swap       <= bridge_wr_data[0];
+            12'h210: set_pause      <= bridge_wr_data[0];
             default: ;
         endcase
     end
@@ -432,6 +440,9 @@ always @(*) begin
     end
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
+    end
+    32'h50xxxxxx: begin
+        bridge_rd_data <= ss_bridge_rd_data;    // the save-state blob (intv_ss_ctl)
     end
     endcase
 end
@@ -471,22 +482,22 @@ end
     wire     [31:0] rtc_time_bcd;
     wire            rtc_valid;
 
-    wire            savestate_supported = 1'b0;
+    wire            savestate_supported = 1'b1;
     wire    [31:0]  savestate_addr = SS_ADDR;
     wire    [31:0]  savestate_size = SS_SIZE;
     wire    [31:0]  savestate_maxloadsize = SS_SIZE;
 
     wire            savestate_start;
-    wire            savestate_start_ack = 1'b0;
-    wire            savestate_start_busy = 1'b0;
-    wire            savestate_start_ok = 1'b0;
-    wire            savestate_start_err = 1'b0;
+    wire            savestate_start_ack;
+    wire            savestate_start_busy;
+    wire            savestate_start_ok;
+    wire            savestate_start_err;
 
     wire            savestate_load;
-    wire            savestate_load_ack = 1'b0;
-    wire            savestate_load_busy = 1'b0;
-    wire            savestate_load_ok = 1'b0;
-    wire            savestate_load_err = 1'b0;
+    wire            savestate_load_ack;
+    wire            savestate_load_busy;
+    wire            savestate_load_ok;
+    wire            savestate_load_err;
 
     wire            osnotify_inmenu;
 
@@ -632,10 +643,9 @@ apf_datatable #(
 //
 // agg23's data loader (pocket_utils/, MIT) turns the bridge's 32-bit writes
 // below 0x10000000 into bytes on clk_sys, one write strobe per byte;
-// intv_media takes them (DESIGN.md 5; the CFG slot is counted only until
-// step 8). The CPU (intv_machine) reaches the cartridge through its bus
-// port, and EXEC/GROM through the ROM read ports. The state port is tied
-// off until ss_ctl (step 7).
+// intv_media (in intv_core) takes them (DESIGN.md 5; the CFG slot is
+// counted only until step 8). Bridge accesses at 0x50000000 are the save
+// state's (intv_ss_ctl), not the loader's.
 ////////////////////////////////////////////////////////////////////////////////
 
     wire            ioctl_wr;
@@ -665,85 +675,7 @@ data_loader #(
     reg     [2:0]   lock_s = 3'd0, rst_s = 3'd0, mrst_s = 3'd0;
     reg     [1:0]   border_s = 2'b11;
     reg             timing_reset = 1'b1;
-    reg             machine_reset = 1'b1;
 
-    wire    [11:0]  slot_st;
-    wire            cart_ready, cart_busy, cart_hit;
-    wire    [4:0]   cart_err;
-    wire    [1:0]   cart_len_st;
-    wire    [31:0]  cart_crc;
-    wire    [16:0]  cart_words;
-    wire    [7:0]   cart_layout, cart_flags;
-    wire            cbus_ack, cbus_hit, cbus_paged;
-    wire            cbus_req, cbus_we;
-    wire    [15:0]  cbus_addr, cbus_wdata;
-    wire    [11:0]  exec_addr;
-    wire    [10:0]  grom_addr, vgrom_addr;
-    wire    [15:0]  cbus_rdata;
-    wire    [1:0]   cbus_kind;
-    wire            aux_ack;
-    wire    [15:0]  aux_rdata;
-    wire    [9:0]   exec_q;
-    wire    [7:0]   grom_q, vgrom_q, ivoice_q;
-    wire    [31:0]  ss_rdata_media;
-
-intv_media media (
-    .clk        ( clk_sys ),
-    .reset      ( timing_reset ),
-    .mreset     ( machine_reset ),
-    .ld_wr      ( ioctl_wr ),
-    .ld_addr    ( ioctl_addr ),
-    .ld_data    ( ioctl_dout ),
-    .len_valid  ( cart_len_valid ),
-    .cart_len   ( cart_len ),
-    .len_chk    ( cart_len_chk ),
-    .bus_req    ( cbus_req ),
-    .bus_we     ( cbus_we ),
-    .bus_addr   ( cbus_addr ),
-    .bus_wdata  ( cbus_wdata ),
-    .bus_ack    ( cbus_ack ),
-    .bus_rdata  ( cbus_rdata ),
-    .bus_hit    ( cbus_hit ),
-    .bus_kind   ( cbus_kind ),
-    .bus_paged  ( cbus_paged ),
-    .aux_req    ( 1'b0 ),
-    .aux_we     ( 1'b0 ),
-    .aux_addr   ( 17'd0 ),
-    .aux_wdata  ( 16'd0 ),
-    .aux_be     ( 2'b11 ),
-    .aux_ack    ( aux_ack ),
-    .aux_rdata  ( aux_rdata ),
-    .exec_addr  ( exec_addr ),
-    .exec_q     ( exec_q ),
-    .grom_addr  ( grom_addr ),
-    .grom_q     ( grom_q ),
-    .vgrom_addr ( vgrom_addr ),
-    .vgrom_q    ( vgrom_q ),
-    .ivoice_addr( 11'd0 ),
-    .ivoice_q   ( ivoice_q ),
-    .ready      ( cart_ready ),
-    .busy       ( cart_busy ),
-    .err        ( cart_err ),
-    .len_st     ( cart_len_st ),
-    .slot_st    ( slot_st ),
-    .crc        ( cart_crc ),
-    .words      ( cart_words ),
-    .layout     ( cart_layout ),
-    .flags      ( cart_flags ),
-    .hit        ( cart_hit ),
-    .ss_addr    ( 16'd0 ),
-    .ss_we      ( 1'b0 ),
-    .ss_wdata   ( 32'd0 ),
-    .ss_rdata   ( ss_rdata_media ),
-    .sram_a     ( sram_a ),
-    .sram_dq_out( sram_dq_out ),
-    .sram_dq_oe ( sram_dq_oe ),
-    .sram_dq_in ( sram_dq ),
-    .sram_oe_n  ( sram_oe_n ),
-    .sram_we_n  ( sram_we_n ),
-    .sram_ub_n  ( sram_ub_n ),
-    .sram_lb_n  ( sram_lb_n )
-);
 always @(posedge clk_sys) begin
     lock_s   <= {lock_s[1:0], pll_core_locked};
     rst_s    <= {rst_s[1:0],  reset_n};
@@ -752,39 +684,7 @@ always @(posedge clk_sys) begin
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
     timing_reset  <= ~lock_s[2];
-    // The machine: held while the host holds the core in reset (loading),
-    // for the menu's Reset, and until the loader is ready (it finishes about
-    // 3 ms after the host's "all complete", which comes before its reset
-    // exit). The CPU then starts on the next frame (intv_bus).
-    machine_reset <= ~lock_s[2] | ~rst_s[2] | mrst_s[2] | ~cart_ready;
 end
-
-
-////////////////////////////////////////////////////////////////////////////////
-// Timing, picture and video
-////////////////////////////////////////////////////////////////////////////////
-
-    wire            ce_pix, live, ce_stic, ce_psg, ce_cpu;
-    wire    [8:0]   hcnt, vcnt, vline;
-    wire    [31:0]  ss_rdata_timing;
-
-intv_timing timing (
-    .clk        ( clk_sys ),
-    .reset      ( timing_reset ),
-    .run        ( 1'b1 ),
-    .ce_pix     ( ce_pix ),
-    .hcnt       ( hcnt ),
-    .vcnt       ( vcnt ),
-    .vline      ( vline ),
-    .live       ( live ),
-    .ce_stic    ( ce_stic ),
-    .ce_psg     ( ce_psg ),
-    .ce_cpu     ( ce_cpu ),
-    .ss_addr    ( 16'd0 ),
-    .ss_we      ( 1'b0 ),
-    .ss_wdata   ( 32'd0 ),
-    .ss_rdata   ( ss_rdata_timing )
-);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Input (step 6): the Pocket's controllers and keyboard as the two hand
@@ -812,57 +712,71 @@ intv_input input_map (
 );
 
 ////////////////////////////////////////////////////////////////////////////////
-// The machine (steps 3-6)
+// The machine and its save states (steps 3-7): intv_core (media, timing,
+// machine, intv_ss_ctl). The machine is held while the host holds the core
+// in reset (loading), for the menu's Reset, and until the loader is ready
+// (it finishes about 3 ms after the host's "all complete", which comes
+// before its reset exit; intv_core adds that). The CPU then starts on the
+// next frame (intv_bus). The save-state ports are clk_74a (core_bridge_cmd)
+// and cross inside intv_ss_ctl.
 ////////////////////////////////////////////////////////////////////////////////
 
-    wire    [2:0]   m_phase;
-    wire    [15:0]  m_dout, m_din, m_addr;
-    wire            m_fetch, m_hold, m_halted;
+    wire            machine_reset;
+    wire    [11:0]  slot_st;
+    wire    [1:0]   cart_len_st;
+    wire            ce_pix, live;
+    wire    [8:0]   hcnt, vcnt, vline;
     wire    [3:0]   stic_colour;
     wire    [15:0]  psg_audio;
-    wire    [31:0]  ss_rdata_machine;
 
-intv_machine machine (
-    .clk            ( clk_sys ),
-    .mreset         ( machine_reset ),
-    .ce             ( ce_cpu ),
-    .ce_pix         ( ce_stic ),
-    .live           ( live ),
-    .hcnt           ( hcnt ),
-    .vcnt           ( vcnt ),
-    .cfg_hlt_imm    ( 1'b0 ),
-    .cfg_sdbd_r6_mame ( 1'b0 ),
-    .busrq_en       ( 1'b1 ),
-    .pad_r          ( pad_r ),
-    .pad_l          ( pad_l ),
-    .cart_req       ( cbus_req ),
-    .cart_we        ( cbus_we ),
-    .cart_addr      ( cbus_addr ),
-    .cart_wdata     ( cbus_wdata ),
-    .cart_ack       ( cbus_ack ),
-    .cart_rdata     ( cbus_rdata ),
-    .cart_hit       ( cbus_hit ),
-    .exec_addr      ( exec_addr ),
-    .exec_q         ( exec_q ),
-    .grom_addr      ( grom_addr ),
-    .grom_q         ( grom_q ),
-    .vgrom_addr     ( vgrom_addr ),
-    .vgrom_q        ( vgrom_q ),
-    .colour         ( stic_colour ),
-    .audio          ( psg_audio ),
-    .audio_stb      ( ),
-    .phase          ( m_phase ),
-    .dout           ( m_dout ),
-    .din            ( m_din ),
-    .addr           ( m_addr ),
-    .fetch          ( m_fetch ),
-    .hold           ( m_hold ),
-    .halted         ( m_halted ),
-    .ss_en          ( 1'b0 ),
-    .ss_addr        ( 16'd0 ),
-    .ss_we          ( 1'b0 ),
-    .ss_wdata       ( 32'd0 ),
-    .ss_rdata       ( ss_rdata_machine )
+intv_core machine_side (
+    .clk                ( clk_sys ),
+    .timing_reset       ( timing_reset ),
+    .hold_req           ( ~lock_s[2] | ~rst_s[2] | mrst_s[2] ),
+    .ld_wr              ( ioctl_wr ),
+    .ld_addr            ( ioctl_addr ),
+    .ld_data            ( ioctl_dout ),
+    .len_valid          ( cart_len_valid ),
+    .cart_len           ( cart_len ),
+    .len_chk            ( cart_len_chk ),
+    .slot_st            ( slot_st ),
+    .len_st             ( cart_len_st ),
+    .machine_reset      ( machine_reset ),
+    .pad_r              ( pad_r ),
+    .pad_l              ( pad_l ),
+    .ce_pix             ( ce_pix ),
+    .hcnt               ( hcnt ),
+    .vcnt               ( vcnt ),
+    .vline              ( vline ),
+    .live               ( live ),
+    .colour             ( stic_colour ),
+    .audio              ( psg_audio ),
+    .clk_74a            ( clk_74a ),
+    .bridge_addr        ( bridge_addr ),
+    .bridge_rd          ( bridge_rd ),
+    .bridge_wr          ( bridge_wr ),
+    .bridge_wr_data     ( bridge_wr_data ),
+    .ss_bridge_rd_data  ( ss_bridge_rd_data ),
+    .savestate_start        ( savestate_start ),
+    .savestate_start_ack    ( savestate_start_ack ),
+    .savestate_start_busy   ( savestate_start_busy ),
+    .savestate_start_ok     ( savestate_start_ok ),
+    .savestate_start_err    ( savestate_start_err ),
+    .savestate_load         ( savestate_load ),
+    .savestate_load_ack     ( savestate_load_ack ),
+    .savestate_load_busy    ( savestate_load_busy ),
+    .savestate_load_ok      ( savestate_load_ok ),
+    .savestate_load_err     ( savestate_load_err ),
+    .osnotify_inmenu    ( osnotify_inmenu ),
+    .pause_en           ( set_pause ),
+    .sram_a             ( sram_a ),
+    .sram_dq_out        ( sram_dq_out ),
+    .sram_dq_oe         ( sram_dq_oe ),
+    .sram_dq_in         ( sram_dq ),
+    .sram_oe_n          ( sram_oe_n ),
+    .sram_we_n          ( sram_we_n ),
+    .sram_ub_n          ( sram_ub_n ),
+    .sram_lb_n          ( sram_lb_n )
 );
 
     wire            in_pf;

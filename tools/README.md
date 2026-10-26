@@ -3,6 +3,11 @@
 Python tools, our own (MIT). Build step 0 of DESIGN.md section 9 needs no
 simulator and comes first. Python 3, standard library only (`stic_frames.py import` also needs Pillow).
 
+- `savestate.py`: the save-state layout (build step 7; docs/SAVESTATE.md):
+  module ids, word counts and the blob, written once; `gen` writes
+  `src/fpga/core/intv_ss_pkg.sv` and the doc table (`gen --check` checks
+  them and the RTL's id defaults), `verify` / `show` read a blob as the
+  core would, `selftest` packs, unpacks and refuses every bad field.
 - `as1610.py`: CP1610 assembler for our own test ROMs, written from the
   CP-1600 manual (S1) and the wiki opcode pages. Raw image, `.cfg` and
   listing output.

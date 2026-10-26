@@ -354,7 +354,7 @@ def main():
     check(md["platform_ids"] == ["intv"], "platform_ids [\"intv\"] (Spiritualized's Intellivision core's platform)")
     check(f"{md['author']}.{md['shortname']}" == cname, f"author.shortname = {cname}")
     check(bool(re.fullmatch(r"\d+\.\d+\.\d+", md["version"])), f"version {md['version']}")
-    check(core["framework"]["sleep_supported"] is False, "sleep_supported false (save states come in step 7)")
+    check(core["framework"]["sleep_supported"] is True, "sleep_supported true (save states, step 7)")
     rbf = core["cores"][0]["filename"]
     check(rbf == "intv.rbf_r", "bitstream intv.rbf_r")
     check(f'"$CORE/{rbf}"' in package and cname in package, f"tools/package.sh writes {rbf} into Cores/{cname}")
@@ -410,8 +410,16 @@ def main():
     ss = int(ss.group(1), 16) if ss else None
     check(ss == 0x50000000 and all(int(s["address"], 16) >> 24 != ss >> 24 for s in slots),
           "save-state blob at 0x50000000 (DESIGN.md 4.1), clear of every slot")
-    check(re.search(r"wire\s+savestate_supported\s*=\s*1'b0;", core_top) is not None,
-          "save states answered 'not supported' until step 7")
+    check(re.search(r"wire\s+savestate_supported\s*=\s*1'b1;", core_top) is not None,
+          "save states supported (step 7)")
+    pkg = open(os.path.join(rtl, "intv_ss_pkg.sv")).read()
+    size = re.search(r"localparam \[31:0\] SS_SIZE = 32'd(\d+);", core_top)
+    psize = re.search(r"SS_BLOB_BYTES = (\d+);", pkg)
+    check(size and psize and int(size.group(1)) == int(psize.group(1)) == 153600,
+          "save-state size 153,600 in core_top = intv_ss_pkg (tools/savestate.py; DESIGN.md decision 6)")
+    check(re.search(r"32'h50xxxxxx:\s*begin\s*bridge_rd_data\s*<=\s*ss_bridge_rd_data;", core_top) is not None
+          and "wire b_hit = bridge_addr[31:24] == 8'h50;" in open(os.path.join(rtl, "intv_ss_ctl.sv")).read().replace("logic ", ""),
+          "core_top and intv_ss_ctl serve the blob at 0x50xxxxxx")
 
     print("-- interact.json")
     var = js[f"Cores/{cname}/interact.json"][0]["interact"]["variables"]
@@ -475,6 +483,14 @@ def main():
           and re.search(r"\.pad_l\s*\(\s*pad_l\s*\)", core_top) is not None
           and re.search(r"intv_input\s+\w+\s*\(", core_top) is not None,
           "core_top: intv_input's bytes reach the machine's PSG ports")
+    pz = [v for v in var if v["name"] == "Pause in Menu"]
+    pw = re.search(r"reg\s+set_pause\s*=\s*1'b([01]);", core_top)
+    check(len(pz) == 1 and pw and int(pz[0]["address"], 16) & 0xFFF == 0x210
+          and re.search(r"12'h210:\s*set_pause\s*<=\s*bridge_wr_data\[0\];", core_top) is not None
+          and pz[0]["defaultval"] == int(pw.group(1)) == 1
+          and sorted(o["value"] for o in pz[0]["options"]) == [0, 1]
+          and re.search(r"\.pause_en\s*\(\s*set_pause\s*\)", core_top) is not None,
+          "Pause in Menu: core_top's set_pause at 0x210 (power-up on) into intv_ss_ctl's pause_en")
     total_opts = sum(len(v.get("options", [])) for v in var)
     check(total_opts <= 51, f"{total_opts} list options in all (51 proven on hardware by the 7800 core)")
 

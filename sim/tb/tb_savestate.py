@@ -374,6 +374,10 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             continue
         refs[name] = ref
         p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:])
+        want = 'L ready crc %08x words %d' % bench.prep[name][3:5]
+        for tag, r in (('R', ref), ('S', srun)):
+            if want not in r.lines:
+                p.append('%s: loader result %s, want %s' % (tag, [x for x in r.lines if x.startswith('L ready')], want))
         probs += ['%s %s' % (name, x) for x in p]
         saves[name] = info
         print('%s: R %d frames, S %d saves %s' % (name, img[4], len(info), 'pass' if not p else 'FAIL'),

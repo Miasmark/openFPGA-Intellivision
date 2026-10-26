@@ -344,10 +344,15 @@ module tb_savestate;
         end while ((code == 16'd1 || code == 16'd0) && polls < 3000);
     endtask
 
+    // (fails if the machine stops counting for 300 raster frames)
     task automatic wait_cyc(input longint c);
-        int to;
-        to = 0;
-        while (cyc < c && to < 200000000) begin @(negedge clk); to++; end
+        longint last, idle;
+        last = cyc;
+        idle = 0;
+        while (cyc < c && idle < 300 * 262 * 228 * 12) begin
+            @(negedge clk);
+            if (cyc != last) begin last = cyc; idle = 0; end else idle++;
+        end
         if (cyc < c) fail($sformatf("cycle %0d never reached (%0d)", c, cyc));
     endtask
 
@@ -514,9 +519,11 @@ module tb_savestate;
         $fdisplay(fd, "L cart %0d", n);
         @(negedge clk);
         cart_len = n; len_valid = 1'b1;
+        repeat (64) @(negedge clk);           // the loader takes len_valid (synchronised) first
         to = 0;
         while (!(core.media.ready && !core.media.busy) && to < 4000000) begin @(negedge clk); to++; end
         if (to >= 4000000) fail("loader not ready");
+        repeat (8) @(negedge clk);            // the results reach intv_cart's registers
         $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
         repeat (10) @(negedge clk);
         hold_req = 1'b0;

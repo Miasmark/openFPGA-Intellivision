@@ -178,14 +178,14 @@ bits), 20 DSP; worst setup `clk_sys` +0.757 ns (slow 85 C), `clk_74a`
 no critical warnings. The four `set_net_delay` bounds are met with
 7.122 ns to spare (slow model); FIT_CROSSING pass.
 0.0.8 (step 8: BIN + CFG, Intellicart .rom, the map table, page selects,
-bank registers; seed 1): 7,726 ALMs (`intv_loader` 1,849 of which
-`intv_cfgparse` 473 and `intv_romparse` 214; `intv_cart` 548 with
-`intv_pagesel` 56: the map table is in block RAM now), 7,600 registers,
-42 RAM blocks (240,492 bits; the map table 4,096 x 22), 20 DSP; worst
-setup `clk_sys` +0.757 ns (slow 85 C), `clk_74a` +2.861 ns; worst hold
-+0.038 ns (`clk_sys`, fast 0 C); no negative slack, no critical warnings.
-The four `set_net_delay` bounds are met with 6.551 ns to spare (slow
-model); FIT_CROSSING pass.
+bank registers; seed 1): 7,771 ALMs (`intv_loader` 1,840 of which
+`intv_cfgparse` 461 and `intv_romparse` 211; `intv_cart` 544 with
+`intv_pagesel` 56: the map table is in block RAM now), 7,565 registers,
+42 RAM blocks (the map table 4,096 x 22), 20 DSP; worst setup `clk_sys`
++0.757 ns (slow 85 C), `clk_74a` +3.136 ns; worst hold +0.038 ns
+(`clk_sys`, fast 0 C); no negative slack, no critical warnings. The four
+`set_net_delay` bounds are met with 7.129 ns to spare (slow model);
+FIT_CROSSING pass.
 
 ## Simulation
 

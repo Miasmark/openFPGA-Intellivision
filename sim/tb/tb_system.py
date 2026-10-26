@@ -56,7 +56,8 @@ entries with cart RAM and with paged ROM) it
   python3 -I sim/tb/tb_system.py --play [--only astrosmash,b17bomber]
         the step-6 play bench (PLAY): each game started with a key press
         and played with scripted keys (+keys in the bench, press_pads in
-        the model); RTL = model mode "stic" over every frame as in the
+        the model; PGA Golf with Pocket buttons through the input model,
+        its aim RAM checked, PLAY_PEEKS); RTL = model mode "stic" over every frame as in the
         frame gate; with INTV_PLAY_ROOT (tools/refs/mame_play.sh OUTDIRs)
         also model mode "mame" = MAME's snapshots and PSG log for the same
         keys. Last line "TB_PLAY_ALL pass".
@@ -161,7 +162,17 @@ PLAY = [('astrosmash', 'Astrosmash (USA, Europe).zip', 1200,
          '700-760:Up-Left,800-900:Upper,900-960:Down-Right'),
         ('b17bomber', 'B-17 Bomber (USA, Europe).zip', 1300,
          '200-206:1,500-506:Enter,600-630:Right,700-730:Down,800-806:0,900-960:Left,'
-         '1000-1040:Upper,1100-1160:Up,1200-1240:Lower-Right')]
+         '1000-1040:Upper,1100-1160:Up,1200-1240:Lower-Right'),
+        ('golf', 'PGA Golf ~ Golf (World).zip', 760,
+         '120-125:Enter,180-185:1,240-245:Enter,400-405:1,'
+         '500-510:pocket:right,560-570:pocket:L+right,620-630:pocket:up,680-690:pocket:L+up')]
+# PGA Golf (the owner's Precision controls, 2026-10-26; research/golf/NOTES.md): the start sequence
+# recorded in MAME (Enter, 1 player, Enter, club 1 = driver), then the Pocket's D-pad through the input
+# model (intv_system "pocket:" presses: Layer mode, L turns the D-pad one notch clockwise), each held
+# 10 frames: Right, L+Right, Up, L+Up must set the aim, RAM $015F (right = 0, counter-clockwise), to
+# 0, 15, 4, 3 (the aim is stored about 12 frames after the press); read 40 frames after each press.
+# No MAME reference run for it here: the measurement of the 16 aims in MAME is in that note.
+PLAY_PEEKS = {'golf': [(540, 0x015F, 0), (600, 0x015F, 15), (660, 0x015F, 4), (720, 0x015F, 3)]}
 PLAY_SNAP_STEP = 10
 PIC_W, PIC_H = 189, 240
 PIC_BYTES = 4 + PIC_W * PIC_H // 2
@@ -332,11 +343,14 @@ def fnv(h, *xs):
     return h
 
 
-def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=None):
+def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=None, peeks=None):
     """A long model run for the frame gate: per frame k the hash of the
     bus phases and of the step starts as the bench's H lines give them,
     and pictures 1..npics with their STIC logs; with presses, the scripted
-    keys of the play bench (intv_system.press_pads)."""
+    keys of the play bench (intv_system.press_pads). peeks: [(frame,
+    address)] of scratchpad or System RAM, read at the first step start in
+    that frame (cycle >= frame * FRAME); their values are returned in
+    model_stream.peeked (a dict)."""
     cart = isys.load_cart(cart_path)
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
@@ -356,7 +370,13 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
             acc.update(k=acc['k'] + 1, hb=FNV0, nb=0, hs=FNV0, ns=0)
 
     prev = (list(cpu.r), cpu.flags << 2 | cpu.I << 1 | cpu.D)
+    todo = sorted(peeks or [])
+    model_stream.peeked = {}
     while cpu.cycle < ncyc:
+        while todo and cpu.cycle >= todo[0][0] * FRAME:
+            f, a = todo.pop(0)
+            model_stream.peeked[(f, a)] = (bus.scratch[a & 0xFF] if 0x100 <= a <= 0x1EF
+                                           else bus.sysram[a - 0x200])
         ev = cpu.step()
         bus.boundary(cpu.cycle)
         if ev.kind in ('insn', 'intr') and 0 < ev.cycle < ncyc:
@@ -827,11 +847,13 @@ def key_lines(presses, nframes):
     return out
 
 
-def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=True, presses=None):
+def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=True, presses=None,
+                 peeks=None):
     """One image of the frame gate: the bench (+bushash, +pic) runs while
     the model runs; then every picture, row fetch, card row and per-frame
     bus hash must be equal. With presses (the play bench) both hold the
-    same scripted keys. Returns problems."""
+    same scripted keys. peeks: [(frame, address, want)]: the model's RAM
+    word there (model_stream peeks) must be want. Returns problems."""
     ncyc = (npics + 1) * FRAME
     log = os.path.join(work, 'screen_%s.log' % name)
     pic = os.path.join(work, 'screen_%s.pic' % name)
@@ -848,7 +870,9 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
     out = open(os.path.join(work, 'screen_%s.out' % name), 'w')
     proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=work)
     try:
-        hashes, pics, sinfo, audio = model_stream(exec_path, grom_path, cart, npics, presses=presses)
+        hashes, pics, sinfo, audio = model_stream(exec_path, grom_path, cart, npics, presses=presses,
+                                                  peeks=[(f, a) for f, a, _ in peeks or []])
+        peeked = model_stream.peeked
         t1 = time.time() - t0
         r = proc.wait(timeout=7200)
     finally:
@@ -863,6 +887,12 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
     exp.hashes = hashes
     exp.audio = audio
     probs = list(got[4]) + compare_stic(got, exp, range(npics), check_hash=True)
+    for f, a, want in peeks or []:
+        val = peeked.get((f, a))
+        if verbose:
+            print('  %s: model $%04X at frame %d = %s, want %d' % (name, a, f, val, want))
+        if val != want:
+            probs.append('%s: model $%04X at frame %d = %s, want %d' % (name, a, f, val, want))
     if presses:
         nk = [x for x in got[3] if x.startswith('L keys')]
         want = 'L keys %d' % len(key_lines(presses, npics))
@@ -1507,9 +1537,12 @@ def play_main(a, verilator, work, lib, exec_path, grom_path):
         cart = screen_cart(work, name, zipname, lib)
         try:
             print('%s: keys %s' % (name, ptext))
-            p = check_screen(binary, work, name, cart, exec_path, grom_path, nframes, presses=presses)
+            p = check_screen(binary, work, name, cart, exec_path, grom_path, nframes, presses=presses,
+                             peeks=PLAY_PEEKS.get(name))
             print('TB_PLAY %s RTL = model (mode stic) %s' % (name, 'FAIL' if p else 'pass'))
-            if proot:
+            if proot and any(isinstance(x[2], tuple) for x in presses):
+                print('  MAME side: none for Pocket presses (research/golf/NOTES.md has the MAME measurement)')
+            elif proot:
                 ref = os.path.join(proot, name)
                 snaps = ','.join(str(n) for n in range(PLAY_SNAP_STEP, nframes + 1, PLAY_SNAP_STEP))
                 for what, cmd in (

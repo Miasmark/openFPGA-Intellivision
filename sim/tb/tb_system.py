@@ -986,6 +986,19 @@ PLANTS = [
     ('psg_lowpass_single', 'intv_psg.sv', [("box + 18'(lp2_n[22:8]);", "box + 18'(lp1_n[22:8]);")],
      'psgtest', None),
     ('psg_dac_level', 'intv_psg.sv', [("4'd13: dac = 14'd6539;", "4'd13: dac = 14'd6540;")], 'psgtest', None),
+    # the noise prescaler's phase: the LFSR shifts when the prescaler falls, not when it rises
+    ('psg_noise_prescaler_rise', 'intv_psg.sv', [("                    if (npre)\n",
+                                                  "                    if (!npre)\n")], 'psgtest', None),
+    # Continue = 0 (shapes 0-7): hold after the first cycle, whatever Hold says
+    ('psg_shape_cont0_hold', 'intv_psg.sv', [("s_hold = shape[3] ? shape[0] : 1'b1;", "s_hold = shape[0];")],
+     'psgtest', None),
+    # the mixer's noise-enable bits 3-5 (here the tone bits 0-2 read for noise too)
+    ('psg_mixer_noise_bits', 'intv_psg.sv', [("(rng[0] | r[8][3 + c])", "(rng[0] | r[8][c])")], 'psgtest', None),
+    # the port-direction bits 6-7 of the enable register obeyed: an output port reads its
+    # (never written) latch instead of the hand controller (psgtest frame 17 sets both)
+    ('psg_port_dir_obeyed', 'intv_psg.sv', [("4'd14:   q = pad_r;\n            4'd15:   q = pad_l;",
+                                             "4'd14:   q = r[8][6] ? 8'hFF : pad_r;\n"
+                                             "            4'd15:   q = r[8][7] ? 8'hFF : pad_l;")], 'psgtest', None),
     # the PSG's state words left out of the port (rt9: reset restore in the
     # slow envelope, at a step phase other than the reset's)
     ('ss_psg_tone_lost', 'intv_psg.sv', [("tcnt[ss_ch] <= ss_wdata[11:0];\n                    tout[ss_ch] <= ss_wdata[12];", ""),

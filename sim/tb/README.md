@@ -180,10 +180,12 @@ attack, holding, tick phase); the state port grows to 21 words. Image
 `psgtest` runs `sim/testroms/psgtest.asm` (22 frames, two different
 hand-controller bytes) with two more round trips in the middle of a slow
 envelope: rt9 into a reset machine, rt10 over a later state. `--all` adds
-18 PSG plants (LFSR tap, tone compare, envelope period, volume selects,
+22 PSG plants (LFSR tap, tone compare, envelope period, volume selects,
 shape restart, alternate, tone-off bit, tick phase, write before the
-step, filter reciprocal, one low pass, a DAC level; state port: tone,
-noise, LFSR, envelope count, envelope step, tick phase) and keeps the
+step, filter reciprocal, one low pass, a DAC level, the noise prescaler's
+phase, Continue = 0 holding, the mixer's noise bits, the port-direction
+bits obeyed; state port: tone, noise, LFSR, envelope count, envelope
+step, tick phase) and keeps the
 step-3 PSG ones (mask, registers lost, ports swapped) on `intv_psg.sv`.
 
 The play bench (`tb_system.py --play`, step 6): Astrosmash (1,200
@@ -209,10 +211,25 @@ bytes; every combination of the 16 Pocket buttons in each keypad mode
 range; every keyboard usage code in each report byte and random reports;
 every slot type on each slot; random vectors; and the centres of MAME's
 analog grid, expected as its table says. Both Swap settings throughout.
+The bench runs `clk` (clk_sys) and `clk_74a` (period drawn each cycle
+between 12.5 and 14.5 ns) and drives the inputs as clk_74a signals; each
+vector is checked 16 clocks after it is driven.
 For all but the spec rows and the grid the expected bytes are the model's,
 and the model must equal MAME's `read_ctrl()` on every vector. `--all`
 then builds 15 planted faults (Swap ignored, a disc code, the dead zone's
 edge, a sector slope, stick y flipped, L beating R, no cancel on the ring,
 the face buttons' left and right swapped, Backspace, the keyboard on any
 slot type, the keyboard's sixth byte, any slot type a controller, no R3,
-the right stick in every mode, sticks on the Pocket); each must fail.
+the right stick in every mode, sticks on the Pocket, and `bitwise_sync`:
+the crossing before 0.0.5, every bit through two flip-flops on its own);
+each must fail.
+
+The crossing (`sim/work/tb_input/tear.txt`, 2,000 groups of 2-4 vectors:
+keyboard codes such as 1E and 21, button sets, Keypad Mode and Swap, the
+sticks, slot types, random words): the bench changes the inputs among a
+group's vectors at random clk_74a edges, 64 changes per group, each bit
+taking its new value at one of four moments within the clk_74a cycle (the
+routing of a clk_74a bus), and at every clk edge both bytes must be the
+bytes of one of the group's vectors. `intv_input.sv` loads the words as a
+whole (a toggle handshake), so no torn word reaches the bytes;
+`bitwise_sync` shows about 27,000 torn bytes over the 930,000 clk edges.

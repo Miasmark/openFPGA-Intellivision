@@ -788,13 +788,15 @@ intv_timing timing (
 
 ////////////////////////////////////////////////////////////////////////////////
 // Input (step 6): the Pocket's controllers and keyboard as the two hand
-// controllers on the PSG's ports (DESIGN.md 7). intv_input synchronises the
-// clk_74a words and the settings into clk_sys itself.
+// controllers on the PSG's ports (DESIGN.md 7). intv_input takes the
+// clk_74a words and the settings into clk_sys itself, as one word with a
+// toggle handshake (constraints in core_constraints.sdc).
 ////////////////////////////////////////////////////////////////////////////////
 
     wire    [7:0]   pad_r, pad_l;
 
 intv_input input_map (
+    .clk_74a    ( clk_74a ),
     .clk        ( clk_sys ),
     .cont1_key  ( cont1_key ),
     .cont1_joy  ( cont1_joy ),

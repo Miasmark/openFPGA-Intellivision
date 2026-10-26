@@ -23,17 +23,31 @@
 // hardware (DESIGN.md 7.1): codes from the service manual and the wiki,
 // equal to MAME handctrl.cpp:124-135 inverted.
 //
-// The Pocket's controller words come from clk_74a and are taken through
-// two flip-flops into clk; the bytes are registered (3 clocks in all).
-// The module holds no machine state (inputs are sampled again after a
-// restore, DESIGN.md 4.4), so it has no state port.
+// The Pocket's controller words and the two settings come from clk_74a
+// (the APF pad controller's registers and the bridge's settings) and cross
+// into clk (clk_sys) as one word with a toggle handshake (section
+// "Crossing" below): a clk_74a register holds a copy of all of them, a
+// request flag toggles, and clk loads the copy as a whole once the flag
+// has passed its two synchroniser flip-flops; the load toggles an
+// acknowledge flag back, and only when that has passed two clk_74a
+// flip-flops is the copy taken again. So clk only ever sees words that
+// were all present at one clk_74a edge, never a mixture of an old and a
+// new word (a bit-by-bit crossing could, for one clk cycle, show a press
+// nobody made: HID 1E '1' to 21 '4' read as 1F '2'). The latency from a
+// change to the bytes is at most about 7 clk + 4 clk_74a periods (220 ns);
+// the words change at most once a frame. core_constraints.sdc bounds the
+// copy's paths into clk (set_max_skew, set_net_delay), which the
+// asynchronous clock groups otherwise leave untimed. The module holds no
+// machine state (inputs are sampled again after a restore, DESIGN.md 4.4),
+// so it has no state port.
 //
 // SPDX-License-Identifier: MIT
 
 `default_nettype none
 
 module intv_input (
-    input  wire logic        clk,
+    input  wire logic        clk_74a,       // the words' and settings' clock
+    input  wire logic        clk,           // clk_sys
     input  wire logic [31:0] cont1_key,
     input  wire logic [31:0] cont1_joy,
     input  wire logic [31:0] cont2_key,
@@ -223,33 +237,64 @@ module intv_input (
     endfunction
 
     // -------------------------------------------------------------------
-    // Synchronisers and output
+    // Crossing: clk_74a -> clk as one word (toggle handshake)
     // -------------------------------------------------------------------
-    logic [31:0] k1 [2], j1 [2], k2 [2], j2 [2], k3 [2], j3 [2];
-    logic [15:0] t3 [2];
-    logic [1:0]  md [2];
-    logic        sw [2];
+    localparam int W = 6 * 32 + 16 + 2 + 1;
+    wire logic [W-1:0] in_74 = {cont1_key, cont1_joy, cont2_key, cont2_joy, cont3_key, cont3_joy,
+                                cont3_trig, kp_mode, swap};
+
+    // clk_74a side: the held copy, the request flag, the acknowledge's
+    // synchroniser. The copy is taken only when the acknowledge equals the
+    // request (clk has loaded the last copy), so it is stable from the
+    // request's toggle until clk has loaded it.
+    logic [W-1:0] hold_74;
+    logic         req_74;
+    logic [1:0]   ack_74;
+    // clk side: the request's synchroniser, the acknowledge flag, the word
+    logic [1:0]   req_s;
+    logic         ack;
+    logic [W-1:0] word;
+
+    initial begin
+        hold_74 = '0; req_74 = 1'b0; ack_74 = 2'b00;
+        req_s = 2'b00; ack = 1'b0; word = '0;
+    end
+
+    always_ff @(posedge clk_74a) begin
+        ack_74 <= {ack_74[0], ack};
+        if (ack_74[1] == req_74) begin
+            hold_74 <= in_74;
+            req_74  <= !req_74;
+        end
+    end
 
     always_ff @(posedge clk) begin
-        k1[0] <= cont1_key;  k1[1] <= k1[0];
-        j1[0] <= cont1_joy;  j1[1] <= j1[0];
-        k2[0] <= cont2_key;  k2[1] <= k2[0];
-        j2[0] <= cont2_joy;  j2[1] <= j2[0];
-        k3[0] <= cont3_key;  k3[1] <= k3[0];
-        j3[0] <= cont3_joy;  j3[1] <= j3[0];
-        t3[0] <= cont3_trig; t3[1] <= t3[0];
-        md[0] <= kp_mode;    md[1] <= md[0];
-        sw[0] <= swap;       sw[1] <= sw[0];
+        req_s <= {req_s[0], req_74};
+        if (req_s[1] != ack) begin
+            word <= hold_74;
+            ack  <= req_s[1];
+        end
     end
+
+    // -------------------------------------------------------------------
+    // Output
+    // -------------------------------------------------------------------
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [31:0] k1, j1, k2, j2, k3, j3;    // (k3: the type alone; synthesis drops unused bits)
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic [15:0] t3;
+    logic [1:0]  md;
+    logic        sw;
+    assign {k1, j1, k2, j2, k3, j3, t3, md, sw} = word;
 
     logic [7:0] p1, p2, kb;
     always_comb begin
         kb = 8'h00;
-        if (k3[1][31:28] == 4'd4)
-            kb = hid_code(j3[1][7:0]) | hid_code(j3[1][15:8]) | hid_code(j3[1][23:16])
-               | hid_code(j3[1][31:24]) | hid_code(t3[1][7:0]) | hid_code(t3[1][15:8]);
-        p1 = player(k1[1], j1[1], md[1]) | kb;
-        p2 = player(k2[1], j2[1], md[1]);
+        if (k3[31:28] == 4'd4)
+            kb = hid_code(j3[7:0]) | hid_code(j3[15:8]) | hid_code(j3[23:16])
+               | hid_code(j3[31:24]) | hid_code(t3[7:0]) | hid_code(t3[15:8]);
+        p1 = player(k1, j1, md) | kb;
+        p2 = player(k2, j2, md);
     end
 
     initial begin
@@ -257,8 +302,8 @@ module intv_input (
         pad_l = 8'hFF;
     end
     always_ff @(posedge clk) begin
-        pad_l <= ~(sw[1] ? p2 : p1);
-        pad_r <= ~(sw[1] ? p1 : p2);
+        pad_l <= ~(sw ? p2 : p1);
+        pad_r <= ~(sw ? p1 : p2);
     end
 
 endmodule

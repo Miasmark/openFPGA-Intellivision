@@ -134,6 +134,15 @@ sound on I2S; seed 1): 4,008 ALMs (`intv_psg` 333, `intv_input` 326),
 5,170 registers, 24 RAM blocks (140,108 bits), 20 DSP; worst setup
 `clk_sys` +0.757 ns (slow 85 C, as before), worst hold +0.038 ns
 (`clk_sys`, fast 0 C); no negative slack.
+0.0.5 (the input crossing as one word with a toggle handshake; seed 1):
+4,020 ALMs (`intv_input` 339), 5,195 registers, 24 RAM blocks, 20 DSP;
+worst setup `clk_sys` +0.754 ns (slow 85 C), `clk_74a` +2.880 ns; worst
+hold +0.038 ns (`clk_sys`, fast 0 C); no negative slack, no critical
+warnings. The crossing's `set_net_delay` (10 ns) is met with 6.321 ns to
+spare (slow model; panels "Input crossing net delay" in
+`ap_core.sta.rpt`, from `core/sta_reports.tcl`); the metastability report
+finds 26 synchronizer chains (173 before: the old crossing's per-bit
+pairs).
 
 ## Simulation
 

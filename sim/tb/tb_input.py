@@ -32,6 +32,16 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
      the expected byte is that table's entry.
 For classes 1-7 the expected bytes are the model's, and the model with
 this core's code table must equal MAME's read_ctrl() for every vector.
+
+The crossing (sim/work/tb_input/tear.txt): 2,000 groups of 2-4 vectors
+whose bit-by-bit mixtures give other bytes (keyboard usage codes such as
+1E '1' and 21 '4', button sets, Keypad Mode 1 and 2, Swap, slot types,
+everything random). tb_input.sv changes the inputs among a group's
+vectors at random clk_74a edges, each bit at its own moment within the
+clk_74a cycle, and at every clk edge both bytes must be one of the group's
+vectors' bytes (the model's): no torn word may reach the pad bytes. The
+plant bitwise_sync (the step-6 crossing before 0.0.5: two flip-flops per
+bit) must fail there.
 """
 import argparse
 import os
@@ -300,6 +310,68 @@ def generate(path):
     return counts, problems
 
 
+def generate_tear(path, groups=2000):
+    """Groups of vectors for the crossing check: 'n' then n vector lines."""
+    rng = random.Random(66)
+    hid_keys = sorted(m.HID)
+    out = []
+    kinds = {}
+
+    def vline(v):
+        r, l = m.ports(v)
+        return vec_line(0, v, r, l).split(' ', 1)[1], (r, l)
+
+    def btn(t=None):
+        return ((rng.choice((1, 2, 3)) if t is None else t) << 28) | rng.getrandbits(16)
+
+    g = 0
+    while g < groups:
+        kind = g % 6
+        n = rng.randint(2, 4)
+        vs = []
+        if kind == 0:       # keyboard: usage codes in one or two report bytes
+            pos = rng.sample(range(6), rng.randint(1, 2))
+            for _ in range(n):
+                cs = [0] * 6
+                for p_ in pos:
+                    cs[p_] = rng.choice(hid_keys)
+                vs.append(vec(key3=4 << 28, joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24,
+                              trig3=cs[4] | cs[5] << 8))
+            if g % 12 == 0:  # the review's example: 1E '1' and 21 '4'
+                vs = [vec(key3=4 << 28, joy3=0x1E), vec(key3=4 << 28, joy3=0x21)]
+        elif kind == 1:     # buttons on both players
+            for _ in range(n):
+                vs.append(vec(key1=btn(), key2=btn(), mode=rng.getrandbits(2), swap=g & 1))
+        elif kind == 2:     # the settings: Keypad Mode 1 and 2, Swap
+            k1, k2 = btn(1) | (1 << m.R1), btn(2)
+            j1 = rng.getrandbits(32)
+            vs = [vec(key1=k1, joy1=j1, key2=k2, mode=md, swap=sw) for md, sw in ((1, 0), (2, 1), (1, 1), (2, 0))][:n]
+        elif kind == 3:     # sticks (docked analog)
+            for _ in range(n):
+                vs.append(vec(key1=btn(3), joy1=rng.getrandbits(32), key2=btn(3), joy2=rng.getrandbits(32),
+                              mode=2, swap=g & 1))
+        elif kind == 4:     # slot types change under the same buttons
+            b = rng.getrandbits(16)
+            for _ in range(n):
+                vs.append(vec(key1=(rng.randrange(16) << 28) | b, key3=(rng.choice((0, 1, 4)) << 28),
+                              joy3=0x1E1F2021, mode=rng.getrandbits(2)))
+        else:               # everything random
+            for _ in range(n):
+                vs.append(vec(key1=rng.getrandbits(32), joy1=rng.getrandbits(32), key2=rng.getrandbits(32),
+                              joy2=rng.getrandbits(32), key3=rng.getrandbits(32), joy3=rng.getrandbits(32),
+                              trig3=rng.getrandbits(16), mode=rng.getrandbits(2), swap=rng.getrandbits(1)))
+        lines = [vline(v) for v in vs]
+        if len(set(e for _, e in lines)) < 2:
+            continue
+        out.append('%x' % len(lines))
+        out += [ln for ln, _ in lines]
+        kinds[kind] = kinds.get(kind, 0) + 1
+        g += 1
+    with open(path, 'w') as f:
+        f.write('\n'.join(out) + '\n')
+    return kinds
+
+
 def build(work, rtl_dir, verilator, strict=True):
     obj = os.path.join(work, 'obj')
     os.makedirs(work, exist_ok=True)
@@ -320,16 +392,17 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_input')
 
 
-def run(binary, vectors, log):
+def run(binary, vectors, tear, log):
     with open(log, 'w') as f:
-        subprocess.run([binary, '+vec=' + vectors], stdout=f, stderr=subprocess.STDOUT)
+        subprocess.run([binary, '+vec=' + vectors, '+tear=' + tear], stdout=f, stderr=subprocess.STDOUT)
     text = open(log).read()
     return 'TB_INPUT pass' in text.splitlines(), text
 
 
-# Planted faults: (name, file, from, to); each must make the bench fail.
+# Planted faults: (name, file, from, to), or (name, file, [(from, to), ...], None); each must make the
+# bench fail.
 PLANTS = [
-    ('swap_ignored', 'intv_input.sv', 'pad_l <= ~(sw[1] ? p2 : p1);', 'pad_l <= ~p1;'),
+    ('swap_ignored', 'intv_input.sv', 'pad_l <= ~(sw ? p2 : p1);', 'pad_l <= ~p1;'),
     ('disc_ssw', 'intv_input.sv', "4'd9:  disc_code = 8'h11;", "4'd9:  disc_code = 8'h19;"),
     ('deadzone_le', 'intv_input.sv', '< 17\'(DZ_DISC * DZ_DISC)', '<= 17\'(DZ_DISC * DZ_DISC)'),
     ('slope_171', 'intv_input.sv', "b171  = 18'(b) * 18'd171;", "b171  = 18'(b) * 18'd180;"),
@@ -339,12 +412,17 @@ PLANTS = [
      "uu = u;  dd = d & ~u;  ll = l & ~r;  rr = r & ~l;\n        unique case ({uu, dd, ll, rr})\n            4'b1010: ring_code"),
     ('face_lr_swapped', 'intv_input.sv', 'ring_code(bx, bb, by, ba)', 'ring_code(bx, bb, ba, by)'),
     ('backspace', 'intv_input.sv', "c == 8'h2A", "c == 8'h2B"),
-    ('kbd_any_type', 'intv_input.sv', "k3[1][31:28] == 4'd4", "k3[1][31:28] != 4'd0"),
-    ('kbd_5_bytes', 'intv_input.sv', ' | hid_code(t3[1][15:8]);', ';'),
+    ('kbd_any_type', 'intv_input.sv', "k3[31:28] == 4'd4", "k3[31:28] != 4'd0"),
+    ('kbd_5_bytes', 'intv_input.sv', ' | hid_code(t3[15:8]);', ';'),
     ('type_any', 'intv_input.sv', "(t == 4'd1 || t == 4'd2 || t == 4'd3) ? p", "(t != 4'd0) ? p"),
     ('no_r3', 'intv_input.sv', "| (r3 ? key_code(4'd5) : 8'h00)", ''),
     ('rstick_any_mode', 'intv_input.sv', "if (mode == 2'd2 && an)", 'if (an)'),
     ('stick_on_pocket', 'intv_input.sv', "an = t == 4'd3;", "an = t[1];"),
+    # the crossing as it was before 0.0.5: every bit through two clk flip-flops on its own
+    ('bitwise_sync', 'intv_input.sv',
+     [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),
+      ("        if (req_s[1] != ack) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
+       "        w_s  <= in_74;\n        word <= w_s;\n        ack  <= req_s[1];\n")], None),
 ]
 
 
@@ -372,6 +450,10 @@ def main():
           f'{sum(counts.values())} vectors {dict(sorted(counts.items()))}: model = MAME read_ctrl on every one, '
           f'spec rows and MAME analog cells as expected')
 
+    tear = os.path.join(work, 'tear.txt')
+    kinds = generate_tear(tear)
+    print(f'  ok    {sum(kinds.values())} crossing groups {dict(sorted(kinds.items()))}')
+
     print('-- RTL')
     binary = os.path.join(work, 'obj', 'tb_input')
     if not a.no_build:
@@ -379,7 +461,7 @@ def main():
     if not binary:
         fails.append('build')
     else:
-        ok, text = run(binary, vectors, os.path.join(work, 'run.log'))
+        ok, text = run(binary, vectors, tear, os.path.join(work, 'run.log'))
         print('\n'.join(ln for ln in text.splitlines() if ln.strip() and not ln.startswith('- ')))
         if not ok:
             fails.append('RTL')
@@ -397,17 +479,21 @@ def main():
                 shutil.copy(os.path.join(CORE, f), os.path.join(d, 'rtl', f))
             p = os.path.join(d, 'rtl', fn)
             s = open(p).read()
-            if s.count(frm) != 1:
-                print(f'  FAIL  PLANT {name}: pattern found {s.count(frm)} times')
+            subs = frm if isinstance(frm, list) else [(frm, to)]
+            bad = [x for x, _ in subs if s.count(x) != 1]
+            if bad:
+                print(f'  FAIL  PLANT {name}: pattern found {s.count(bad[0])} times')
                 fails.append('plant ' + name)
                 continue
-            open(p, 'w').write(s.replace(frm, to))
+            for x, y in subs:
+                s = s.replace(x, y)
+            open(p, 'w').write(s)
             b = build(d, os.path.join(d, 'rtl'), verilator, strict=False)
             if not b:
                 print(f'  FAIL  PLANT {name}: build failed')
                 fails.append('plant ' + name)
                 continue
-            ok, text = run(b, vectors, os.path.join(d, 'run.log'))
+            ok, text = run(b, vectors, tear, os.path.join(d, 'run.log'))
             first = next((ln.strip()[6:90] for ln in text.splitlines() if ln.strip().startswith('FAIL')), '')
             if ok:
                 print(f'  FAIL  PLANT {name}: not caught')

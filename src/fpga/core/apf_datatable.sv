@@ -12,6 +12,10 @@
 //     CRC and length"). cart_len is set one clk_74a before len_valid and
 //     then held, so a clk_sys synchroniser on len_valid alone is enough.
 //     len_valid falls with dataslot_allcomplete (a new slot request).
+//   - (build step 8) in the same scan, the CFG slot's size (CFG_ID, 0x101):
+//     cfg_len and cfg_inlist (0 when the table has no such entry), set with
+//     cart_len; the loader cuts the CFG text at it (the bridge pads files to
+//     32-bit words);
 //   - latches the size the host gives with "data slot request write"
 //     (0x0082, core_bridge_cmd's dataslot_requestwrite_size) for the
 //     cartridge slot, and checks the table's length against it. No core in
@@ -36,6 +40,7 @@
 
 module apf_datatable #(
     parameter logic [31:0] SLOT_ID = 32'h0000_0100,
+    parameter logic [31:0] CFG_ID  = 32'h0000_0101,
     parameter int          JLP_IDX = 6,
     parameter int          ENTRIES = 16        // pairs scanned
 ) (
@@ -52,20 +57,23 @@ module apf_datatable #(
 
     output logic [31:0]      cart_len,
     output logic [1:0]       len_chk,         // see above; set with cart_len
+    output logic [31:0]      cfg_len,
+    output logic             cfg_inlist,
     output logic             len_valid
 );
 
-    typedef enum logic [2:0] {D_IDLE, D_ID, D_IDW, D_SIZE, D_SIZEW, D_SET} dstate_t;
+    typedef enum logic [2:0] {D_IDLE, D_ID, D_IDW, D_SIZEW, D_NEXT, D_SET} dstate_t;
     dstate_t     st = D_IDLE;
     logic        ac_d = 1'b0;
     logic [4:0]  i = 5'd0;
     logic [1:0]  w = 2'd0;
     logic        req_seen = 1'b0;
     logic [31:0] req_len = 32'd0;
+    logic        is_cfg = 1'b0, got_cart = 1'b0;
 
     initial begin
         dt_addr = 10'(2 * JLP_IDX + 1); dt_wren = 1'b0; dt_data = 32'd0;
-        cart_len = 32'd0; len_chk = 2'd0; len_valid = 1'b0;
+        cart_len = 32'd0; len_chk = 2'd0; len_valid = 1'b0; cfg_len = 32'd0; cfg_inlist = 1'b0;
     end
 
     always_ff @(posedge clk) begin
@@ -85,6 +93,9 @@ module apf_datatable #(
                 dt_wren <= 1'b1;
                 if (allcomplete && !ac_d) begin
                     i  <= 5'd0;
+                    got_cart <= 1'b0;
+                    cfg_len <= 32'd0;
+                    cfg_inlist <= 1'b0;
                     st <= D_ID;
                 end
             end
@@ -94,25 +105,36 @@ module apf_datatable #(
                 st <= D_IDW;
             end
             D_IDW: if (w != 2'd0) w <= w - 2'd1;
-                   else if (dt_q == SLOT_ID) begin
+                   else if (dt_q == SLOT_ID || dt_q == CFG_ID) begin
+                       is_cfg  <= dt_q == CFG_ID;
                        dt_addr <= {4'd0, i, 1'b1};
                        w  <= 2'd3;
                        st <= D_SIZEW;
-                   end else if (i == 5'(ENTRIES - 1)) begin
-                       // no cartridge slot in the table: the 0x0082 size, if any
-                       cart_len <= req_seen ? req_len : 32'd0;
-                       len_chk  <= req_seen ? 2'd3 : 2'd0;
-                       st <= D_SET;
-                   end else begin
-                       i  <= i + 5'd1;
-                       st <= D_ID;
-                   end
+                   end else
+                       st <= D_NEXT;
             D_SIZEW: if (w != 2'd0) w <= w - 2'd1;
                      else begin
-                         cart_len <= dt_q;
-                         len_chk  <= !req_seen ? 2'd0 : dt_q == req_len ? 2'd1 : 2'd2;
-                         st <= D_SET;
+                         if (is_cfg) begin
+                             cfg_len    <= dt_q;
+                             cfg_inlist <= 1'b1;
+                         end else if (!got_cart) begin
+                             got_cart <= 1'b1;
+                             cart_len <= dt_q;
+                             len_chk  <= !req_seen ? 2'd0 : dt_q == req_len ? 2'd1 : 2'd2;
+                         end
+                         st <= D_NEXT;
                      end
+            D_NEXT: if (i == 5'(ENTRIES - 1)) begin
+                        if (!got_cart) begin
+                            // no cartridge slot in the table: the 0x0082 size, if any
+                            cart_len <= req_seen ? req_len : 32'd0;
+                            len_chk  <= req_seen ? 2'd3 : 2'd0;
+                        end
+                        st <= D_SET;
+                    end else begin
+                        i  <= i + 5'd1;
+                        st <= D_ID;
+                    end
             D_SET: begin
                 len_valid <= allcomplete;
                 st <= D_IDLE;

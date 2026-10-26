@@ -100,7 +100,7 @@ import intvcart as m        # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
-       'intv_loader.sv', 'intv_media.sv']
+       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv']
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
 FRAME = isys.FRAME
@@ -127,7 +127,72 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           # step 6: our PSG test (sim/testroms/psgtest.asm)
           ('psgtest', None, 'psgtest.asm', 22, (0x5A, 0xC3), 'stic'),
           ('cartram', ('forced', 0xCE8FC699, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic'),
-          ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic')]
+          ('cartpaged', ('forced', 0xC2063C08, 49152), 'carttest.asm', 10, (0xFF, 0xFF), 'stic'),
+          # step 8: our cart8test.asm on an Intellicart .rom and on a BIN + CFG, both built
+          # from our sources (sim/testroms/step8/build_images.py, as1600)
+          ('cartbank', ('step8', 'rombank'), 'cart8test.asm', 10, (0xFF, 0xFF), 'stic'),
+          ('cartcfg', ('step8', 'cfgmap'), 'cart8test.asm', 10, (0xFF, 0xFF), 'stic')]
+# a cartridge file's CFG (step 8): the model and the bench load it with the image
+CFG_OF = {}
+
+
+def step8_image(name, work):
+    """(image path, CFG path or None) of a step-8 test image, written into work."""
+    sys.path.insert(0, os.path.join(ROOT, 'sim', 'testroms', 'step8'))
+    import build_images
+    import cartfmt
+    for im in build_images.images():
+        if im['name'] == name:
+            path = os.path.join(work, name + ('.rom' if cartfmt.is_rom(im['data']) else '.bin'))
+            with open(path, 'wb') as f:
+                f.write(im['data'])
+            cpath = None
+            if im['cfg'] is not None:
+                cpath = os.path.join(work, name + '.cfg')
+                with open(cpath, 'wb') as f:
+                    f.write(im['cfg'])
+            CFG_OF[path] = cpath
+            return path, cpath
+    sys.exit('no step-8 image %s' % name)
+
+
+def cart8_selfcheck(e, cart_path):
+    """cart8test.asm's results against the image itself (not the model): section 2's
+    windows after $0046 = $10 read the Intellicart words at $1000/$1001 (rombank), after
+    $0046 = $80 the RAM section 1 wrote at $8000; the 8-bit RAM keeps the low byte; past the
+    CFG's 8-bit RAM ($9003, cfgmap) nothing answers. Section 3's last four writes must not
+    select a page: their reads equal those after the selects went back to page 0."""
+    import cartfmt
+    ram = e.snaps[e.ncyc]['sysram']
+    res = ram[0x10:]                       # $0210 on
+    data = open(cart_path, 'rb').read()
+    probs = []
+    s1 = res[:14]
+    v = [(0xA55A + k * 0x1111) & 0xFFFF for k in range(14)]
+    if not cartfmt.is_rom(data):
+        want = {0: v[0], 1: v[1], 2: 0xFFFF, 3: 0xFFFF, 5: v[5] & 0xFF, 6: v[6] & 0xFF, 7: 0xFFFF,
+                8: v[8], 9: 0x5000 ^ 0x1111, 10: 0xFFFF, 11: 0xFFFF, 12: 0xD150 ^ 0x4444}
+    else:
+        want = {0: v[0], 1: v[1], 2: v[2], 3: v[3] & 0xFF, 4: v[4] & 0xFF, 5: 0xFFFF, 11: 0xFFFF}
+    for k, w in want.items():
+        if s1[k] != w:
+            probs.append('section 1 word %d = $%04X, want $%04X' % (k, s1[k], w))
+    s3 = res[14 + 8 * 5:14 + 8 * 5 + 13 * 6]
+    for k in range(9, 13):
+        if s3[6 * k:6 * k + 6] != s3[6 * 8:6 * 8 + 6]:
+            probs.append('section 3 write %d selected a page' % (k + 1))
+    if cartfmt.is_rom(data):
+        p = cartfmt.parse_rom(data)
+        icart = dict(p.writes)
+        s2 = res[14:14 + 8 * 5]
+        if (s2[0], s2[1]) != (icart.get(0x1000), icart.get(0x1001)):
+            probs.append('bank $10: $6000/$6001 = $%04X/$%04X, image $1000/$1001 = %s' % (
+                s2[0], s2[1], (icart.get(0x1000), icart.get(0x1001))))
+        if s2[3 * 5] != v[0]:
+            probs.append('bank $80: $6000 = $%04X, want the RAM word $A55A' % s2[3 * 5])
+        if s2[4 * 5 + 3] != v[3] & 0xFF:
+            probs.append('bank $88 ($6800): $%04X, want the 8-bit cell $%02X' % (s2[4 * 5 + 3], v[3] & 0xFF))
+    return probs
 # the step-4 frame gate: (name, library file or None, pictures)
 SCREENS = [('nocart', None, 600),
            ('astrosmash', 'Astrosmash (USA, Europe).zip', 700),
@@ -146,6 +211,10 @@ SCREENS = [('nocart', None, 600),
            ('dracula', 'Dracula (USA, Europe).zip', 700),
            ('dragonfire', 'Dragonfire (USA, Europe).zip', 700),
            ('icetrek', 'Ice Trek (USA, Europe).zip', 700),
+           # step 8: our Pocket test cartridges (IntyBASIC; BIN + CFG with pages and RAM,
+           # .rom with bank windows and RAM) with the real EXEC, through their checks
+           ('cart8pages', ('step8', 'cart8pages'), 200),
+           ('cart8bank', ('step8', 'cart8bank'), 200),
            ('tropicaltrouble', 'Tropical Trouble (USA, Europe).zip', 700)]
 # the play bench (step 6, --play): each game started with a key press and
 # played for a few seconds with the same scripted keys on both hand
@@ -235,7 +304,7 @@ def capture(bus):
 def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic'):
     """The model's expected log: bus phases, step starts, handshake and mode
     latch changes, state at the dumps, pictures and STIC logs."""
-    cart = isys.load_cart(cart_path)
+    cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
     bus.vid.mobs = STIC_MOBS
@@ -351,7 +420,7 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
     address)] of scratchpad or System RAM, read at the first step start in
     that frame (cycle >= frame * FRAME); their values are returned in
     model_stream.peeked (a dict)."""
-    cart = isys.load_cart(cart_path)
+    cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode)
     bus.vid.mobs = STIC_MOBS
@@ -658,10 +727,13 @@ def compare(name, run, got, exp):
         checks += [('psg %d' % i, d[(SS['psg'], i)], st['psg'][i]) for i in range(14)]
         checks += [('psg %d' % (14 + i), d[(SS['psg'], 14 + i)], st['psgx'][i]) for i in range(7)]
         sel = st['sel']
-        checks.append(('page selects 0-7', d[(SS['cart'], 19)],
+        checks.append(('page selects 0-7', d[(SS['cart'], 5)],
                        sum(sel[i] << 4 * i for i in range(8))))
-        checks.append(('page selects 8-15', d[(SS['cart'], 20)],
+        checks.append(('page selects 8-15', d[(SS['cart'], 6)],
                        sum(sel[8 + i] << 4 * i for i in range(8))))
+        bank = st['bank']
+        checks += [('bank registers %d-%d' % (4 * k, 4 * k + 3), d[(SS['cart'], 7 + k)],
+                    sum(bank[4 * k + i] << 8 * i for i in range(4))) for k in range(8)]
         checks.append(('bus: reset vector flag, hold', d[(SS['bus'], 0)] >> 16 & 5, 0))
         checks += [('row buffer %d' % i, d[(SS['row'], i)], st['fifo'][i]) for i in range(20)]
         checks.append(('FIFO counter', d[(SS['stic'], 0x35)] & 0x1FF, st['counter']))
@@ -682,6 +754,8 @@ def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pad
            '+busrq=%d' % (exp.mode != 'none')] + args
     if cart_path:
         cmd.append('+cart=' + cart_path)
+        if CFG_OF.get(cart_path):
+            cmd.append('+cfg=' + CFG_OF[cart_path])
     with open(os.path.join(work, 'stdout_%s.txt' % tag), 'w') as f:
         r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout, cwd=work)
     if r.returncode != 0 or not os.path.exists(log):
@@ -829,6 +903,8 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
 def screen_cart(work, name, zipname, lib):
     if not zipname:
         return None
+    if isinstance(zipname, tuple):            # a step-8 image from our sources
+        return step8_image(zipname[1], work)[0]
     cart = os.path.join(work, 'screen_%s.bin' % name)
     with open(cart, 'wb') as f:
         f.write(m.load_image_bytes(os.path.join(lib, zipname)))
@@ -861,6 +937,8 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
            '+dump=%d' % DUMP1, '+log=' + log, '+pic=' + pic, '+bushash=1', '+busrq=1']
     if cart:
         cmd.append('+cart=' + cart)
+        if CFG_OF.get(cart):
+            cmd.append('+cfg=' + CFG_OF[cart])
     if presses:
         kf = os.path.join(work, 'screen_%s.keys' % name)
         with open(kf, 'w') as f:
@@ -1350,7 +1428,9 @@ def main():
     try:
         for name, zipname, prog, nframes, pad, smode in imgs:
             cart = None
-            if isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
+            if isinstance(zipname, tuple) and zipname[0] == 'step8':
+                cart, _ = step8_image(zipname[1], work)
+            elif isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
                 cart = os.path.join(work, name + '.bin')
                 with open(cart, 'wb') as f:
                     f.write(synth_image.forced(zipname[1], zipname[2]))
@@ -1402,6 +1482,12 @@ def main():
                     ram[0x106], ram[0x103], '' if ok else ' (last in frame %d) FAIL' % ram[0x105]))
                 if not ok:
                     fails.append('STICMOB_SELFCHECK')
+            if prog == 'cart8test.asm':
+                p8 = cart8_selfcheck(e, cart)
+                print('  cart8test self-check: %s' % ('the image\'s words, the RAM and the windows as written'
+                                                      if not p8 else 'FAIL: ' + '; '.join(p8)))
+                if p8:
+                    fails.append('CART8_SELFCHECK ' + name)
             if prog == 'systest.asm':
                 p7 = check_sect7(e, pr.symbols)
                 print('  systest section 7: %s' % ('every probe in its slot' if not p7 else '; '.join(p7)))

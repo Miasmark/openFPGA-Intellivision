@@ -618,9 +618,12 @@ core_bridge_cmd icb (
     wire    [31:0]  cart_len;
     wire    [1:0]   cart_len_chk;
     wire            cart_len_valid;
+    wire    [31:0]  cfg_len;
+    wire            cfg_inlist;
 
 apf_datatable #(
     .SLOT_ID    ( {16'd0, SLOT_CART} ),
+    .CFG_ID     ( {16'd0, SLOT_CFG} ),
     .JLP_IDX    ( 6 )
 ) dtab (
     .clk        ( clk_74a ),
@@ -634,6 +637,8 @@ apf_datatable #(
     .dt_q       ( datatable_q ),
     .cart_len   ( cart_len ),
     .len_chk    ( cart_len_chk ),
+    .cfg_len    ( cfg_len ),
+    .cfg_inlist ( cfg_inlist ),
     .len_valid  ( cart_len_valid )
 );
 
@@ -643,8 +648,8 @@ apf_datatable #(
 //
 // agg23's data loader (pocket_utils/, MIT) turns the bridge's 32-bit writes
 // below 0x10000000 into bytes on clk_sys, one write strobe per byte;
-// intv_media (in intv_core) takes them (DESIGN.md 5; the CFG slot is
-// counted only until step 8). Bridge accesses at 0x50000000 are the save
+// intv_media (in intv_core) takes them (DESIGN.md 5; the CFG slot goes to
+// the loader's CFG parser, build step 8). Bridge accesses at 0x50000000 are the save
 // state's (intv_ss_ctl), not the loader's.
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -739,6 +744,8 @@ intv_core machine_side (
     .len_valid          ( cart_len_valid ),
     .cart_len           ( cart_len ),
     .len_chk            ( cart_len_chk ),
+    .cfg_len            ( cfg_len ),
+    .cfg_inlist         ( cfg_inlist ),
     .slot_st            ( slot_st ),
     .len_st             ( cart_len_st ),
     .machine_reset      ( machine_reset ),

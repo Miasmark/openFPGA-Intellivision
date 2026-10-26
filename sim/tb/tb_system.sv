@@ -102,7 +102,8 @@ module tb_system;
     logic [27:0] ld_addr = 28'd0;
     logic [7:0]  ld_data = 8'd0;
     logic        len_valid = 1'b0;
-    logic [31:0] cart_len = 32'd0;
+    logic [31:0] cart_len = 32'd0, cfg_len = 32'd0;
+    logic        cfg_inlist = 1'b0;
     logic        ss_en = 1'b0;
     logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
     logic        aux_req = 1'b0, aux_we = 1'b0;
@@ -120,15 +121,18 @@ module tb_system;
         .clk, .reset, .run, .ce_pix, .hcnt, .vcnt, .vline, .live, .ce_stic,
         .ce_psg, .ce_cpu, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_t));
 
-    wire logic        ready, busy, hit;
-    wire logic [4:0]  err;
+    wire logic        ready, busy, hit, noss;
+    wire logic [5:0]  err;
+    wire logic [7:0]  fmt_err;
+    wire logic [31:0] cfg_crc;
+    wire logic [63:0] pg_sel;
     wire logic [11:0] slot_st;
     wire logic [31:0] crc;
     wire logic [16:0] words;
     wire logic [7:0]  layout, flags;
     wire logic        c_req, c_we, c_ack, c_hit, c_paged;
     wire logic [15:0] c_addr, c_wdata, c_rdata;
-    wire logic [1:0]  c_kind;
+    wire logic [3:0]  c_attr;
     wire logic        aux_ack;
     wire logic [15:0] aux_rdata;
     wire logic [11:0] exec_addr;
@@ -142,15 +146,16 @@ module tb_system;
 
     intv_media #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) media (
         .clk, .reset, .mreset,
-        .ld_wr, .ld_addr, .ld_data, .len_valid, .cart_len, .len_chk(2'd0),
+        .ld_wr, .ld_addr, .ld_data, .len_valid, .cart_len, .len_chk(2'd0), .cfg_len, .cfg_inlist,
         .bus_req(c_req), .bus_we(c_we), .bus_addr(c_addr), .bus_wdata(c_wdata),
-        .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_kind(c_kind),
-        .bus_paged(c_paged),
+        .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_attr(c_attr),
+        .bus_paged(c_paged), .pg_rst(64'd0), .pg_sel,
         .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q,
         .ivoice_addr(11'd0), .ivoice_q,
-        .ready, .busy, .err, .len_st(), .slot_st, .crc, .words, .layout, .flags, .hit,
+        .ready, .busy, .err, .fmt_err, .len_st(), .slot_st, .crc, .words, .layout, .flags, .hit,
+        .cfg_crc, .noss,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_c),
         .sram_a, .sram_dq_out, .sram_dq_oe, .sram_dq_in, .sram_oe_n, .sram_we_n,
         .sram_ub_n, .sram_lb_n);
@@ -191,7 +196,7 @@ module tb_system;
     wire logic [31:0] ss_rdata = ssr_t | ssr_m | ssr_c;
 
     // ------------------------------------------------------------ logging
-    string exec_f, grom_f, cart_f, log_f;
+    string exec_f, grom_f, cart_f, cfg_f, log_f;
     longint ncyc = 1000, rtcyc = -1, rton = 20000, dumpc = -1;
     int rt = 0, rtsub = 0;
     int  fd;
@@ -354,7 +359,7 @@ module tb_system;
     // module id, word count (the order is the write order)
     localparam int NMOD = 13;
     int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 21, 20, 64};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64};
     logic [31:0] saved [NMOD][256];
     logic [3:0]  pbuf_saved [2][45360];
 
@@ -556,8 +561,14 @@ module tb_system;
             has_cart = 1'b1;
         end
         $fdisplay(fd, "L cart %0d", n);
+        cart_len = n;
+        if ($value$plusargs("cfg=%s", cfg_f)) begin
+            load_file(cfg_f, 4'd1, n);
+            cfg_len = n; cfg_inlist = 1'b1;
+            $fdisplay(fd, "L cfg %0d", n);
+        end
         @(negedge clk);
-        cart_len = n; len_valid = 1'b1;
+        len_valid = 1'b1;
         to = 0;
         while (!(ready && !busy) && to < 4000000) begin @(negedge clk); to++; end
         if (to >= 4000000) fail("loader not ready");

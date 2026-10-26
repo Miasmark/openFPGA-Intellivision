@@ -9,9 +9,15 @@ CRC32 over exactly the file length (data table size, not the 32-bit bridge strob
 from cart_layouts.hex -> every CPU read goes through the page table.
 An unknown CRC gets layout 1 (the default map) cut at the image length.
 
+Build step 8 (docs/CARTFORMATS.md): IMAGE may also be an Intellicart .rom, and map, read
+and fmt take --cfg CFG (BIN + CFG); those go through tools/mapper/cartfmt.py, the model of
+the step-8 loader (any format: the 4,096-entry map table, page selects, bank registers).
+
 Commands (images are read in place, from a file or a .zip; nothing is copied):
-  map IMAGE                 table entry, flags, page table, mapped-space CRC
+  map IMAGE [--cfg CFG]     table entry, flags, page table, mapped-space CRC
   read IMAGE ADDR [COUNT]   words the cartridge answers at ADDR (---- = not answered)
+       [--cfg CFG]
+  fmt IMAGE [--cfg CFG]     the step-8 loader's verdict: format, refusal, map table blocks
   dump IMAGE OUT            the 64K-word space (big-endian, $FFFF where not answered)
                             plus extra pages, exactly the bytes the mapped-space CRC covers;
                             OUT is derived from a game: keep it out of the repository
@@ -125,7 +131,37 @@ def load(path):
     return data, words, crc
 
 
+def load8(a, tab):
+    """cartfmt's Loaded and MapCart for a.image (and a.cfg)."""
+    import cartfmt
+    data = m.load_image_bytes(a.image)
+    cfg = open(a.cfg, 'rb').read() if getattr(a, 'cfg', None) else None
+    ld = cartfmt.load(data, cfg, tab, tab.pages)
+    return cartfmt, ld, cartfmt.MapCart(ld)
+
+
+def cmd_fmt(a, tab):
+    cf, ld, cart = load8(a, tab)
+    print('image      %s%s' % (a.image, (' + ' + a.cfg) if a.cfg else ''))
+    for k, v in ld.summary().items():
+        print('%-10s %s' % (k, v))
+    if ld.err:
+        print('refused    %s' % cf.ERR_NAMES.get(ld.err, 'length / size checks'))
+        return
+    for n in ld.notes:
+        print('note       %s' % n)
+    for r in range(16):
+        for y in range(16):
+            row = [ld.table[(r << 8) | (y << 4) | b] for b in range(16)]
+            if any(row):
+                print('  $%X000 page %2d: %s' % (r, y, ' '.join(cf.ent_text(e) for e in row)))
+    print('assembled  %d blocks' % len(ld.asm))
+    print('mapped     %08X (mapped-space CRC)' % cart.mapped_space_crc())
+
+
 def cmd_map(a, tab):
+    if a.cfg or m.load_image_bytes(a.image)[:1] == b'\xa8':
+        return cmd_fmt(a, tab)
     data, words, crc = load(a.image)
     cart, lid, flags, hit = tab.model(words, crc)
     print('image      %s' % a.image)
@@ -141,8 +177,7 @@ def cmd_map(a, tab):
 
 
 def cmd_read(a, tab):
-    data, words, crc = load(a.image)
-    cart, lid, flags, hit = tab.model(words, crc)
+    _, _, cart = load8(a, tab)
     addr = int(a.addr, 16)
     n = int(a.count, 0)
     for row in range(addr, addr + n, 8):
@@ -328,14 +363,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--root', default=ROOT, help='repository root (tables are read from it)')
     sub = ap.add_subparsers(dest='cmd', required=True)
-    p = sub.add_parser('map'); p.add_argument('image')
+    p = sub.add_parser('map'); p.add_argument('image'); p.add_argument('--cfg')
     p = sub.add_parser('read'); p.add_argument('image'); p.add_argument('addr'); p.add_argument('count', nargs='?', default='16')
+    p.add_argument('--cfg')
+    p = sub.add_parser('fmt'); p.add_argument('image'); p.add_argument('--cfg')
     p = sub.add_parser('dump'); p.add_argument('image'); p.add_argument('out')
     p = sub.add_parser('evidence'); p.add_argument('image'); p.add_argument('spec', nargs='+')
     p = sub.add_parser('check'); p.add_argument('dir'); p.add_argument('--out'); p.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
     tab = Tables(a.root)
-    dict(map=cmd_map, read=cmd_read, dump=cmd_dump, evidence=cmd_evidence, check=cmd_check)[a.cmd](a, tab)
+    dict(map=cmd_map, read=cmd_read, fmt=cmd_fmt, dump=cmd_dump, evidence=cmd_evidence,
+         check=cmd_check)[a.cmd](a, tab)
 
 
 if __name__ == '__main__':

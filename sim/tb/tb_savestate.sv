@@ -11,6 +11,7 @@
 //
 // Plusargs
 //   +exec=F +grom=F +cart=F   system ROMs and cartridge (as tb_system.sv)
+//   +cfg=F                    the cartridge's CFG (build step 8)
 //   +pads=RRLL +keys=F        hand controllers (tb_system.sv: "k RRLL" from
 //                             frame k on, k x 14,934 machine cycles)
 //   +cycles=N                 end at machine cycle N
@@ -162,7 +163,8 @@ module tb_savestate;
     logic [27:0] ld_addr = 28'd0;
     logic [7:0]  ld_data = 8'd0;
     logic        len_valid = 1'b0;
-    logic [31:0] cart_len = 32'd0;
+    logic [31:0] cart_len = 32'd0, cfg_len = 32'd0;
+    logic        cfg_inlist = 1'b0;
     logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic [11:0] slot_st;
@@ -194,7 +196,8 @@ module tb_savestate;
     intv_core #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) core (
         .clk(clk), .timing_reset(treset), .hold_req(hold_req),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data), .len_valid(len_valid),
-        .cart_len(cart_len), .len_chk(2'd0), .slot_st(slot_st), .len_st(len_st),
+        .cart_len(cart_len), .len_chk(2'd0), .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
+        .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
@@ -627,7 +630,7 @@ module tb_savestate;
     endtask
 
     // ------------------------------------------------------------ the run
-    string exec_f, grom_f, cart_f, log_f, script_f;
+    string exec_f, grom_f, cart_f, cfg_f, log_f, script_f;
     int    hold_on = 0;
     logic  rst_v = 1'b0;                      // the script's "reset V D" (one at a time)
     int    rst_d = 0;
@@ -668,8 +671,13 @@ module tb_savestate;
         n = 0;
         if ($value$plusargs("cart=%s", cart_f)) load_file(cart_f, 4'd0, n);
         $fdisplay(fd, "L cart %0d", n);
+        cart_len = n;
+        if ($value$plusargs("cfg=%s", cfg_f)) begin    // build step 8: the CFG slot
+            load_file(cfg_f, 4'd1, n);
+            cfg_len = n; cfg_inlist = 1'b1;
+        end
         @(negedge clk);
-        cart_len = n; len_valid = 1'b1;
+        len_valid = 1'b1;
         repeat (64) @(negedge clk);           // the loader takes len_valid (synchronised) first
         to = 0;
         while (!(core.media.ready && !core.media.busy) && to < 4000000) begin @(negedge clk); to++; end

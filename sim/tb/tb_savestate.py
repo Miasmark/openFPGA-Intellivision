@@ -60,7 +60,7 @@ import savestate as ss      # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
-       'intv_loader.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v']
+       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v']
 OTHER = [os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(HERE, 'models', 'sram_as6c2016.sv'),
          os.path.join(HERE, 'models', 'mf_datatable.sv'), os.path.join(HERE, 'tb_savestate.sv')]
@@ -90,6 +90,12 @@ SS_IMAGES = [
      [(10, 'rowfetch'), (20, 'busrq'), (30, 'midinst'), (34, 'any')], (36, 10), 40),
     ('psgtest', None, 'psgtest.asm', (0x5A, 0xC3), 22, None,
      [(6, 'sound'), (11, 'sound'), (14, 'midinst'), (16, 'any')], (17, 10), 19),
+    # build step 8: our cart8test.asm on an Intellicart .rom (bank windows, RAM) and on a
+    # BIN + CFG (pages, RAM): non-default pages and bank registers, cart RAM in use
+    ('cartbank', ('step8', 'rombank'), 'cart8test.asm', (0xFF, 0xFF), 40, None,
+     [(6, 'midinst'), (12, 'any'), (18, 'midinst'), (24, 'any')], (28, 8), 32),
+    ('cartcfg', ('step8', 'cfgmap'), 'cart8test.asm', (0xFF, 0xFF), 40, None,
+     [(7, 'midinst'), (13, 'any'), (19, 'midinst'), (25, 'any')], (28, 8), 32),
     # cart RAM (RAM8 at $D000, 1,024 cells): a game started, its board in RAM
     ('chess', 'USCF Chess ~ Chess (USA, Europe).zip', None, (0xFF, 0xFF), 100,
      '40-46:1,60-66:Enter',
@@ -143,9 +149,15 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_savestate')
 
 
+# an image whose state the blob cannot hold (docs/CARTFORMATS.md 5): every save and load
+# answers err, the run untouched
+NOSS_IMAGES = [('cartnoss', ('step8', 'rombankw'), 'cart8test.asm', (0xFF, 0xFF), 16, None,
+                [(5, 'midinst'), (9, 'any')], (12, 4), 14)]
+
+
 def prepare(work, img, lib, bdir):
     """(exec path, cart path or None, keys file or None, cart CRC, cart words, EXEC CRC,
-    GROM CRC)."""
+    GROM CRC, CFG path or None, CFG CRC)."""
     name, zipname, prog, pads, nframes, keys = img[:6]
     ex = os.path.join(bdir, 'exec.bin')
     if prog:
@@ -158,8 +170,22 @@ def prepare(work, img, lib, bdir):
             b[2 * (a - 0x1000) + 1] = w & 0xFF
         with open(ex, 'wb') as f:
             f.write(b)
-    cart, crc, words = None, 0, 0
-    if zipname:
+    cart, crc, words, cfgp, cfgcrc = None, 0, 0, None, 0
+    if isinstance(zipname, tuple):             # a step-8 image from our sources
+        sys.path.insert(0, os.path.join(ROOT, 'sim', 'testroms', 'step8'))
+        import build_images
+        import cartfmt
+        im = [x for x in build_images.images() if x['name'] == zipname[1]][0]
+        cart = os.path.join(work, name + ('.rom' if cartfmt.is_rom(im['data']) else '.bin'))
+        with open(cart, 'wb') as f:
+            f.write(im['data'])
+        crc, words = ss.crc32(im['data']), (len(im['data']) + 1) // 2
+        if im['cfg'] is not None:
+            cfgp = os.path.join(work, name + '.cfg')
+            with open(cfgp, 'wb') as f:
+                f.write(im['cfg'])
+            cfgcrc = ss.crc32(im['cfg'])
+    elif zipname:
         data = m.load_image_bytes(os.path.join(lib, zipname))
         cart = os.path.join(work, name + '.bin')
         with open(cart, 'wb') as f:
@@ -178,7 +204,7 @@ def prepare(work, img, lib, bdir):
         with open(kf, 'w') as f:
             f.writelines(out)
     return (ex, cart, kf, crc, words, ss.crc32(open(ex, 'rb').read()),
-            ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read()))
+            ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read()), cfgp, cfgcrc)
 
 
 class Run:
@@ -252,6 +278,8 @@ class Bench:
                '+cycles=%d' % ncyc, '+script=' + sf, '+log=' + log, '+pads=%02X%02X' % img[3]]
         if cart:
             cmd.append('+cart=' + cart)
+        if self.prep[name][7]:
+            cmd.append('+cfg=' + self.prep[name][7])
         if kf:
             cmd.append('+keys=' + kf)
         cmd += list(extra)
@@ -348,7 +376,7 @@ def check_common(run, what, drops=0):
     return probs
 
 
-def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, pause=True, what='S'):
+def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause=True, what='S'):
     probs = check_common(run, what)
     nframes = img[4]
     probs += compare_frames(ref, run.frames, 0, nframes, what)
@@ -390,7 +418,7 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, pause=True, wha
         zc, mpos = int(zt[1]), int(zt[2], 16)
         regs = [int(x, 16) for x in zt[3:11]]
         blob = open(p, 'rb').read()
-        bad = ss.verify(blob, crc, words, exec_crc=ecrc, grom_crc=gcrc)
+        bad = ss.verify(blob, crc, words, exec_crc=ecrc, grom_crc=gcrc, cfg_crc=cfgcrc)
         if bad:
             probs.append('S: blob %s: %s' % (os.path.basename(p), bad[:3]))
             continue
@@ -400,7 +428,7 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, pause=True, wha
             probs.append('S: blob %s: cart RAM %s, the SRAM at the freeze %s' % (
                 os.path.basename(p), want_m, mline))
         if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], exec_crc=h[ss.H_EXEC_CRC],
-                   grom_crc=h[ss.H_GROM_CRC]) != blob:
+                   grom_crc=h[ss.H_GROM_CRC], cfg_crc=h[ss.H_CFG_CRC]) != blob:
             probs.append('S: blob %s: pack(unpack) differs' % os.path.basename(p))
         cpu = mods[0x02]
         want = [(regs[1] << 16) | regs[0], (regs[3] << 16) | regs[2], (regs[5] << 16) | regs[4],
@@ -435,14 +463,17 @@ def corrupt_blobs(work, name, good):
     x[100000] = 0x5A                                 # beyond the live part
     put('reserved', bytes(x))
     x = bytearray(b)
-    struct.pack_into('>I', x, 4 * ss.H_VERSION, 2)
+    struct.pack_into('>I', x, 4 * ss.H_VERSION, 1)    # an older version's blob
     put('version', bytes(x))
+    x = bytearray(b)                                 # another CFG for the same image
+    struct.pack_into('>I', x, 4 * ss.H_CFG_CRC, ss.header(b)[ss.H_CFG_CRC] ^ 0x00000100)
+    put('cfgcrc', bytes(x))
     x = bytearray(b)                                 # unused module area, CRC made right
     x[ss.MOD_BYTE + 4 * ss.MOD_WORDS + 8] = 0x01
     struct.pack_into('>I', x, 4 * ss.H_CRC, ss.crc32(x[ss.MOD_BYTE:ss.MOD_BYTE + ss.PAYLOAD_BYTES]))
     put('gap', bytes(x))
-    for p in out:
-        if not ss.verify(open(p, 'rb').read()):
+    for p in out:                       # the core expects the good blob's CFG CRC
+        if not ss.verify(open(p, 'rb').read(), cfg_crc=ss.header(b)[ss.H_CFG_CRC]):
             raise SystemExit('corrupt blob %s passes the model' % p)
     return out
 
@@ -469,7 +500,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             probs.append('%s: R or S did not run (%s)' % (name, ref.fails[:2] if ref else 'no log'))
             continue
         refs[name] = ref
-        p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:])
+        p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:7],
+                                 cfgcrc=bench.prep[name][8])
         p += check_common(ref, 'R')
         want = 'L ready crc %08x words %d' % bench.prep[name][3:5]
         for tag, r in (('R', ref), ('S', srun)):
@@ -481,7 +513,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             if r0 is None:
                 p.append('S0: no log')
             else:
-                p += check_save_run(img, ref, r0, b0, *bench.prep[name][3:], pause=False, what='S0')[0]
+                p += check_save_run(img, ref, r0, b0, *bench.prep[name][3:7], cfgcrc=bench.prep[name][8],
+                                    pause=False, what='S0')[0]
         probs += ['%s %s' % (name, x) for x in p]
         saves[name] = info
         print('%s: R %d frames, S %d saves%s %s' % (name, img[4], len(info),
@@ -557,7 +590,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                         x.startswith('R burst') and x.endswith('ss_en 1') for x in run.lines):
                     q.append('burst save %s' % sv)
                 elif ss.verify(open(blob, 'rb').read(), *bench.prep[name][3:5],
-                               exec_crc=bench.prep[name][5], grom_crc=bench.prep[name][6]):
+                               exec_crc=bench.prep[name][5], grom_crc=bench.prep[name][6],
+                               cfg_crc=bench.prep[name][8]):
                     q.append('burst save: blob does not verify')
                 rw = run.tagged('RW')
                 if len(rw) != 1 or int(rw[0].split()[1]) < 1 or int(rw[0].split()[2]) != 0:
@@ -579,7 +613,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 q += compare_frames(ref, run.after, zc // FRAME + 1, end // FRAME, tag + ' after',
                                     steps_only=True)
             if tag == 'C':
-                if [x.split()[1] for x in loads] != ['err'] * 5 + ['ok']:
+                if [x.split()[1] for x in loads] != ['err'] * 6 + ['ok']:
                     q.append('loads %s' % loads)
             if tag == 'F' and loads != ['LOAD err EXPECT err']:
                 q.append('loads %s' % loads)
@@ -643,8 +677,50 @@ PLANTS = [
     ('ss_psg_ecnt_ignored', 'intv_psg.sv',
      [("                5'd19: ecnt <= ss_wdata[16:0];\n", "                5'd19: ;\n")], 'psgtest', 'astrosmash',
      AFTER),
+    # build step 8: the CFG's CRC not checked (C: a blob of another CFG taken); the bank
+    # registers not restored (a load runs on with the fresh core's); an image without save
+    # states saved all the same
+    ('ss_cfg_unchecked', 'intv_ss_ctl.sv',
+     [(CHK, "else if (w != 14'(SS_H_CFG_CRC)\n"
+            "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],
+     'cartcfg', 'psgtest', r' C: (FAIL load \S+_bad_cfgcrc\.blob|loads )'),
+    ('ss_bank_not_restored', 'intv_cart.sv',
+     [("                bank[{ss_addr[2:0] - 3'd7, 2'(i)}] <= ss_wdata[8*i +: 8];",
+       "                bank[{ss_addr[2:0] - 3'd7, 2'(i)}] <= bank[{ss_addr[2:0] - 3'd7, 2'(i)}];")],
+     'cartbank', 'psgtest', AFTER),
+    ('ss_noss_ignored', 'intv_ss_ctl.sv',
+     [("                if (cart_noss && cart_ready)", "                if (1'b0 && cart_noss && cart_ready)")],
+     'cartnoss', 'psgtest', r'NOSS: '),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
+
+
+def run_noss(bench, img, foreign):
+    """An image without save states: R, then the S script (every save must answer err and
+    leave the run as R), then a foreign blob's load (err, untouched)."""
+    name, nframes = img[0], img[4]
+    lines, blobs = save_script(img, bench)
+    ref = bench.sim(name + '_R', img, nframes * FRAME, [])
+    srun = bench.sim(name + '_S', img, nframes * FRAME, lines)
+    probs = []
+    if ref is None or srun is None or not ref.end:
+        return ['NOSS: R or S did not run']
+    sv = srun.tagged('SAVE')
+    if len(sv) != len(blobs) or any(x.split()[1] != 'err' for x in sv):
+        probs.append('NOSS: saves %s, want err each' % sv)
+    probs += ['NOSS: ' + x for x in compare_frames(ref, srun.frames, 0, nframes, 'S')]
+    if foreign:
+        f = bench.sim(name + '_F', img, nframes * FRAME, ['load %d %s err -1' % (LOAD_AT, foreign)])
+        if f is None or f.tagged('LOAD') != ['LOAD err EXPECT err']:
+            probs.append('NOSS: foreign load %s' % (f.tagged('LOAD') if f else 'no log'))
+        elif f.set_cycle is not None or f.tagged('MA'):
+            probs.append('NOSS: state set by a refused load')
+        else:
+            probs += ['NOSS: ' + x for x in compare_frames(ref, f.frames, 0, nframes, 'F')]
+    print('%s: R %d frames, %d saves refused%s %s' % (name, nframes, len(blobs),
+                                                    ', a foreign load refused' if foreign else '',
+                                                    'pass' if not probs else 'FAIL'), flush=True)
+    return ['%s %s' % (name, x) for x in probs]
 
 
 def main():
@@ -675,10 +751,11 @@ def main():
             return 1
         print('build: %.0fs' % (time.time() - t0), flush=True)
     bench = Bench(binary, work, bdir, lib, simslot, a.jobs)
-    allimgs = {i[0]: i for i in SS_IMAGES}
+    allimgs = {i[0]: i for i in SS_IMAGES + NOSS_IMAGES}
+    noss = [i for i in NOSS_IMAGES if not a.only or i[0] in a.only.split(',')]
     try:
-        for img in SS_IMAGES:
-            if img in imgs or (a.plants or a.plants_only):
+        for img in SS_IMAGES + NOSS_IMAGES:
+            if img in imgs or img in noss or (a.plants or a.plants_only):
                 bench.prep[img[0]] = prepare(work, img, lib, bdir)
         order = [i[0] for i in imgs]
 
@@ -692,6 +769,9 @@ def main():
         if not a.plants_only:
             p, saves = run_image_set(bench, imgs, other_blob)
             fails += p
+            for img in noss:
+                fb = next((v[0][0] for v in saves.values() if v and isinstance(v[0], tuple)), None)
+                fails += run_noss(bench, img, fb)
         if a.plants or a.plants_only or a.plant:
             # the foreign states for the plants, saved by the unplanted RTL
             fbs = {}
@@ -727,7 +807,10 @@ def main():
                 pb = Bench(b, d, bdir, lib, simslot, a.jobs)
                 pb.prep = bench.prep
                 img = allimgs[iname]
-                pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='')
+                if img in NOSS_IMAGES:
+                    pr = run_noss(pb, img, fbs[fname])
+                else:
+                    pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='')
                 own = [x for x in pr if re.search(why, x)]
                 if own:
                     print('PLANT %s: caught: %s' % (pname, own[0][:150]), flush=True)

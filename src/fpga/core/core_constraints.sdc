@@ -67,7 +67,7 @@ set_multicycle_path -from [get_ports {sram_dq[*]}] -hold -end 2
 # set_max_delay do not work here: Quartus Standard drops both on paths the
 # clock groups cut ("No path is found satisfying assignment", tried on the
 # 0.0.5 fit). The fit's Timing Analyzer lists the net delays in
-# ap_core.sta.rpt (panels "Input crossing net delay", core/sta_reports.tcl).
+# ap_core.sta.rpt (panels "Crossing net delay", core/sta_reports.tcl).
 # The single-bit synchronisers (req_74 -> req_s, ack -> ack_74) need nothing
 # more; the metastability report (panel "Synchronizer chains") lists them as
 # chains of two flip-flops. sim/check/fit_crossing_check.py checks both
@@ -75,3 +75,33 @@ set_multicycle_path -from [get_ports {sram_dq[*]}] -hold -end 2
 set in_from [get_keepers {*intv_input:*|hold_74[*] *intv_input:*|req_74}]
 set in_to   [get_keepers {*intv_input:*|word[*] *intv_input:*|req_s[0]}]
 set_net_delay -from $in_from -to $in_to -max 10.0
+
+# Save states (core/intv_ss_ctl.sv, build step 7): the bridge's blob
+# accesses and the result bits cross between clk_74a and clk_sys the same
+# way, and get the same 10 ns bound on every net (the clock groups above
+# leave them untimed otherwise):
+#  - a request: b_we, b_w, b_d (clk_74a) are set at the clk_74a edge that
+#    toggles b_t; b_t passes b_s[0] and b_s[1], and bp_w / bp_d load at the
+#    clk_sys edge after b_s[1] changes, at least two clk_sys periods
+#    (46.56 ns) after b_t reached b_s[0]; b_we is sampled into b_we_s on
+#    every clk_sys and bp_we loads b_we_s with bp_w, so b_we_s's sample is
+#    taken at least one period (23.28 ns) after that; b_* change again only
+#    with the next access, at least 88 clk_74a (1.18 us) later;
+#  - a read's word: r_q (clk_sys) is set at the edge that toggles r_t; r_t
+#    passes r_s[0] and r_s[1], and bridge_rd_data loads after r_s[1]
+#    changes, at least two clk_74a periods (26.9 ns) after r_t reached
+#    r_s[0]; r_q changes again only after the next access;
+#  - the result bits s_* / l_* (clk_sys) each pass two clk_74a flip-flops
+#    (st_a, st_b) and change one at a time, at least 4 clk_sys (93 ns)
+#    apart, so their order holds as long as no bit's net is much longer
+#    than another's.
+# sim/check/fit_crossing_check.py checks these rows too.
+set ss_from [get_keepers {*intv_ss_ctl:*|b_we *intv_ss_ctl:*|b_w[*] *intv_ss_ctl:*|b_d[*] *intv_ss_ctl:*|b_t}]
+set ss_to   [get_keepers {*intv_ss_ctl:*|b_we_s *intv_ss_ctl:*|bp_w[*] *intv_ss_ctl:*|bp_d[*] *intv_ss_ctl:*|b_s[0]}]
+set_net_delay -from $ss_from -to $ss_to -max 10.0
+set ss_from [get_keepers {*intv_ss_ctl:*|r_q[*] *intv_ss_ctl:*|r_t}]
+set ss_to   [get_keepers {*intv_ss_ctl:*|bridge_rd_data[*] *intv_ss_ctl:*|r_s[0]}]
+set_net_delay -from $ss_from -to $ss_to -max 10.0
+set ss_from [get_keepers {*intv_ss_ctl:*|s_ack *intv_ss_ctl:*|s_busy *intv_ss_ctl:*|s_ok *intv_ss_ctl:*|s_err *intv_ss_ctl:*|l_ack *intv_ss_ctl:*|l_busy *intv_ss_ctl:*|l_ok *intv_ss_ctl:*|l_err}]
+set ss_to   [get_keepers {*intv_ss_ctl:*|st_a[*]}]
+set_net_delay -from $ss_from -to $ss_to -max 10.0

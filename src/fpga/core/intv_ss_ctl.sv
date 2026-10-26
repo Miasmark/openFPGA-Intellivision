@@ -56,6 +56,20 @@
 //          word and the cart RAM are written (the timing word's mpos: the
 //          machine resumes at the saved position), then ok.
 //
+// Wake (sleep_supported): the order of the Pocket's 0x00A4 and its reset
+// exit on wake is not documented. A load asked for while the machine is
+// held in reset (the host's reset; the cartridge loaded) is checked at once
+// and answered ok or err without a freeze; an ok one is staged (pend) and
+// applied, checked once more, at the first quiet point after the reset
+// exit, with no status change. A load or save that starts while a staged
+// one waits replaces or follows it (DESIGN 4.2).
+//
+// Bridge accesses at 0x50xxxxxx are served one at a time: while a save or
+// load reads or writes the state (O_SNAP .. O_APPLYW) one access is held
+// (bp) and served after it. The host sends none then (it polls the result
+// first); a second one while one is held overwrites it and counts in
+// br_drops (sticky, for the bench: sim/tb/tb_savestate.sv checks it).
+//
 // SPDX-License-Identifier: MIT
 
 `default_nettype none
@@ -92,6 +106,7 @@ module intv_ss_ctl #(
     // ---------------------------------------------- clk_sys: the machine
     input  wire logic        clk,
     input  wire logic        mreset,
+    input  wire logic        cart_ready,         // the loader is done (cartridge CRC valid)
     input  wire logic        live,
     input  wire logic [8:0]  vcnt,
     input  wire logic        ce_cpu,
@@ -183,15 +198,32 @@ module intv_ss_ctl #(
     logic [21:0] bp_w = 22'd0;
     logic [31:0] bp_d = 32'd0;
     logic        bp_take;                                 // the FSM takes it (one clk)
+    logic        cur_we = 1'b0;                           // the access being served
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  br_drops = 4'd0;                         // accesses overwritten (sticky, saturating; the bench)
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    // b_we is sampled on every clk first: a plain register, so its crossing
+    // is one net that core_constraints.sdc bounds (loaded into bp_we with
+    // an enable, the fit made it a LUT input, which set_net_delay misses);
+    // b_we_s holds the access's direction from the clk after b_s[0] took
+    // the toggle on, one clk before bp_we loads it
+    logic        b_we_s = 1'b0;
+    always_ff @(posedge clk)
+        b_we_s <= b_we;
 
     always_ff @(posedge clk) begin
         if (b_s[2] != b_s[1]) begin
             bp <= 1'b1;
-            bp_we <= b_we;
+            bp_we <= b_we_s;
             bp_w <= b_w;
             bp_d <= b_d;
+            if (bp && !bp_take && br_drops != 4'hF)
+                br_drops <= br_drops + 4'd1;
         end else if (bp_take)
             bp <= 1'b0;
+        if (bp_take)
+            cur_we <= bp_we;
     end
 
     // ---------------------------------------------- SRAM: one blob word
@@ -306,6 +338,12 @@ module intv_ss_ctl #(
     } ost_t;
     ost_t        ost = O_IDLE, ret = O_IDLE;
     logic        is_load = 1'b0;
+    logic        staged = 1'b0;                           // a load checked in reset, not applied
+    logic        pend = 1'b0;                             // a staged load waits for the reset exit
+    logic        silent = 1'b0;                           // applying it: no status change
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ld_applied = 1'b0;                       // a load's state is in (one clk; the bench)
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [2:0]  dly = 3'd0;
     logic [13:0] w = 14'd0;                               // blob word
     logic [1:0]  ph = 2'd0;
@@ -389,6 +427,7 @@ module intv_ss_ctl #(
 
     always_ff @(posedge clk) begin
         ss_we <= 1'b0;
+        ld_applied <= 1'b0;
         vcnt_q <= vcnt;
         if (!start_lv) s_ack <= 1'b0;
         if (!load_lv) l_ack <= 1'b0;
@@ -399,6 +438,13 @@ module intv_ss_ctl #(
                 if (bp) begin
                     ret <= O_IDLE;
                     ost <= O_BR;
+                end else if (pend && !mreset) begin       // apply the staged load
+                    is_load <= 1'b1;
+                    silent <= 1'b1;
+                    op <= 1'b1;
+                    tmo <= 3'd0;
+                    tmo_all <= 8'd0;
+                    ost <= O_WAITF;
                 end else if ((start_lv && !s_ack) || (load_lv && !l_ack)) begin
                     is_load <= !(start_lv && !s_ack);
                     if (start_lv && !s_ack) s_busy <= 1'b1; else l_busy <= 1'b1;
@@ -413,6 +459,8 @@ module intv_ss_ctl #(
             end
             O_HS2: if (dly == 3'd0) begin
                 if (is_load) l_ack <= 1'b1; else s_ack <= 1'b1;
+                if (is_load) pend <= 1'b0;                // a new load replaces a staged one
+                staged <= 1'b0;
                 op <= 1'b1;
                 tmo <= 3'd0;
                 tmo_all <= 8'd0;
@@ -424,7 +472,7 @@ module intv_ss_ctl #(
                     if (!mreset) tmo <= tmo + 3'd1;
                     tmo_all <= tmo_all + 8'd1;
                 end
-                if (frozen) begin
+                if (frozen && !(is_load && mreset)) begin
                     ss_en <= 1'b1;
                     w <= is_load ? 14'd0 : 14'(W_MOD0);
                     ph <= 2'd0;
@@ -432,6 +480,18 @@ module intv_ss_ctl #(
                     bad <= 1'b0;
                     dly <= 3'd2;
                     ost <= is_load ? O_VHDR : O_SNAP;
+                end else if (silent && mreset) begin      // reset again: wait for its exit
+                    op <= 1'b0;
+                    silent <= 1'b0;
+                    ost <= O_IDLE;
+                end else if (is_load && mreset && cart_ready) begin
+                    staged <= 1'b1;                       // check it now, apply it later
+                    w <= 14'd0;
+                    ph <= 2'd0;
+                    crc <= 32'hFFFFFFFF;
+                    bad <= 1'b0;
+                    dly <= 3'd2;
+                    ost <= O_VHDR;
                 end else if (tmo == 3'(TIMEOUT_FRAMES + 1) || tmo_all == 8'd255)
                     ost <= O_FIN_ERR;
                 else if (bp) begin
@@ -453,7 +513,7 @@ module intv_ss_ctl #(
                 end
             end
             O_BRW: if (m_done) begin
-                if (!bp_we) begin r_q <= m_q; r_t <= !r_t; end
+                if (!cur_we) begin r_q <= m_q; r_t <= !r_t; end
                 ost <= ret;
             end
 
@@ -543,6 +603,8 @@ module intv_ss_ctl #(
             O_VCHK: begin
                 if (bad || resv_bad || ~crc != hdr_crc)
                     ost <= O_FIN_ERR;
+                else if (staged)
+                    ost <= O_FIN_OK;                      // applied after the reset exit
                 else
                     ost <= O_APPLY;
             end
@@ -583,7 +645,12 @@ module intv_ss_ctl #(
                 ss_en <= 1'b0;
                 if (is_load) begin
                     resv_bad <= 1'b0;
-                    if (ost == O_FIN_OK) l_ok <= 1'b1; else l_err <= 1'b1;
+                    if (ost == O_FIN_OK && !staged) ld_applied <= 1'b1;
+                    if (staged) pend <= ost == O_FIN_OK;
+                    if (silent) pend <= 1'b0;
+                    if (!silent) begin
+                        if (ost == O_FIN_OK) l_ok <= 1'b1; else l_err <= 1'b1;
+                    end
                 end else begin
                     if (ost == O_FIN_OK) s_ok <= 1'b1; else s_err <= 1'b1;
                 end
@@ -594,6 +661,8 @@ module intv_ss_ctl #(
                 s_busy <= 1'b0;
                 l_busy <= 1'b0;
                 op <= 1'b0;
+                staged <= 1'b0;
+                silent <= 1'b0;
                 ost <= O_IDLE;
             end
             default: ost <= O_IDLE;

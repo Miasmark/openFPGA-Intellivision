@@ -15,15 +15,24 @@
 //                             frame k on, k x 14,934 machine cycles)
 //   +cycles=N                 end at machine cycle N
 //   +pause=0                  setting "Pause in menu" off (default on)
+//   +hold=1                   keep the host's reset on after the loader is
+//                             ready (a wake: script "reset 0" releases it)
 //   +script=F                 events, one per line, in order:
 //       save C KIND FILE      at machine cycle C (then at the first clk
 //                             where KIND holds, within 30 frames: any, midinst, busrq,
 //                             rowfetch, sound) ask for a save (0x00A0); on
 //                             ok read the blob into FILE
+//       saveb C FILE          a save as "save C any FILE", and while it
+//                             reads the state two bridge reads at 0x50000000
+//                             (the second overwrites the first: br_drops)
 //       load C FILE EXPECT R  at cycle C write FILE over the bridge, ask for
 //                             a load (0x00A4); EXPECT ok or err; on ok the
 //                             bench's machine cycle becomes R (the saved
 //                             cycle) when the core has written the state
+//                             (C = -1: at once, also in reset)
+//       loadr C FILE EXPECT R a load as above, with the host's reset
+//                             released while ss_ctl checks the staged blob
+//       reset V D             the host's reset := V, D clk_sys from now
 //       menu C 1|0            at cycle C open (1) or close (0) the menu (0x00B0)
 //       wait F                F raster frames
 //   +log=F
@@ -42,9 +51,20 @@
 //                       the machine froze at machine cycle c (its position
 //                       and registers; raster frames since the request)
 //   U c frames          the machine resumed (raster frames it was frozen)
+//   M c hash nz         at each freeze: FNV-1a over the SRAM's cart RAM area
+//                       ($18000-$1BFFF, 16,384 cells) and its nonzero cells
+//   MA c hash nz        the same when a load's state is in
+//   W f c0 c1           a "wait f": machine cycle at its start and end
+//   D clks zero         the machine was not live for clks clk_sys; the
+//                       sound was 0 from zero clk_sys on (-1: never)
 //   S code ...          a host command's result (code as the host reads it)
-//   SAVE ok|err c FILE  /  LOAD ok|err EXPECT e  /  MENU 1|0 c
+//   SAVE ok|err c FILE  /  LOAD ok|err EXPECT e
+//   MENU open c         before the host opens the menu; MENU 0 c after it closed it
+//   E drops n           at the end: bridge accesses ss_ctl overwrote (br_drops)
 //   END / FAIL text
+// Checked on every clk: never live while frozen; the sound 0 once the
+// machine has not been live for 4 ms (171,818 clk_sys); never ss_en while
+// the machine runs; a load's state never written while the machine runs.
 //
 // SPDX-License-Identifier: MIT
 
@@ -258,7 +278,7 @@ module tb_savestate;
     // raster frames, and what ss_ctl sees
     longint rframes = 0;
     longint req_rf = 0, frz_rf = 0;
-    logic   frz_q = 1'b0, st_q = 1'b0, ld_q = 1'b0, lok_q = 1'b0;
+    logic   frz_q = 1'b0, st_q = 1'b0, ld_q = 1'b0;
     longint rcyc_next = -1;
     always @(posedge clk) begin
         if (core.timing.vcnt == 9'd0 && core.timing.hcnt == 9'd0 && core.timing.sub == 4'd0)
@@ -274,6 +294,7 @@ module tb_savestate;
         end
         frz_q <= core.ssc.frozen;
         if (core.ssc.frozen && !frz_q) begin
+            cram_hash("M");
             frz_rf <= rframes;
             $fdisplay(fd, "Z %0d %06x %04x %04x %04x %04x %04x %04x %04x %04x %0d", cyc, core.timing.mpos,
                       core.machine.cpu.r[0], core.machine.cpu.r[1], core.machine.cpu.r[2],
@@ -282,18 +303,54 @@ module tb_savestate;
         end
         if (!core.ssc.frozen && frz_q)
             $fdisplay(fd, "U %0d %0d", cyc, rframes - frz_rf);
-        // a load's state is in when l_ok rises (the machine still frozen)
-        lok_q <= core.ssc.l_ok;
+        // a load's state is in (the machine still frozen): ld_applied, at
+        // once for a load out of reset, after the reset exit for one staged
         set_req <= 1'b0;
-        if (core.ssc.l_ok && !lok_q && rcyc_next >= 0) begin
-            set_val <= rcyc_next;
-            set_req <= 1'b1;
+        if (core.ssc.ld_applied) begin
+            cram_hash("MA");
+            if (rcyc_next >= 0) begin
+                set_val <= rcyc_next;
+                set_req <= 1'b1;
+                rcyc_next = -1;
+            end
+            if (core.ssc.run) fail("load done while the machine runs");
         end
-        if (core.ssc.l_ok && !lok_q && core.ssc.run)
-            fail("load done while the machine runs");
         if (core.ssc.ss_en && core.ssc.run)
             fail("ss_en while the machine runs");
+        if (core.ssc.frozen && live)
+            fail("live while frozen");
+        // the sound while the machine is not live
+        if (!live) begin
+            nl_clk <= nl_clk + 1;
+            if (audio == 16'd0 && nl_zero < 0) nl_zero <= nl_clk;
+            if (audio != 16'd0) nl_zero <= -1;
+            if (nl_clk >= 64'd171818 && audio != 16'd0 && !nl_fail) begin
+                nl_fail <= 1'b1;
+                fail($sformatf("sound %04x after 4 ms not live (cycle %0d)", audio, cyc));
+            end
+        end else begin
+            if (nl_clk >= 64'd100000)
+                $fdisplay(fd, "D %0d %0d", nl_clk, nl_zero);
+            nl_clk <= 0;
+            nl_zero <= -1;
+            nl_fail <= 1'b0;
+        end
     end
+
+    longint nl_clk = 0, nl_zero = -1;
+    logic   nl_fail = 1'b0;
+
+    task automatic cram_hash(input string tag);
+        logic [31:0] h;
+        int nz;
+        h = 32'h811C9DC5;
+        nz = 0;
+        for (int i = 0; i < 16384; i++) begin
+            h = fnv(h, {16'd0, sram.mem[17'h18000 + 17'(i)]});
+            if (sram.mem[17'h18000 + 17'(i)] != 16'd0) nz++;
+        end
+        $fdisplay(fd, "%s %0d %08x %0d", tag, cyc, h, nz);
+    endtask
 
     // ------------------------------------------------------------ bridge
     task automatic br_wr(input logic [31:0] a, input logic [31:0] d);
@@ -382,7 +439,7 @@ module tb_savestate;
 
     logic [7:0] blob [153600];
 
-    task automatic do_save(input longint c, input string kind, input string fname);
+    task automatic do_save(input longint c, input string kind, input string fname, input bit burst = 1'b0);
         logic [15:0] code;
         logic [31:0] v;
         int polls, f, n;
@@ -404,6 +461,13 @@ module tb_savestate;
         n = 0;
         do begin br_rd(32'hF8000000, v); n++; end while (v[31:16] != 16'h4F4B && n < 1000);
         $fdisplay(fd, "S %0d save start (kind %s)", v[15:0], kind);
+        if (burst) begin                      // two blob reads while the state is read
+            n = 0;
+            while (!core.ssc.ss_en && n < 40 * 14934 * 12) begin @(negedge clk); n++; end
+            br_rd(32'h50000000, v);
+            br_rd(32'h50000004, v);
+            $fdisplay(fd, "R burst at cycle %0d, ss_en %0d", cyc, core.ssc.ss_en);
+        end
         host_result(16'h00A0, code, polls);
         $fdisplay(fd, "S %0d save after %0d polls", code, polls);
         if (code != 16'd2) begin
@@ -423,10 +487,11 @@ module tb_savestate;
         $fdisplay(fd, "SAVE ok %0d %s", cyc, fname);
     endtask
 
-    task automatic do_load(input longint c, input string fname, input string expect_s, input longint r);
+    task automatic do_load(input longint c, input string fname, input string expect_s, input longint r,
+                           input bit rel_reset = 1'b0);
         logic [15:0] code;
         int polls, f, ch;
-        wait_cyc(c);
+        if (c >= 0) wait_cyc(c);
         f = $fopen(fname, "rb");
         if (f == 0) begin fail($sformatf("cannot read %s", fname)); return; end
         for (int i = 0; i < 153600; i++) begin
@@ -440,9 +505,17 @@ module tb_savestate;
         rcyc_next = r;
         host_cmd(16'h00A4, 32'd1, code);
         $fdisplay(fd, "S %0d load start", code);
+        if (rel_reset)
+            fork begin
+                int k;
+                k = 0;
+                while (!core.ssc.staged && k < 4000000) begin @(negedge clk); k++; end
+                $fdisplay(fd, "R reset released, staged %0d", core.ssc.staged);
+                hold_req = 1'b0;
+            end join_none
         host_result(16'h00A4, code, polls);
         $fdisplay(fd, "S %0d load after %0d polls", code, polls);
-        rcyc_next = -1;
+        if (code != 16'd2) rcyc_next = -1;    // else the state's arrival takes it
         host_off();
         if (code == 16'd2)      $fdisplay(fd, "LOAD ok EXPECT %s", expect_s);
         else if (code == 16'd3) $fdisplay(fd, "LOAD err EXPECT %s", expect_s);
@@ -454,10 +527,11 @@ module tb_savestate;
     task automatic do_menu(input longint c, input int open);
         logic [15:0] code;
         wait_cyc(c);
+        if (open != 0) $fdisplay(fd, "MENU open %0d", cyc);
         host_on();
         host_cmd(16'h00B0, 32'(open), code);
         host_off();
-        $fdisplay(fd, "MENU %0d %0d", open, cyc);
+        if (open == 0) $fdisplay(fd, "MENU 0 %0d", cyc);
     endtask
 
     // ------------------------------------------------------------ loading
@@ -481,6 +555,9 @@ module tb_savestate;
 
     // ------------------------------------------------------------ the run
     string exec_f, grom_f, cart_f, log_f, script_f;
+    int    hold_on = 0;
+    logic  rst_v = 1'b0;                      // the script's "reset V D" (one at a time)
+    int    rst_d = 0;
     longint ncyc = 10 * FRAME;
 
     initial begin
@@ -489,6 +566,7 @@ module tb_savestate;
         fd = $fopen(log_f, "w");
         void'($value$plusargs("cycles=%d", ncyc));
         if ($value$plusargs("pause=%d", p)) pause_en = p != 0;
+        if (!$value$plusargs("hold=%d", hold_on)) hold_on = 0;
         begin
             logic [15:0] pads;
             string keys_f;
@@ -526,7 +604,7 @@ module tb_savestate;
         repeat (8) @(negedge clk);            // the results reach intv_cart's registers
         $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
         repeat (10) @(negedge clk);
-        hold_req = 1'b0;
+        if (hold_on == 0) hold_req = 1'b0;
 
         if ($value$plusargs("script=%s", script_f)) begin
             string cmd, a1, a2;
@@ -540,17 +618,36 @@ module tb_savestate;
                         k = $fscanf(sf, "%d %s %s", c, a1, a2);
                         do_save(c, a1, a2);
                     end
-                    "load": begin
+                    "saveb": begin
+                        k = $fscanf(sf, "%d %s", c, a2);
+                        do_save(c, "any", a2, 1'b1);
+                    end
+                    "load", "loadr": begin
                         k = $fscanf(sf, "%d %s %s %d", c, a1, a2, r);
-                        do_load(c, a1, a2, r);
+                        do_load(c, a1, a2, r, cmd == "loadr");
+                    end
+                    "reset": begin
+                        k = $fscanf(sf, "%d %d", r, c);
+                        rst_v = r != 0;
+                        rst_d = 32'(c);
+                        fork
+                            begin
+                                repeat (rst_d) @(negedge clk);
+                                hold_req = rst_v;
+                                $fdisplay(fd, "R reset %0d at cycle %0d", rst_v, cyc);
+                            end
+                        join_none
                     end
                     "menu": begin
                         k = $fscanf(sf, "%d %d", c, r);
                         do_menu(c, int'(r));
                     end
                     "wait": begin
+                        longint c0;
                         k = $fscanf(sf, "%d", r);
+                        c0 = cyc;
                         wait_frames(r);
+                        $fdisplay(fd, "W %0d %0d %0d", r, c0, cyc);
                     end
                     default: fail($sformatf("script: %s", cmd));
                 endcase
@@ -559,6 +656,7 @@ module tb_savestate;
         end
 
         wait_cyc(ncyc);
+        $fdisplay(fd, "E drops %0d", core.ssc.br_drops);
         if (nfail == 0) $fdisplay(fd, "END");
         else $fdisplay(fd, "END with failures");
         $fclose(fd);

@@ -87,9 +87,30 @@ SS_IMAGES = [
      [(10, 'rowfetch'), (20, 'busrq'), (30, 'midinst'), (34, 'any')], (36, 10), 40),
     ('psgtest', None, 'psgtest.asm', (0x5A, 0xC3), 22, None,
      [(6, 'sound'), (11, 'sound'), (14, 'midinst'), (16, 'any')], (17, 10), 19),
+    # cart RAM (RAM8 at $D000, 1,024 cells): a game started, its board in RAM
+    ('chess', 'USCF Chess ~ Chess (USA, Europe).zip', None, (0xFF, 0xFF), 100,
+     '40-46:1,60-66:Enter',
+     [(55, 'any'), (65, 'busrq'), (75, 'midinst'), (78, 'any')], (82, 6), 86),
 ]
 FRAMES_AFTER = 24          # an L run goes on this many frames after the restore
 LOAD_AT = FRAME            # fresh cores load from machine cycle 1 frame on
+DEEP_AFTER = 40            # D: s0 loaded into a core this many frames past its save point
+PAUSE0_IMAGES = ('psgtest',)   # S0: the S run with Pause in Menu off
+BURST_IMAGES = ('psgtest',)    # B: bridge reads while a save reads the state
+SOUND_ZERO_CLKS = 171818       # 4 ms of clk_sys: the sound is 0 by then (intv_core.sv)
+
+
+def cram_hash(cells):
+    """FNV-1a over the cart RAM cells, as tb_savestate.sv's M lines."""
+    h = 0x811C9DC5
+    for c in cells:
+        h = ((h ^ c) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def blob_cram(path):
+    cram = ss.unpack(open(path, 'rb').read())[2]
+    return cram_hash(cram), sum(1 for c in cram if c)
 
 
 def build(work, rtl_dir, verilator, strict=True):
@@ -242,35 +263,93 @@ class Bench:
         print('  ran %s: %.0fs' % (tag, time.time() - t0), flush=True)
         return run
 
-    def blob_path(self, name, i):
-        return os.path.join(self.work, '%s_s%d.blob' % (name, i))
+    def blob_path(self, name, i, tag='s'):
+        return os.path.join(self.work, '%s_%s%d.blob' % (name, tag, i))
 
 
-def save_script(img, bench):
+def save_script(img, bench, tag='s'):
     name, _, _, _, nframes, _, saves, menu, menu_save = img
     lines, blobs = [], []
     events = [(f, 'save', kind) for f, kind in saves] + [(menu[0], 'menu', menu[1]),
                                                          (menu_save, 'msave', None)]
     for f, what, x in sorted(events):
         if what == 'save':
-            p = bench.blob_path(name, len(blobs))
+            p = bench.blob_path(name, len(blobs), tag)
             lines.append('save %d %s %s' % (f * FRAME, x, p))
             blobs.append((p, x))
         elif what == 'menu':
             lines += ['menu %d 1' % (f * FRAME), 'wait %d' % x, 'menu 0 0']
         else:                                  # sleep: menu open, save, menu closed later
-            p = bench.blob_path(name, len(blobs))
+            p = bench.blob_path(name, len(blobs), tag)
             lines += ['menu %d 1' % (f * FRAME), 'save 0 any %s' % p, 'wait 5', 'menu 0 0']
             blobs.append((p, 'menu'))
     return lines, blobs
 
 
-def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc):
+def check_menu(run, pause, what):
+    """Each menu window (MENU open .. MENU 0) of a run. Pause on: one freeze
+    (Z) and one resume (U) in it, at the same machine cycle; the freeze within
+    a frame of the menu opening; every wait ends at the freeze's cycle (the
+    machine's time stands still); the raster frames frozen (U) about the
+    waits'. Pause off: the machine runs through the menu (no freeze but a
+    save's; each wait advances the machine by its frames). The sound and
+    live are checked on every clk by the bench (FAIL lines)."""
+    probs, win, n = [], None, 0
+    for ln in run.lines:
+        t = ln.split()
+        if t[0] == 'MENU' and t[1] == 'open':
+            win = {'c': int(t[2]), 'Z': [], 'U': [], 'W': [], 'SAVE': []}
+        elif win is not None and t[0] in ('Z', 'U', 'W', 'SAVE'):
+            win[t[0]].append(t)
+        elif win is not None and t[0] == 'MENU' and t[1] == '0':
+            n += 1
+            fr = sum(int(w[1]) for w in win['W'])
+            slack = 6 if win['SAVE'] else 2       # a save inside: the blob's read-out too
+            tag = '%s: menu %d (open at cycle %d)' % (what, n, win['c'])
+            if pause:
+                if len(win['Z']) != 1 or len(win['U']) != 1:
+                    probs.append('%s: %d freezes, %d resumes, want 1 each' % (tag, len(win['Z']), len(win['U'])))
+                else:
+                    zc, uc, uf = int(win['Z'][0][1]), int(win['U'][0][1]), int(win['U'][0][2])
+                    if zc != uc:
+                        probs.append('%s: frozen at cycle %d, resumed at %d' % (tag, zc, uc))
+                    if not 0 <= zc - win['c'] <= FRAME + 64:
+                        probs.append('%s: froze at cycle %d, %d after the menu opened' % (tag, zc, zc - win['c']))
+                    for w in win['W']:
+                        if int(w[3]) != zc:
+                            probs.append('%s: a wait ended at cycle %s, frozen at %d' % (tag, w[3], zc))
+                    if not fr - 1 <= uf <= fr + slack:
+                        probs.append('%s: frozen %d raster frames, waits %d' % (tag, uf, fr))
+            else:
+                if len(win['Z']) != len(win['SAVE']) or len(win['U']) != len(win['SAVE']):
+                    probs.append('%s: pause off, %d freezes for %d saves' % (tag, len(win['Z']), len(win['SAVE'])))
+                for w in win['W']:
+                    if int(w[3]) - int(w[2]) < (int(w[1]) - 1) * FRAME:
+                        probs.append('%s: pause off, a wait of %s frames ran %d cycles' % (
+                            tag, w[1], int(w[3]) - int(w[2])))
+            win = None
+    if n != 2:
+        probs.append('%s: %d menu windows, want 2' % (what, n))
+    return probs
+
+
+def check_common(run, what, drops=0):
+    """FAIL lines, END, the bridge accesses overwritten (E drops)."""
     probs = list(run.fails)
     if not run.end:
-        probs.append('S: no END')
+        probs.append('%s: no END' % what)
+    e = run.tagged('E')
+    got = int(e[0].split()[2]) if e else None
+    if got is None or (got != 0 if drops == 0 else got < drops):
+        probs.append('%s: bridge accesses overwritten: %s, want %s' % (what, got, drops or '0'))
+    return probs
+
+
+def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, pause=True, what='S'):
+    probs = check_common(run, what)
     nframes = img[4]
-    probs += compare_frames(ref, run.frames, 0, nframes, 'S')
+    probs += compare_frames(ref, run.frames, 0, nframes, what)
+    probs += check_menu(run, pause, what)
     saves = run.tagged('SAVE')
     if len(saves) != len(blobs) or any(s.split()[1] != 'ok' for s in saves):
         probs.append('S: saves %s' % saves)
@@ -279,17 +358,20 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc):
     # pause freezes too (a Z without a Q)
     # each save's request (Q) and the freeze it was taken in: the last Z
     # before its SAVE line (a menu pause may have frozen the machine first)
-    qs, zs, last_z = [], [], None
+    qs, zs, ms, last_z, last_m = [], [], [], None, None
     for ln in run.lines:
         t = ln.split()
         if t[0] == 'Z':
             last_z = ln
+        elif t[0] == 'M':
+            last_m = ln
         elif t[0] == 'Q' and t[1] == 'save':
             qs.append(ln)
         elif t[0] == 'SAVE':
             zs.append(last_z)
+            ms.append(last_m)
     info = []
-    for (p, kind), s, q, z in zip(blobs, saves, qs, zs):
+    for (p, kind), s, q, z, mline in zip(blobs, saves, qs, zs, ms):
         qt = q.split()
         cond = {'busrq': qt[4] == '1', 'rowfetch': qt[6] == '1', 'midinst': qt[8] == '0',
                 'sound': qt[10] != '0'}.get(kind, True)
@@ -307,6 +389,10 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc):
             probs.append('S: blob %s: %s' % (os.path.basename(p), bad[:3]))
             continue
         h, mods, cram = ss.unpack(blob)
+        want_m = '%08x %d' % (cram_hash(cram), sum(1 for c in cram if c))
+        if mline is None or ' '.join(mline.split()[2:4]) != want_m:
+            probs.append('S: blob %s: cart RAM %s, the SRAM at the freeze %s' % (
+                os.path.basename(p), want_m, mline))
         if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], exec_crc=h[ss.H_EXEC_CRC],
                    grom_crc=h[ss.H_GROM_CRC]) != blob:
             probs.append('S: blob %s: pack(unpack) differs' % os.path.basename(p))
@@ -366,6 +452,10 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         futs[(name, 'R')] = bench.pool.submit(bench.sim, tagp + name + '_R', img, nframes * FRAME, [])
         futs[(name, 'S')] = bench.pool.submit(bench.sim, tagp + name + '_S', img, nframes * FRAME, lines)
         saves[name] = blobs
+        if name in PAUSE0_IMAGES:              # the same with Pause in Menu off
+            l0, b0 = save_script(img, bench, tag='p')
+            futs[(name, 'S0')] = (b0, bench.pool.submit(bench.sim, tagp + name + '_S0', img,
+                                                        nframes * FRAME, l0, ['+pause=0']))
     for img in imgs:
         name = img[0]
         ref, srun = futs[(name, 'R')].result(), futs[(name, 'S')].result()
@@ -374,61 +464,105 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             continue
         refs[name] = ref
         p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:])
+        p += check_common(ref, 'R')
         want = 'L ready crc %08x words %d' % bench.prep[name][3:5]
         for tag, r in (('R', ref), ('S', srun)):
             if want not in r.lines:
                 p.append('%s: loader result %s, want %s' % (tag, [x for x in r.lines if x.startswith('L ready')], want))
+        if (name, 'S0') in futs:
+            b0, f0 = futs[(name, 'S0')]
+            r0 = f0.result()
+            if r0 is None:
+                p.append('S0: no log')
+            else:
+                p += check_save_run(img, ref, r0, b0, *bench.prep[name][3:], pause=False, what='S0')[0]
         probs += ['%s %s' % (name, x) for x in p]
         saves[name] = info
-        print('%s: R %d frames, S %d saves %s' % (name, img[4], len(info), 'pass' if not p else 'FAIL'),
-              flush=True)
-    # loads
+        print('%s: R %d frames, S %d saves%s %s' % (name, img[4], len(info),
+                                                    ', S0' if (name, 'S0') in futs else '',
+                                                    'pass' if not p else 'FAIL'), flush=True)
+    # loads: (img, tag, saved cycle or None, end cycle, the blob it must apply or None, future)
     lf = []
     for img in imgs:
         name, nframes = img[0], img[4]
         if name not in refs or not saves.get(name):
             continue
+
+        def sub(tag, end, sc, extra=()):
+            return bench.pool.submit(bench.sim, '%s%s_%s' % (tagp, name, tag), img, end, sc, extra)
         for i, (p, zc, kind) in enumerate(saves[name]):
             end = min(nframes, zc // FRAME + FRAMES_AFTER) * FRAME
             if i == len(saves[name]) - 1:      # wake: the load inside a menu pause
                 sc = ['menu %d 1' % LOAD_AT, 'load 0 %s ok %d' % (p, zc), 'wait 8', 'menu 0 0']
             else:
                 sc = ['load %d %s ok %d' % (LOAD_AT, p, zc)]
-            lf.append((img, 'L%d' % i, zc, end,
-                       bench.pool.submit(bench.sim, '%s%s_L%d' % (tagp, name, i), img, end, sc)))
+            lf.append((img, 'L%d' % i, zc, end, p, sub('L%d' % i, end, sc)))
+        p0, zc0, _ = saves[name][0]
+        end0 = min(nframes, zc0 // FRAME + FRAMES_AFTER) * FRAME
+        # D: s0 into a core that has run past its save point
+        deep = min(nframes - 2, zc0 // FRAME + DEEP_AFTER)
+        lf.append((img, 'D', zc0, end0, p0, sub('D', end0, ['load %d %s ok %d' % (deep * FRAME, p0, zc0)])))
+        # wake with the host's reset held: the load asked for in reset, reset
+        # released after its answer (W1) or while ss_ctl checks it (W2)
+        lf.append((img, 'W1', zc0, end0, p0, sub('W1', end0, ['load -1 %s ok %d' % (p0, zc0), 'reset 0 0'],
+                                                ['+hold=1'])))
+        lf.append((img, 'W2', zc0, end0, p0, sub('W2', end0, ['loadr -1 %s ok %d' % (p0, zc0)], ['+hold=1'])))
         # foreign: another image's blob into this one
         ob = other_blob(name, saves)
         if ob:
             end = 20 * FRAME
-            lf.append((img, 'F', None, end, bench.pool.submit(
-                bench.sim, '%s%s_F' % (tagp, name), img, end, ['load %d %s err -1' % (LOAD_AT, ob)])))
+            lf.append((img, 'F', None, end, None, sub('F', end, ['load %d %s err -1' % (LOAD_AT, ob)])))
         # corrupt ones, then the good one
-        p, zc, _ = saves[name][0]
-        bads = corrupt_blobs(bench.work, tagp + name, p)
-        sc = ['load %d %s err -1' % (LOAD_AT, b) for b in bads] + ['load 0 %s ok %d' % (p, zc)]
-        end = min(nframes, zc // FRAME + 12) * FRAME
-        lf.append((img, 'C', zc, end, bench.pool.submit(bench.sim, '%s%s_C' % (tagp, name), img, end, sc)))
-    for img, tag, zc, end, fut in lf:
+        bads = corrupt_blobs(bench.work, tagp + name, p0)
+        sc = ['load %d %s err -1' % (LOAD_AT, b) for b in bads] + ['load 0 %s ok %d' % (p0, zc0)]
+        end = min(nframes, zc0 // FRAME + 12) * FRAME
+        lf.append((img, 'C', zc0, end, p0, sub('C', end, sc)))
+        # B: two blob reads while a save reads the state: the second overwrites
+        # the first (one drop counted), the save and the run untouched
+        if name in BURST_IMAGES:
+            pb = bench.blob_path(name, 0, 'b')
+            fb = saves[name][0][1] // FRAME
+            lf.append((img, 'B', None, nframes * FRAME, pb,
+                       sub('B', nframes * FRAME, ['saveb %d %s' % (fb * FRAME, pb)])))
+    for img, tag, zc, end, blob, fut in lf:
         name = img[0]
         run = fut.result()
         q = []
         if run is None:
             q = ['no log']
         else:
-            q += run.fails
-            if not run.end:
-                q.append('no END')
+            q += check_common(run, tag, drops=1 if tag == 'B' else 0)
             loads = run.tagged('LOAD')
-            if tag.startswith('L') and loads != ['LOAD ok EXPECT ok']:
-                q.append('loads %s' % loads)
+            applied = run.tagged('MA')
             ref = refs[name]
-            if zc is None:                     # F: untouched all the way
-                if run.set_cycle is not None:
+            if tag[0] in 'LDW' and loads != ['LOAD ok EXPECT ok']:
+                q.append('loads %s' % loads)
+            if tag == 'W1':                    # answered while the reset was still on
+                rl = [i for i, x in enumerate(run.lines) if x.startswith('R reset 0')]
+                ol = [i for i, x in enumerate(run.lines) if x.startswith('LOAD ok')]
+                if not rl or not ol or rl[0] < ol[0]:
+                    q.append('reset not held through the load (%s %s)' % (rl, ol))
+            if tag == 'W2' and 'R reset released, staged 1' not in run.lines:
+                q.append('reset not released while the load was checked')
+            if tag == 'B':
+                sv = run.tagged('SAVE')
+                if len(sv) != 1 or sv[0].split()[1] != 'ok' or not any(
+                        x.startswith('R burst') and x.endswith('ss_en 1') for x in run.lines):
+                    q.append('burst save %s' % sv)
+                elif ss.verify(open(blob, 'rb').read(), *bench.prep[name][3:5],
+                               exec_crc=bench.prep[name][5], grom_crc=bench.prep[name][6]):
+                    q.append('burst save: blob does not verify')
+                q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
+            elif zc is None:                   # F: untouched all the way
+                if run.set_cycle is not None or applied:
                     q.append('state set by a refused load')
                 q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
             else:
                 if run.set_cycle != zc:
                     q.append('set cycle %s, want %d' % (run.set_cycle, zc))
+                want_m = '%08x %d' % blob_cram(blob)
+                if len(applied) != 1 or ' '.join(applied[0].split()[2:4]) != want_m:
+                    q.append('cart RAM after the load %s, blob %s' % (applied, want_m))
                 # before the load: the fresh core's own frames are R's too
                 pre = sorted(k for t, k in run.frames if t == 'H' and k < img[4])
                 q += compare_frames(ref, run.frames, 0, (pre[-1] + 1) if pre else 0, tag + ' before')
@@ -467,6 +601,17 @@ PLANTS = [
      [(CHK, "else if (w != 14'(SS_H_EXEC_CRC) && w != 14'(SS_H_GROM_CRC)\n"
             "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],
      'sticmob', 'psgtest'),
+    # the cart RAM: its restore skipped; its cells taken one blob word off (save and load)
+    ('ss_cram_not_restored', 'intv_ss_ctl.sv',
+     [("                              ph <= 2'd1;                 // cart RAM: m_go now\n",
+       "                              ph <= 2'd2;                 // cart RAM: m_go now\n")], 'chess', 'psgtest'),
+    ('ss_cram_offset', 'intv_ss_ctl.sv',
+     [("cram_a  = CRAM + {2'd0, w - 14'(W_CRAM), 1'b0};",
+       "cram_a  = CRAM + 17'd2 + {2'd0, w - 14'(W_CRAM), 1'b0};")], 'chess', 'psgtest'),
+    # the menu ignored: the machine runs on while the menu is open
+    ('ss_menu_ignored', 'intv_ss_ctl.sv',
+     [("    wire logic menu_hold = mn_s[2] && pz_s[2];\n",
+       "    wire logic menu_hold = 1'b0 && mn_s[2] && pz_s[2];\n")], 'psgtest', 'astrosmash'),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 

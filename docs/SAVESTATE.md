@@ -220,7 +220,10 @@ psgtest):
 
 - R, a straight run, and S, the same run with saves asked for in the middle
   of an instruction, inside a BUSRQ, during a row fetch and while the PSG
-  sounds, a menu pause, and a save inside a menu pause (sleep). S must equal
+  sounds, a menu pause, and a save inside a menu pause (sleep). Each save is
+  asked for at the start of its moment (the sound's: the clk after a PSG
+  tick that left a level not 0, held until the next tick, 4 CPU cycles on)
+  and must reach the core inside it, within 30 frames. S must equal
   R in every machine frame (bus phases and CPU steps, PSG steps and
   samples, picture); every blob must pass `tools/savestate.py verify`, and
   its CPU and timing words must be what the machine held at the freeze;

@@ -428,18 +428,22 @@ module tb_savestate;
     endtask
 
     // the moments a save is asked for, at the start of a stretch that lasts
-    // well beyond the ~10 clk_sys the request takes to reach ss_ctl
-    logic ce_fired = 1'b0, cp_q = 1'b0;
+    // well beyond the ~10 clk_sys the request takes to reach ss_ctl. sound:
+    // the clk after a PSG tick, when the levels the tick set are in (they hold
+    // until the next tick, 4 CPU cycles on); at the tick itself they are the
+    // old ones, and a tone's square wave can take a nonzero level to 0 there
+    logic ce_fired = 1'b0, cp_q = 1'b0, tick_fired = 1'b0;
     always @(posedge clk) begin
         ce_fired <= ce_cpu;
         cp_q <= core.machine.stic.cp_on;
+        tick_fired <= core.machine.psg.tick;
     end
     function automatic bit kind_ok(input string kind);
         case (kind)
             "midinst":  return ce_fired && !core.machine.fetch && !hold && phase != 3'd4;
             "busrq":    return core.machine.busak;
             "rowfetch": return core.machine.stic.cp_on && !cp_q;
-            "sound":    return core.machine.psg.tick && (core.machine.psg.lv[0] != 4'd0
+            "sound":    return tick_fired && (core.machine.psg.lv[0] != 4'd0
                                || core.machine.psg.lv[1] != 4'd0 || core.machine.psg.lv[2] != 4'd0);
             default:    return 1'b1;
         endcase

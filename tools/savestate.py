@@ -10,10 +10,10 @@ Everything else is generated from LAYOUT below or checked against it:
   docs/SAVESTATE.md              the table between the GENERATED markers
   the SS_ID defaults of the RTL modules and intv_machine's parameters (checked only)
 
-The blob (format version 2, build step 8; version 1 was step 7's) is 153,600 bytes (DESIGN decision 6), 32-bit words stored
-big-endian (the Pocket's bridge byte order):
+The blob (format version 3, build step 9; version 2 was step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
+32-bit words stored big-endian (the Pocket's bridge byte order):
   bytes 0-63        header, 16 words (HEADER below)
-  bytes 64-8191     the modules' state words in id order (1,319 used; the rest zero)
+  bytes 64-8191     the modules' state words in id order (1,853 used; the rest zero)
   bytes 8192-40959  cart RAM, the 16K cells of the SRAM's cart RAM area, two per word
                     (cell 2k in bits 31-16)
   bytes 40960-      reserved for later steps (ECS, Intellivoice, JLP): zero
@@ -21,7 +21,8 @@ The payload is bytes 64 .. 64 + length - 1 (length in the header); its CRC32 (zl
 CRC-32, the same as the cartridge CRC) is in the header. A blob is refused unless the
 magic, version, size, length, cartridge CRC and length, the CFG's CRC, flags, word
 counts and the EXEC and GROM CRCs match this core, its cartridge (and CFG) and its system
-ROMs, the reserved header words and the reserved area are
+ROMs, the ECS flag and ECS ROM CRC (version 3: the ECS attached or not, and with which ROM),
+the reserved header words and the reserved area are
 zero, and the payload CRC is right.
 
 Usage:
@@ -66,20 +67,24 @@ LAYOUT = [
      "the STIC's row buffer 20 x 14"),
     (0x0D, 'line', 64, 'intv_ram.sv', None,
      "the STIC's line buffer 64 x 18"),
+    (0x0E, 'ecs', 1, 'intv_ecs.sv', 'SS_ID',
+     'ECS page latches $2/$7/$E, port latches, mode (step 9)'),
+    (0x0F, 'psg2', 21, 'intv_psg.sv', None,
+     'PSG #2 (ECS, AY-3-8917): as psg'),
+    (0x10, 'ecsram', 512, 'intv_ecs.sv', None,
+     'ECS RAM 2,048 x 8, four cells a word (ids $10-$11)'),
 ]
 # Ids kept for later build steps (not in version 1's blob).
 RESERVED_IDS = [
-    (0x0E, 'ECS page registers, UART (step 9)'),
-    (0x0F, 'PSG #2 (ECS, step 9)'),
-    (0x10, 'ECS RAM, ids $10-$17 (step 9)'),
     (0x18, 'Intellivoice FIFO and SP0256 (step 10)'),
     (0x20, 'JLP registers (step 11)'),
 ]
 # intv_machine's id parameters (the rest are in core_top / intv_core)
 MACHINE_PARAMS = {'SS_CPU': 0x02, 'SS_BUS': 0x03, 'SS_STIC': 0x04, 'SS_PSG': 0x05, 'SS_SCR': 0x06,
-                  'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D}
+                  'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D,
+                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10}
 
-VERSION = 2
+VERSION = 3
 MAGIC = 0x494E5456                 # "INTV"
 BLOB_BYTES = 153600                # DESIGN 4.4, decision 6
 HDR_WORDS = 16
@@ -87,13 +92,13 @@ MOD_BYTE = 64                      # first module word
 MOD_AREA_END = 8192                # module words up to here
 CRAM_BYTE = 8192
 CRAM_CELLS = 16384                 # the SRAM's cart RAM area (intv_media.sv)
-LIVE_END = CRAM_BYTE + 2 * CRAM_CELLS        # 40960: the end of what versions 1 and 2 use
+LIVE_END = CRAM_BYTE + 2 * CRAM_CELLS        # 40960: the end of what versions 1-3 use
 PAYLOAD_BYTES = LIVE_END - MOD_BYTE          # 40896
-MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1319
+MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1853
 
 # header words
 (H_MAGIC, H_VERSION, H_SIZE, H_LENGTH, H_CART_CRC, H_CART_WORDS, H_FLAGS, H_CRC, H_NMOD, H_NCRAM,
- H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC) = range(13)
+ H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC, H_ECS_CRC) = range(14)
 HEADER = [
     (H_MAGIC, 'magic', '$494E5456 "INTV"'),
     (H_VERSION, 'version', 'format version (%d)' % VERSION),
@@ -101,15 +106,16 @@ HEADER = [
     (H_LENGTH, 'length', 'payload bytes from byte 64 (%d)' % PAYLOAD_BYTES),
     (H_CART_CRC, 'cart_crc', "the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge)"),
     (H_CART_WORDS, 'cart_words', 'the cartridge image length in 16-bit words'),
-    (H_FLAGS, 'flags', 'bit 0 ECS attached, bit 1 Intellivoice attached, bit 8 PAL (all 0 in this core)'),
+    (H_FLAGS, 'flags', 'bit 0 ECS attached (version 3), bit 1 Intellivoice attached, bit 8 PAL (0 in this core)'),
     (H_CRC, 'crc', 'CRC32 of the payload (bytes 64 .. 64 + length - 1)'),
     (H_NMOD, 'mod_words', 'module state words (%d)' % MOD_WORDS),
     (H_NCRAM, 'cram_cells', 'cart RAM cells (%d)' % CRAM_CELLS),
     (H_EXEC_CRC, 'exec_crc', "the EXEC slot's CRC32 (the bytes the loader took)"),
     (H_GROM_CRC, 'grom_crc', "the GROM slot's CRC32"),
     (H_CFG_CRC, 'cfg_crc', "the CFG's CRC32 when the map came with one (0: none; version 2)"),
+    (H_ECS_CRC, 'ecs_crc', "the ECS ROM slot's CRC32 while the ECS is attached, else 0 (version 3)"),
 ]
-H_LAST = H_CFG_CRC
+H_LAST = H_ECS_CRC
 FLAG_ECS, FLAG_VOICE, FLAG_PAL = 1, 2, 0x100
 
 assert 4 * HDR_WORDS == MOD_BYTE
@@ -141,7 +147,7 @@ def crc32(b):
 
 # ------------------------------------------------------------- pack / unpack
 def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_crc=0, grom_crc=0,
-         cfg_crc=0, version=VERSION):
+         cfg_crc=0, version=VERSION, ecs_crc=0):
     """mods: {id: [words]} (every LAYOUT module, exact length); cram: CRAM_CELLS cells."""
     b = bytearray(BLOB_BYTES)
     for mid, name, n, w0 in module_offsets():
@@ -161,6 +167,8 @@ def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_
     h[H_EXEC_CRC], h[H_GROM_CRC] = exec_crc, grom_crc
     if version >= 2:
         h[H_CFG_CRC] = cfg_crc
+    if version >= 3:
+        h[H_ECS_CRC] = ecs_crc
     h[H_CRC] = crc32(b[MOD_BYTE:MOD_BYTE + PAYLOAD_BYTES]) if crc_override is None else crc_override
     for i, v in enumerate(h):
         struct.pack_into('>I', b, 4 * i, v & 0xFFFFFFFF)
@@ -180,7 +188,8 @@ def unpack(blob):
     return header(blob), mods, cram
 
 
-def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_crc=None, cfg_crc=None):
+def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_crc=None, cfg_crc=None,
+           ecs_crc=0):
     """The core's load checks, in its order; [] if the blob would be taken."""
     if len(blob) != BLOB_BYTES:
         return ['size %d bytes, want %d' % (len(blob), BLOB_BYTES)]
@@ -197,6 +206,7 @@ def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_cr
         want[H_GROM_CRC] = grom_crc
     if cfg_crc is not None:
         want[H_CFG_CRC] = cfg_crc
+    want[H_ECS_CRC] = ecs_crc
     bad = []
     names = {i: n for i, n, _ in HEADER}
     for i in range(HDR_WORDS):
@@ -371,8 +381,8 @@ def cmd_show(a):
 def cmd_verify(a):
     blob = open(a.blob, 'rb').read()
     hx = lambda x: None if x is None else int(x, 16)  # noqa: E731
-    bad = verify(blob, hx(a.cart_crc), a.cart_words, exec_crc=hx(a.exec_crc), grom_crc=hx(a.grom_crc),
-                 cfg_crc=hx(a.cfg_crc))
+    bad = verify(blob, hx(a.cart_crc), a.cart_words, flags=a.flags, exec_crc=hx(a.exec_crc),
+                 grom_crc=hx(a.grom_crc), cfg_crc=hx(a.cfg_crc), ecs_crc=hx(a.ecs_crc))
     for b in bad:
         print('  ' + b)
     print('SS_VERIFY %s' % ('pass' if not bad else 'FAIL'))
@@ -416,6 +426,10 @@ def selftest():
     # an older (version 1) blob of the same machine: refused
     cases.append(('version 1 blob', pack(mods, cram, 0x12345678, 4096, exec_crc=0xCAFEF00D,
                                          grom_crc=0x0BADBEEF, version=1)))
+    cases.append(('version 2 blob', pack(mods, cram, 0x12345678, 4096, exec_crc=0xCAFEF00D,
+                                         grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE, version=2)))
+    cases.append(('ECS attached', pack(mods, cram, 0x12345678, 4096, flags=FLAG_ECS, exec_crc=0xCAFEF00D,
+                                       grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE, ecs_crc=0x0EC5C0DE)))
     for what, x in cases:
         if not verify(x, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE):
             fails.append('not refused: ' + what)
@@ -427,6 +441,14 @@ def selftest():
         fails.append('foreign system ROM taken')
     if verify(b, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE):
         fails.append('own system ROM CRCs refused')
+    be = pack(mods, cram, 0x12345678, 4096, flags=FLAG_ECS, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF,
+              cfg_crc=0x5EEDC0DE, ecs_crc=0x0EC5C0DE)
+    if verify(be, 0x12345678, 4096, flags=FLAG_ECS, ecs_crc=0x0EC5C0DE):
+        fails.append('own ECS blob refused')
+    if not verify(be, 0x12345678, 4096, flags=FLAG_ECS, ecs_crc=0x0EC5C0DF):
+        fails.append('foreign ECS ROM taken')
+    if not verify(be, 0x12345678, 4096, flags=0, ecs_crc=0x0EC5C0DE):
+        fails.append('ECS blob taken without the ECS')
     # the state addresses: every word once, in id order
     addrs = [state_addr(i) for i in range(MOD_WORDS)]
     if len(set(addrs)) != MOD_WORDS or addrs != sorted(addrs):
@@ -454,6 +476,8 @@ def main():
     v.add_argument('--exec-crc')
     v.add_argument('--grom-crc')
     v.add_argument('--cfg-crc')
+    v.add_argument('--flags', type=int, default=0)
+    v.add_argument('--ecs-crc', default='0')
     sub.add_parser('selftest')
     a = ap.parse_args()
     return {'gen': cmd_gen, 'show': cmd_show, 'verify': cmd_verify,

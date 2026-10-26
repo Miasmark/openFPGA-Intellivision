@@ -122,6 +122,7 @@ not documented; the model puts them before the read (estimated).
 | 13 | Branch reach in 10-bit ROM | "+1025 to -1024" (p.54) | 2K words either way (Branch) | | **the encoding rule**: forward PC+2+d, backward PC+1-d, d up to 2^ROMW-1, so PC+1025 and PC-1022 | branch_romw10.asm |
 | 14 | Jump with II=11 | only II = 00, 01, 10 defined (p.52) | "unknown opcode (behavior unknown!!)" (Jump) | S9 "Invalid opcode"; MAME: logs it and does not jump | **jumps, I unchanged**; marked undefined; strict raises | undefined.asm, strict_jump_ii3.asm |
 | 15 | MVO@ with the pointer as source | "SSS = MMM = 4, 5, 6 or 7 not supported" (p.55) | | MAME writes the old value | **old value, then increment**; marked undefined | undefined.asm |
+| 16 | MVO R7, A (direct): the word written | the data goes out after the address word's fetch (direct write, p.46-48, fig 3.2.3) | | MAME writes R7 after its increment past the address word (cp1610.cpp cp1610_mvo); Mind Strike's $66B9 (`MVO R7,$018D`) under the ECS showed it in the trace (build step 9) | **the PC after the address word** (the next instruction's address); until step 9 the model wrote the address word's own address | step 9 MAME gate (mindstrike) |
 
 **Errors on single wiki pages** (the CP1610 table and S1 agree with each
 other, and with MAME's decoder):

@@ -19,6 +19,8 @@ in play with keys, B-17 Bomber in flight, Atlantis, Buzz Bombers, our sticmob an
      is made inside a menu pause: wake from sleep);
   F  a core running this image loads another image's blob: err, and the run goes on as
      R, untouched;
+  E  (build step 9, SS_ECS images) the image's own blob into a core whose ECS is off (the
+     menu's override): err, no state set (the header's ECS flag);
   C  corrupt and wrong blobs (a payload byte flipped, the header CRC changed, a reserved
      byte set, the version changed, the unused module area set) each give err with the
      run untouched, then the good blob loads.
@@ -60,7 +62,8 @@ import savestate as ss      # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
-       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v']
+       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v',
+       'intv_ecs.sv']
 OTHER = [os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(HERE, 'models', 'sram_as6c2016.sv'),
          os.path.join(HERE, 'models', 'mf_datatable.sv'), os.path.join(HERE, 'tb_savestate.sv')]
@@ -100,7 +103,27 @@ SS_IMAGES = [
     ('chess', 'USCF Chess ~ Chess (USA, Europe).zip', None, (0xFF, 0xFF), 100,
      '40-46:1,60-66:Enter',
      [(55, 'any'), (65, 'busrq'), (75, 'midinst'), (78, 'any')], (82, 6), 86),
+    # build step 9 (SS_ECS): ECS BASIC with no cartridge, a line typed on the ECS keyboard
+    # (ECS RAM, the page latches, PSG #2 as the keyboard port); our ecssound cartridge (PSG #2
+    # sounding, the $4800 hook's pages); our ecsavail cartridge (the Auto rule's attached mode)
+    ('ecsbasic', None, None, (0xFF, 0xFF), 1000,
+     '300-306:Enter,420-426:1,500-506:Enter',
+     [(820, 'midinst'), (850, 'any'), (880, 'busrq'), (910, 'any')], (930, 10), 950),
+    ('ecssound', ('step9', 'ecssound'), None, (0xFF, 0xFF), 100, None,
+     [(40, 'sound'), (55, 'midinst'), (70, 'sound'), (78, 'any')], (82, 6), 86),
+    ('ecsavail', ('step9', 'ecsavail'), None, (0xFF, 0xFF), 60, None,
+     [(25, 'midinst'), (32, 'any'), (40, 'busrq'), (44, 'any')], (48, 6), 52),
 ]
+# step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
+# ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
+SS_ECS = {
+    'ecsbasic': dict(ovr=0, mode=1, presses='800-806:ecs:1,812-818:ecs:0,824-830:ecs:SPACE,'
+                                         '836-842:ecs:P,848-854:ecs:R,860-866:ecs:I,872-878:ecs:N,'
+                                         '884-890:ecs:T,896-902:ecs:SPACE,908-914:ecs:7,920-926:ecs:RTN,'
+                                         '932-938:ecs:R,944-950:ecs:U,956-962:ecs:N,968-974:ecs:RTN'),
+    'ecssound': dict(ovr=0, mode=1),
+    'ecsavail': dict(ovr=0, mode=2),
+}
 FRAMES_AFTER = 24          # an L run goes on this many frames after the restore
 LOAD_AT = FRAME            # fresh cores load from machine cycle 1 frame on
 DEEP_AFTER = 40            # D: s0 loaded into a core this many frames past its save point
@@ -157,7 +180,7 @@ NOSS_IMAGES = [('cartnoss', ('step8', 'rombankw'), 'cart8test.asm', (0xFF, 0xFF)
 
 def prepare(work, img, lib, bdir):
     """(exec path, cart path or None, keys file or None, cart CRC, cart words, EXEC CRC,
-    GROM CRC, CFG path or None, CFG CRC)."""
+    GROM CRC, CFG path or None, CFG CRC, header flags, ECS CRC, the ECS plusargs)."""
     name, zipname, prog, pads, nframes, keys = img[:6]
     ex = os.path.join(bdir, 'exec.bin')
     if prog:
@@ -171,7 +194,16 @@ def prepare(work, img, lib, bdir):
         with open(ex, 'wb') as f:
             f.write(b)
     cart, crc, words, cfgp, cfgcrc = None, 0, 0, None, 0
-    if isinstance(zipname, tuple):             # a step-8 image from our sources
+    if isinstance(zipname, tuple) and zipname[0] == 'step9':      # a step-9 cartridge
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'step9_build_images', os.path.join(ROOT, 'sim', 'testroms', 'step9', 'build_images.py'))
+        b9 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(b9)
+        im = [x for x in b9.images(os.path.join(work, 'step9_build')) if x['name'] == zipname[1]][0]
+        cart, cfgp = b9.write(work, im)
+        crc, words, cfgcrc = ss.crc32(im['data']), (len(im['data']) + 1) // 2, ss.crc32(im['cfg'])
+    elif isinstance(zipname, tuple):             # a step-8 image from our sources
         sys.path.insert(0, os.path.join(ROOT, 'sim', 'testroms', 'step8'))
         import build_images
         import cartfmt
@@ -203,8 +235,27 @@ def prepare(work, img, lib, bdir):
                 last = v
         with open(kf, 'w') as f:
             f.writelines(out)
+    e = SS_ECS.get(name)
+    flags, ecrc, eargs = 0, 0, ['+ecs=2']
+    if e:
+        rom = [os.path.join(bdir, n) for n in ('ECS.bin', 'ecs.bin') if os.path.exists(os.path.join(bdir, n))][0]
+        eargs = ['+ecs=%d' % e['ovr'], '+ecsrom=' + rom]
+        if e['mode']:
+            flags, ecrc = ss.FLAG_ECS, ss.crc32(open(rom, 'rb').read())
+        if e.get('presses'):
+            presses = isys.parse_presses(e['presses'])
+            ekf = os.path.join(work, name + '.ekeys')
+            out, last = [], 0
+            for k in range(nframes + 2):
+                v = isys.press_keys(presses, k - 1)
+                if v != last:
+                    out.append('%d %016X\n' % (k, v))
+                    last = v
+            with open(ekf, 'w') as f:
+                f.writelines(out)
+            eargs.append('+ekeys=' + ekf)
     return (ex, cart, kf, crc, words, ss.crc32(open(ex, 'rb').read()),
-            ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read()), cfgp, cfgcrc)
+            ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read()), cfgp, cfgcrc, flags, ecrc, eargs)
 
 
 class Run:
@@ -282,7 +333,8 @@ class Bench:
             cmd.append('+cfg=' + self.prep[name][7])
         if kf:
             cmd.append('+keys=' + kf)
-        cmd += list(extra)
+        cmd += list(extra)                     # before the image's own: the first plusarg counts
+        cmd += self.prep[name][11]
         if self.simslot:
             cmd = [self.simslot] + cmd
         t0 = time.time()
@@ -376,7 +428,8 @@ def check_common(run, what, drops=0):
     return probs
 
 
-def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause=True, what='S'):
+def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause=True, what='S', flags=0,
+                   ecscrc=0):
     probs = check_common(run, what)
     nframes = img[4]
     probs += compare_frames(ref, run.frames, 0, nframes, what)
@@ -418,7 +471,8 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
         zc, mpos = int(zt[1]), int(zt[2], 16)
         regs = [int(x, 16) for x in zt[3:11]]
         blob = open(p, 'rb').read()
-        bad = ss.verify(blob, crc, words, exec_crc=ecrc, grom_crc=gcrc, cfg_crc=cfgcrc)
+        bad = ss.verify(blob, crc, words, flags=flags, exec_crc=ecrc, grom_crc=gcrc, cfg_crc=cfgcrc,
+                        ecs_crc=ecscrc)
         if bad:
             probs.append('S: blob %s: %s' % (os.path.basename(p), bad[:3]))
             continue
@@ -427,8 +481,9 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
         if mline is None or ' '.join(mline.split()[2:4]) != want_m:
             probs.append('S: blob %s: cart RAM %s, the SRAM at the freeze %s' % (
                 os.path.basename(p), want_m, mline))
-        if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], exec_crc=h[ss.H_EXEC_CRC],
-                   grom_crc=h[ss.H_GROM_CRC], cfg_crc=h[ss.H_CFG_CRC]) != blob:
+        if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], flags=h[ss.H_FLAGS],
+                   exec_crc=h[ss.H_EXEC_CRC], grom_crc=h[ss.H_GROM_CRC], cfg_crc=h[ss.H_CFG_CRC],
+                   ecs_crc=h[ss.H_ECS_CRC]) != blob:
             probs.append('S: blob %s: pack(unpack) differs' % os.path.basename(p))
         cpu = mods[0x02]
         want = [(regs[1] << 16) | regs[0], (regs[3] << 16) | regs[2], (regs[5] << 16) | regs[4],
@@ -501,7 +556,12 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             continue
         refs[name] = ref
         p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:7],
-                                 cfgcrc=bench.prep[name][8])
+                                 cfgcrc=bench.prep[name][8], flags=bench.prep[name][9],
+                                 ecscrc=bench.prep[name][10])
+        if name in SS_ECS:
+            want_e = 'L ecs mode %d' % SS_ECS[name]['mode']
+            if want_e not in ref.lines:
+                p.append('R: %s, want %s' % ([x for x in ref.lines if x.startswith('L ecs')], want_e))
         p += check_common(ref, 'R')
         want = 'L ready crc %08x words %d' % bench.prep[name][3:5]
         for tag, r in (('R', ref), ('S', srun)):
@@ -514,7 +574,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 p.append('S0: no log')
             else:
                 p += check_save_run(img, ref, r0, b0, *bench.prep[name][3:7], cfgcrc=bench.prep[name][8],
-                                    pause=False, what='S0')[0]
+                                    pause=False, what='S0', flags=bench.prep[name][9],
+                                    ecscrc=bench.prep[name][10])[0]
         probs += ['%s %s' % (name, x) for x in p]
         saves[name] = info
         print('%s: R %d frames, S %d saves%s %s' % (name, img[4], len(info),
@@ -551,6 +612,12 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         if ob:
             end = 20 * FRAME
             lf.append((img, 'F', None, end, None, sub('F', end, ['load %d %s err -1' % (LOAD_AT, ob)])))
+        # step 9, E: the image's own state into a core whose ECS is off (the menu's override):
+        # refused (header flags), the run untouched
+        if name in SS_ECS:
+            end = 20 * FRAME
+            lf.append((img, 'E', None, end, None, sub('E', end, ['load %d %s err -1' % (LOAD_AT, p0)],
+                                                         ['+ecs=2'])))
         # corrupt ones, then the good one
         bads = corrupt_blobs(bench.work, tagp + name, p0)
         sc = ['load %d %s err -1' % (LOAD_AT, b) for b in bads] + ['load 0 %s ok %d' % (p0, zc0)]
@@ -589,9 +656,9 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 if len(sv) != 1 or sv[0].split()[1] != 'ok' or not any(
                         x.startswith('R burst') and x.endswith('ss_en 1') for x in run.lines):
                     q.append('burst save %s' % sv)
-                elif ss.verify(open(blob, 'rb').read(), *bench.prep[name][3:5],
+                elif ss.verify(open(blob, 'rb').read(), *bench.prep[name][3:5], flags=bench.prep[name][9],
                                exec_crc=bench.prep[name][5], grom_crc=bench.prep[name][6],
-                               cfg_crc=bench.prep[name][8]):
+                               cfg_crc=bench.prep[name][8], ecs_crc=bench.prep[name][10]):
                     q.append('burst save: blob does not verify')
                 rw = run.tagged('RW')
                 if len(rw) != 1 or int(rw[0].split()[1]) < 1 or int(rw[0].split()[2]) != 0:
@@ -600,7 +667,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             elif zc is None:                   # F: untouched all the way
                 if run.set_cycle is not None or applied:
                     q.append('state set by a refused load')
-                q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
+                if tag != 'E':                 # E runs with the ECS off: not R's run
+                    q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
             else:
                 if run.set_cycle != zc:
                     q.append('set cycle %s, want %d' % (run.set_cycle, zc))
@@ -615,7 +683,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             if tag == 'C':
                 if [x.split()[1] for x in loads] != ['err'] * 6 + ['ok']:
                     q.append('loads %s' % loads)
-            if tag == 'F' and loads != ['LOAD err EXPECT err']:
+            if tag in ('F', 'E') and loads != ['LOAD err EXPECT err']:
                 q.append('loads %s' % loads)
         print('%s %s: %s' % (name, tag, 'pass' if not q else 'FAIL ' + '; '.join(q[:3])), flush=True)
         probs += ['%s %s: %s' % (name, tag, x) for x in q]

@@ -710,6 +710,8 @@ class CP1610:
                 self._undefined("SDBD before MVO (S1 p.49: double byte data is for reads)")
             v = r[rg]
             if m == 0:      # MVO SSS, A: 11 cycles
+                if rg == 7:     # R7 is written after the address word's fetch: the next PC
+                    v = (r[7] + 1) & 0xFFFF     # (MAME cp1610.cpp cp1610_mvo; step 9, Mind Strike)
                 self._words.append(self._direct_write_seq(r[7], v))
                 r[7] = (r[7] + 1) & 0xFFFF
             else:           # MVO@ / PSHR / MVOI: 9 cycles

@@ -20,6 +20,16 @@
 //   $1E000-$1FFFF  the loader's pool: 32 blocks of 256 words assembled at
 //                  load from a CFG's partial or shared blocks (step 8)
 //
+// The ECS (build step 9): its ROMs are read through intv_cart's port
+// (ecs_on, ecs_pg from intv_ecs; ecs_rom_ok: the ECS ROM slot loaded
+// whole). After every load, before ready rises, the Auto rule's probe
+// reads $4800 through the cartridge port (the machine is in reset, the
+// selects at 0) and ecs_auto gives DESIGN 20's mode (tools/ecs.py
+// auto_mode): the ECS flag, or no cartridge (0 words) -> 1 (on); a ROM
+// word <= $03FF at $4800 (read, not a RAM cell) -> 1; the image maps
+// $4000-$47FF (intv_cart m4) -> 0 (off); else 2 (attached, ROMs paged
+// out).
+//
 // Three SRAM masters, fixed priority: the loader (only while loading, when
 // the machine is held in reset), the cartridge port, and an auxiliary port
 // (the ECS module from step 9; the bench reads the stored image with it).
@@ -60,6 +70,12 @@ module intv_media #(
     output logic             bus_paged,
     input  wire logic [63:0] pg_rst,          // page selects at machine reset (step 9)
     output logic [63:0]      pg_sel,
+
+    // the ECS (step 9)
+    input  wire logic        ecs_on,
+    input  wire logic [11:0] ecs_pg,
+    output logic [1:0]       ecs_auto,        // the Auto rule's mode for this image
+    output logic             ecs_rom_ok,
 
     // auxiliary SRAM port
     input  wire logic        aux_req,
@@ -154,7 +170,7 @@ module intv_media #(
         .res_layout(res_layout), .res_flags(res_flags), .res_hit(res_hit),
         .res_cfg_crc(res_cfg_crc), .res_fmt(res_fmt), .res_noss(res_noss), .res_paged(res_paged),
         .res_limit(res_limit),
-        .busy(busy), .ready(ready), .err(err), .fmt_err(fmt_err), .len_st(len_st), .slot_st(slot_st)
+        .busy(busy), .ready(ld_ready), .err(err), .fmt_err(fmt_err), .len_st(len_st), .slot_st(slot_st)
     );
 
     // ---------------------------------------------------------- cartridge
@@ -166,7 +182,42 @@ module intv_media #(
     logic [1:0]  c_fmt;                       // the save state's word 4 holds it
     /* verilator lint_on UNUSEDSIGNAL */
 
-    intv_cart #(.SS_ID(SS_ID)) cart (
+    // ---------------------------------------- the Auto rule's $4800 probe
+    logic        ld_ready, probing = 1'b0, pr_req = 1'b0, res_ecs = 1'b0, res_none = 1'b0;
+    logic        c_bus_req, c_bus_ack, c_bus_hit, c_m4;
+    logic [15:0] c_bus_rdata;
+    logic [3:0]  c_bus_attr;
+    initial ecs_auto = 2'd0;
+    assign ready      = ld_ready && !probing && !res_we;   // res_we: the clk before probing rises
+    assign ecs_rom_ok = slot_st[9:8] == 2'd2;
+    assign c_bus_req  = probing ? pr_req : bus_req;
+    assign bus_ack    = c_bus_ack && !probing;
+    assign bus_rdata  = c_bus_rdata;
+    assign bus_hit    = c_bus_hit;
+    assign bus_attr   = c_bus_attr;
+    always_ff @(posedge clk) begin
+        pr_req <= 1'b0;
+        if (res_we) begin
+            probing <= 1'b1;
+            pr_req  <= 1'b1;
+        end else if (probing && c_bus_ack) begin
+            probing  <= 1'b0;
+            ecs_auto <= (res_ecs || res_none) ? 2'd1
+                      : (c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0) ? 2'd1
+                      : c_m4 ? 2'd0 : 2'd2;
+        end
+        if (reset) begin
+            probing <= 1'b0;
+            pr_req  <= 1'b0;
+        end
+    end
+    always_ff @(posedge clk)
+        if (res_we) begin
+            res_ecs  <= res_flags[0];
+            res_none <= res_words == 17'd0;
+        end
+
+    intv_cart #(.SS_ID(SS_ID), .ECS_BASE(17'h10000)) cart (
         .clk(clk), .mreset(mreset),
         .ld_tab_we(tab_we), .ld_tab_idx(tab_idx), .ld_tab_d(tab_d),
         .ld_res_we(res_we), .ld_crc(res_crc), .ld_words(res_words),
@@ -176,9 +227,11 @@ module intv_media #(
         .crc(crc), .words(words), .layout(layout), .flags(flags), .hit(hit),
         .cfg_crc(cfg_crc), .fmt(c_fmt), .noss(noss),
         .pg_rst(pg_rst), .pg_sel(pg_sel),
-        .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
-        .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
-        .bus_attr(bus_attr), .bus_paged(bus_paged),
+        .ecs_on(ecs_on && !probing), .ecs_pg(ecs_pg), .ecs_rom_ok(ecs_rom_ok), .m4(c_m4),
+        .bus_req(c_bus_req), .bus_we(probing ? 1'b0 : bus_we), .bus_addr(probing ? 16'h4800 : bus_addr),
+        .bus_wdata(bus_wdata),
+        .bus_ack(c_bus_ack), .bus_rdata(c_bus_rdata), .bus_hit(c_bus_hit),
+        .bus_attr(c_bus_attr), .bus_paged(bus_paged),
         .m_req(c_req), .m_we(c_we), .m_addr(c_addr), .m_wdata(c_wdata), .m_be(c_be),
         .m_ack(c_ack), .m_rdata(s_rdata),
         .ss_addr(ss_addr), .ss_we(ss_we), .ss_wdata(ss_wdata), .ss_rdata(ss_rdata)

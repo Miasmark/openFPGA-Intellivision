@@ -1087,13 +1087,15 @@ class MapCart:
         bits = (1 if e & E_R else 0) | (2 if e & E_W else 0) | (4 if e & E_N else 0) | (8 if e & E_B else 0)
         return hit, bits, (self.ld.paged >> (a >> 12)) & 1
 
-    def write(self, a, v):
+    def write(self, a, v, store=True):
         """The access is looked up with the selects and bank registers before this write;
-        its page select or bank register load lands after it (intv_cart.sv)."""
+        its page select or bank register load lands after it (intv_cart.sv). store=False:
+        the ECS owns the address (build step 9): nothing is stored, the selects and bank
+        registers still see the write."""
         a &= 0xFFFF
         v &= 0xFFFF
         e, sa = self._lookup(a)
-        if e & E_W and sa is not None and not self._limited(sa):
+        if store and e & E_W and sa is not None and not self._limited(sa):
             self.sram[sa] = v & 0xFF if e & E_N else v
         if a & 0xFFF == 0xFFF and (v & 0xFFF0) == ((a & 0xF000) | 0x0A50):
             self.sel[a >> 12] = v & 0xF

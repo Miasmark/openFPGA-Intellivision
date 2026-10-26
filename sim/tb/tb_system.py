@@ -100,7 +100,8 @@ import intvcart as m        # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
-       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv']
+       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
+       'intv_ecs.sv']
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
 FRAME = isys.FRAME
@@ -131,9 +132,72 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           # step 8: our cart8test.asm on an Intellicart .rom and on a BIN + CFG, both built
           # from our sources (sim/testroms/step8/build_images.py, as1600)
           ('cartbank', ('step8', 'rombank'), 'cart8test.asm', 10, (0xFF, 0xFF), 'stic'),
-          ('cartcfg', ('step8', 'cfgmap'), 'cart8test.asm', 10, (0xFF, 0xFF), 'stic')]
+          ('cartcfg', ('step8', 'cfgmap'), 'cart8test.asm', 10, (0xFF, 0xFF), 'stic'),
+          # step 9: the ECS (ECS_OF: the menu override and the keys); our sim/testroms/ecstest.asm
+          # in the EXEC slot with the keyboard and with the synthesizer, the real EXEC with the
+          # ECS's boot, Astrosmash under the Auto rule, our step-9 cartridges
+          # (sim/testroms/step9/build_images.py)
+          ('ecstest', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
+          ('ecssynth', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
+          ('ecsboot', None, None, 10, (0xFF, 0xFF), 'stic'),
+          ('ecsastro', 'Astrosmash (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
+          ('ecssound', ('step9', 'ecssound'), None, 30, (0xFF, 0xFF), 'stic'),
+          ('ecshook', ('step9', 'ecshook'), None, 30, (0xFF, 0xFF), 'stic'),
+          ('ecsavail', ('step9', 'ecsavail'), None, 30, (0xFF, 0xFF), 'stic'),
+          ('cart4000', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic'),
+          ('cart4000_on', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic')]
 # a cartridge file's CFG (step 8): the model and the bench load it with the image
 CFG_OF = {}
+# step 9: the ECS of an image: the menu override ('auto', 'on', 'off'), the synthesizer,
+# scripted ECS keys (intv_system.parse_presses "ecs:" / "synth:"), the Auto mode the image
+# must get (tools/ecs.py; the RTL's L line too) and the BACKTAB lines its program prints
+# PASS on (rows 2-4: the step-9 cartridges). Images not listed run without the ECS (the
+# RTL with the override Off).
+ECSTEST_KEYS = ('1-2:ecs:W,2-3:ecs:W+Q,3-4:ecs:W+Q+1,4-5:ecs:SHIFT+L,5-6:ecs:SHIFT+K,'
+                '6-7:ecs:LEFT+N,7-8:ecs:Q+1')
+ECSSYNTH_KEYS = '1-2:synth:0+8,2-3:synth:0+8+9,3-4:synth:36'
+ECS_OF = {
+    'ecstest': dict(ovr='auto', synth=False, presses=ECSTEST_KEYS, auto=1),
+    'ecssynth': dict(ovr='auto', synth=True, presses=ECSSYNTH_KEYS, auto=1),
+    'ecsboot': dict(ovr='auto', auto=1),
+    'ecsastro': dict(ovr='auto', auto=2),
+    'ecssound': dict(ovr='auto', auto=1, passes=(2, 3)),
+    'ecshook': dict(ovr='auto', auto=1, passes=(2, 3)),
+    'ecsavail': dict(ovr='auto', auto=2, passes=(2, 3, 4)),
+    'cart4000': dict(ovr='auto', auto=0, passes=(2, 3)),
+    'cart4000_on': dict(ovr='on', auto=0),      # forced on: the ECS RAM, not the cartridge, at $4000
+}
+ECS_OVR = {'auto': 0, 'on': 1, 'off': 2}
+# ecstest's ISR scans, written out from DESIGN 7.3's rule (not from tools/ecs.py): per key
+# combination, the 22 words it stores: rows 0-7 scanned (port A out, one line low; port B
+# read), columns 0-7 scanned (port B out; port A read), both ports out with A = $EF, B = $F7
+# (A, B read), then A = $EF, B = $FF, then both in. Every read is $FF00 | the lines.
+_N = [0xFF] * 8
+
+
+def _scan(rows=None, cols=None, b1=(0xEF, 0xF7), b2=(0xEF, 0xFF)):
+    r, c = list(_N), list(_N)
+    for k, v in (rows or {}).items():
+        r[k] = v
+    for k, v in (cols or {}).items():
+        c[k] = v
+    return [0xFF00 | x for x in r + c + list(b1) + list(b2) + [0xFF, 0xFF]]
+
+
+ECSKBD_WANT = {
+    'none': _scan(),
+    'W': _scan({4: 0xF7}, {3: 0xEF}, (0xEF, 0xF7), (0xFF, 0xFF)),
+    'W+Q': _scan({}, {3: 0xCF}, (0xFF, 0xFF), (0xFF, 0xFF)),            # one column: masked
+    'W+Q+1': _scan({}, {}, (0xFF, 0xFF), (0xFF, 0xFF)),                # three corners: no ghost
+    'SHIFT+L': _scan({}, {7: 0xBD}),                                   # Shift can't upper-case L
+    'SHIFT+K': _scan({1: 0xFB, 6: 0x7F}, {2: 0xFD, 7: 0xBF}),
+    'LEFT+N': _scan({}, {0: 0xFA}),
+    'Q+1': _scan({5: 0xE7}, {}, (0xEF, 0xFF), (0xEF, 0xFF)),           # one row: masked transposed
+    # the synthesizer (diodes): columns pulled low by keys on a low row; no transposed path
+    'synth:0+8': _scan({0: 0xFE, 1: 0xFE}),
+    'synth:0+8+9': _scan({0: 0xFE, 1: 0xFC}),
+    'synth:36': _scan({4: 0xEF}, {}, (0xEF, 0xE7), (0xEF, 0xEF)),
+}
 
 
 def step8_image(name, work):
@@ -154,6 +218,58 @@ def step8_image(name, work):
             CFG_OF[path] = cpath
             return path, cpath
     sys.exit('no step-8 image %s' % name)
+
+
+def step9_image(name, work):
+    """The image path of a step-9 test cartridge (sim/testroms/step9), written into work
+    with its CFG (CFG_OF)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'step9_build_images', os.path.join(TESTROMS, 'step9', 'build_images.py'))
+    b9 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(b9)
+    if not hasattr(step9_image, 'cache'):
+        step9_image.cache = {i['name']: i for i in b9.images(os.path.join(work, 'step9_build'))}
+    path, cfg = b9.write(work, step9_image.cache[name])
+    CFG_OF[path] = cfg
+    return path
+
+
+def ecs_selfcheck(name, e):
+    """Step 9: the model's ECS mode is the image's Auto mode; ecstest / ecssynth stored the
+    scans ECSKBD_WANT has for the keys held in each ISR's frame; the step-9 cartridges printed
+    PASS on their result rows (BACKTAB) by the end."""
+    import ecs as ecsm
+    want = e.ecs
+    probs = []
+    dev = e.bus.ecs
+    if dev is None or dev.mode != want['auto']:
+        probs.append('Auto mode %s, want %s' % (dev and ecsm.MODE_NAMES[dev.mode], ecsm.MODE_NAMES[want['auto']]))
+    ram = e.snaps[e.ncyc]['sysram']
+    if want.get('presses'):
+        presses = isys.parse_presses(want['presses'])
+        names = {}
+        for f1, f2, (_, bits) in presses:
+            for k in range(f1 + 1, f2 + 1):
+                txt = [x for x in want['presses'].split(',') if x.startswith('%d-%d:' % (f1, f2))][0]
+                names[k] = txt.split(':', 1)[1].replace('ecs:', '')
+        intak = [c for c, ph, a, d in e.blog if ph == PHASE['INTAK']]
+        for k in range(1, 10):
+            if k > len(intak):
+                probs.append('ISR %d never ran' % k)
+                break
+            combo = names.get(intak[k - 1] // FRAME, 'none')
+            got = ram[32 * k:32 * k + 22]
+            if got != ECSKBD_WANT[combo]:
+                probs.append('ISR %d (frame %d, keys %s): %s, want %s' % (
+                    k, intak[k - 1] // FRAME, combo, ' '.join('%X' % x for x in got),
+                    ' '.join('%X' % x for x in ECSKBD_WANT[combo])))
+    for row in want.get('passes', ()):
+        text = ''.join(chr(((w >> 3) & 0xFF) + 32) if not w & 0x800 and ((w >> 3) & 0xFF) < 95 else '.'
+                       for w in ram[20 * row:20 * row + 20])
+        if 'PASS' not in text:
+            probs.append('row %d: %r' % (row, text))
+    return probs
 
 
 def cart8_selfcheck(e, cart_path):
@@ -241,6 +357,38 @@ PLAY = [('astrosmash', 'Astrosmash (USA, Europe).zip', 1200,
 # 10 frames: Right, L+Right, Up, L+Up must set the aim, RAM $015F (right = 0, counter-clockwise), to
 # 0, 15, 4, 3 (the aim is stored about 12 frames after the press); read 40 frames after each press.
 # No MAME reference run for it here: the measurement of the 16 aims in MAME is in that note.
+# Build step 9, the ECS gate (--ecs-play): RTL = model frame by frame (as the play bench) over
+# the runs checked against MAME's intvecs (tools/refs/ecs_ref_compare.py, the same keys:
+# tools/refs/mame_ecs_trace.sh), plus Astrosmash under the Auto rule and our ecssound cartridge.
+# (name, cartridge (library file, ('step9', name) or None), frames, keys, ECS_OF-style entry)
+def _typed(start, text):
+    sys.path.insert(0, os.path.join(ROOT, 'tools'))
+    import ecs as ecsm
+    return ecsm.type_presses(start, text)[0]
+
+
+ECS_PLAY = [
+    ('ecsbasic', None, 1200, '300-306:Enter,420-426:1,500-506:Enter,' + _typed(800, '10 PRINT 2*3\nRUN\n'),
+     dict(ovr='auto')),
+    ('mindstrike', 'Mind Strike (USA, Europe).zip', 2000,
+     '300-306:ecs:RTN,600-606:ecs:1,750-756:ecs:RTN,900-906:ecs:1,1000-1006:ecs:RTN,1300-1360:Right,'
+     '1500-1560:Up,1700-1760:Left,1900-1906:Upper', dict(ovr='auto')),
+    ('wsmlb', 'World Series Major League Baseball (USA).zip', 3200,
+     '300-306:ecs:RTN,600-606:ecs:1,900-906:ecs:SPACE,1200-1206:Enter,1500-1506:ecs:E,1800-1806:1,'
+     '2000-2006:Enter,2200-2260:Right,2400-2406:Upper,2600-2606:2,2800-2806:Enter,3000-3006:Lower-Right',
+     dict(ovr='auto')),
+    ('melody', 'Melody Blaster (USA, Europe).zip', 3200,
+     '300-306:Enter,420-426:2,500-506:Enter,1500-1506:Enter,1800-1830:synth:0,1900-1930:synth:19,'
+     '2000-2030:synth:24,2400-2406:1,2600-2606:Enter,2900-2930:synth:28,3000-3030:synth:36',
+     dict(ovr='auto', synth=True)),
+    ('mrbasic', "Mr. BASIC Meets Bits 'N Bytes (USA).zip", 2600,
+     '300-306:Enter,420-426:2,500-506:Enter,1500-1506:Enter,1800-1806:3,1900-1906:Enter,' + _typed(2300, 'PRINT 5\n'),
+     dict(ovr='auto')),
+    ('astro_auto', 'Astrosmash (USA, Europe).zip', 700,
+     '200-206:1,300-400:Upper,400-480:Left,480-600:Right,600-700:Lower-Right', dict(ovr='auto')),
+    ('ecssound', ('step9', 'ecssound'), 600, '', dict(ovr='auto')),
+]
+
 PLAY_PEEKS = {'golf': [(540, 0x015F, 0), (600, 0x015F, 15), (660, 0x015F, 4), (720, 0x015F, 3)]}
 PLAY_SNAP_STEP = 10
 PIC_W, PIC_H = 189, 240
@@ -255,7 +403,7 @@ SECT7_START = 7 * FRAME
 TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
 SS = {'cpu': 0x02, 'bus': 0x03, 'stic': 0x04, 'psg': 0x05, 'scr': 0x06, 'sys': 0x07,
-      'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D}
+      'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D, 'ecs': 0x0E, 'psg2': 0x0F, 'eram': 0x10}
 
 
 # ------------------------------------------------------------------- model
@@ -267,6 +415,8 @@ class Exp:
         self.mlog, self.ncyc = mlog, ncyc
         self.pics, self.sinfo, self.mode = pics or {}, sinfo or {}, mode
         self.name = None
+        self.ecs = None                 # ECS_OF's entry (step 9)
+        self.ecs_audio = {}             # PSG #2 and the mix by frame (E lines)
 
 
 def stic_expect(info):
@@ -301,14 +451,26 @@ def capture(bus):
     return pics, sinfo
 
 
-def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic'):
+def ecs_device(cart, ecs):
+    """The model's ECS for an ECS_OF entry (None: no ECS, the RTL's override Off)."""
+    if not ecs:
+        return None
+    dev = isys.make_ecs(cart[0] if cart else None, (ecs['ovr'], None))
+    dev.synth = bool(ecs.get('synth'))
+    return dev
+
+
+def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic', ecs=None):
     """The model's expected log: bus phases, step starts, handshake and mode
-    latch changes, state at the dumps, pictures and STIC logs."""
+    latch changes, state at the dumps, pictures and STIC logs. ecs: an
+    ECS_OF entry (step 9)."""
     cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
-                         cart[0] if cart else None, stic_mode=mode)
+                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs))
     bus.vid.mobs = STIC_MOBS
     bus.pad = tuple(pads)
+    if ecs and ecs.get('presses'):
+        bus.presses = isys.parse_presses(ecs['presses'])
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
     snaps = {}
@@ -354,6 +516,7 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
 
     bus.read, bus.write = rd, wr
     audio = psg_hooks(bus)
+    ecs_audio = psg2_hooks(bus)
     steps = []
     prev = (list(cpu.r), cpu.flags << 2 | cpu.I << 1 | cpu.D)
     while cpu.cycle < ncyc:
@@ -364,6 +527,8 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
         prev = (list(ev.regs), ev.flags << 2 | ev.i << 1 | ev.d)
     snap(ncyc)
     bus.snd.advance(ncyc - 1)
+    if bus.ecs is not None and bus.ecs.on:
+        bus.ecs.psg.advance(ncyc - 1)
     bus.vid.advance(ncyc + FRAME)     # draw the last frame
     advance(ncyc - 1)
     blog = [(c, PHASE[p], a or 0, d or 0) for (c, p, a, d) in cpu.buslog
@@ -372,6 +537,8 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
     mlog = [x for x in mlog if x[0] < ncyc]
     exp = Exp(blog, steps, snaps, bus, mlog, ncyc, pics, sinfo, mode)
     exp.audio = audio
+    exp.ecs = ecs
+    exp.ecs_audio = ecs_audio.done()
     return exp
 
 
@@ -406,13 +573,68 @@ def psg_hooks(bus):
     return audio
 
 
+class psg2_hooks:
+    """PSG #2's per-frame fingerprint and the mixed sound, as the bench's E
+    lines give them: {k: [ha, na, hq, nq, hm]}: PSG #2's steps' levels and
+    48 kHz samples as psg_hooks has PSG #1's (it steps only while the ECS is
+    attached), and hm over every sample of the machine's sound, min(32767,
+    PSG #1 + PSG #2), a step at cycle c counting in frame (c + 1) // FRAME
+    (intv_machine gives the sample the clk after the step's ce). Both PSGs
+    step at the same cycles (tools/psg.py); done() collects them once the
+    run has advanced both."""
+
+    def __init__(self, bus):
+        self.bus = bus
+        self.a2 = {}
+        self.s1, self.s2 = [], {}
+        prev1 = bus.snd.on_sample
+
+        def s1(v):
+            if prev1:
+                prev1(v)
+            self.s1.append((bus.snd.ticks, v))
+        bus.snd.on_sample = s1
+        if bus.ecs is not None:
+            p2 = bus.ecs.psg
+
+            def cur():
+                k = 4 * (p2.ticks - 1) // FRAME
+                a = self.a2.get(k)
+                if a is None:
+                    a = self.a2[k] = [FNV0, 0, FNV0, 0]
+                return a
+
+            def on_level(lv):
+                a = cur()
+                a[0] = fnv(a[0], lv)
+                a[1] += 1
+
+            def on_sample(v):
+                a = cur()
+                a[2] = fnv(a[2], v)
+                a[3] += 1
+                self.s2[p2.ticks] = v
+            p2.on_level = on_level
+            p2.on_sample = on_sample
+
+    def done(self):
+        out = {}
+        for t, v1 in self.s1:
+            k = (4 * (t - 1) + 1) // FRAME
+            e = out.setdefault(k, list(self.a2.get(k, [FNV0, 0, FNV0, 0])) + [FNV0])
+            e[4] = fnv(e[4], min(32767, v1 + self.s2.get(t, 0)))
+        for k, a in self.a2.items():
+            out.setdefault(k, list(a) + [FNV0])
+        return out
+
+
 def fnv(h, *xs):
     for x in xs:
         h = ((h ^ (x & 0xFFFFFFFF)) * FNVP) & 0xFFFFFFFF
     return h
 
 
-def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=None, peeks=None):
+def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=None, peeks=None, ecs=None):
     """A long model run for the frame gate: per frame k the hash of the
     bus phases and of the step starts as the bench's H lines give them,
     and pictures 1..npics with their STIC logs; with presses, the scripted
@@ -422,13 +644,14 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
     model_stream.peeked (a dict)."""
     cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
-                         cart[0] if cart else None, stic_mode=mode)
+                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs))
     bus.vid.mobs = STIC_MOBS
     if presses:
         bus.presses = presses
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
     audio = psg_hooks(bus)
+    ecs_audio = psg2_hooks(bus)
     ncyc = (npics + 1) * FRAME
     hashes = {}
     acc = {'k': 0, 'hb': FNV0, 'nb': 0, 'hs': FNV0, 'ns': 0}
@@ -462,6 +685,10 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
     close(ncyc)
     bus.vid.advance(ncyc + FRAME)
     bus.snd.advance(ncyc - 1)
+    if bus.ecs is not None and bus.ecs.on:
+        bus.ecs.psg.advance(ncyc - 1)
+    model_stream.ecs_audio = ecs_audio.done()
+    model_stream.bus = bus
     return hashes, pics, sinfo, audio
 
 
@@ -521,7 +748,7 @@ class Got(tuple):
 
 def parse_log(path, pic_path=None):
     blog, steps, dumps, notes, fails, mlog = [], [], {}, [], [], []
-    gl, gw, cl, hl, kl, al = [], {}, [], {}, [], {}
+    gl, gw, cl, hl, kl, al, el = [], {}, [], {}, [], {}, {}
     mark = (0, 0, 0)
     for ln in open(path):
         t = ln.split()
@@ -539,6 +766,8 @@ def parse_log(path, pic_path=None):
             hl[int(t[1])] = (int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5]))
         elif t[0] == 'A':
             al[int(t[1])] = [int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5])]
+        elif t[0] == 'E':
+            el[int(t[1])] = [int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5]), int(t[6], 16)]
         elif t[0] == 'B':
             blog.append((int(t[1]), int(t[2]), int(t[3], 16), int(t[4], 16)))
         elif t[0] == 'S':
@@ -579,6 +808,7 @@ def parse_log(path, pic_path=None):
     got.colls = {c // FRAME: b for c, b in kl}
     got.hashes = hl
     got.audio = al
+    got.ecs_audio = el
     got.pics = read_pics(pic_path) if pic_path else {}
     return got
 
@@ -596,6 +826,20 @@ def compare_audio(got, exp, frames, samples):
         if g[:2] != e[:2] or (samples and g[2:4] != e[2:4]):
             return ['frame %d PSG (step hash, steps, 48 kHz hash, samples): RTL %s, model %s' % (
                 k, ' '.join('%X' % x for x in g[:4]), ' '.join('%X' % x for x in e[:4]))]
+    return []
+
+
+def compare_ecs_audio(got, exp, frames, samples):
+    """PSG #2 and the mixed sound (E lines, step 9) against the model: PSG #2's steps in
+    every run, its samples and the mix's with `samples` (straight runs)."""
+    for k in frames:
+        g = got.ecs_audio.get(k)
+        e = exp.ecs_audio.get(k, [FNV0, 0, FNV0, 0, FNV0])
+        if g is None:
+            return ['frame %d PSG #2: no E line' % k]
+        if g[:2] != e[:2] or (samples and (g[2:4] != e[2:4] or g[4] != e[4])):
+            return ['frame %d PSG #2 / mix (step hash, steps, 48 kHz hash, samples, mix hash): RTL %s, '
+                    'model %s' % (k, ' '.join('%X' % x for x in g), ' '.join('%X' % x for x in e))]
     return []
 
 
@@ -737,12 +981,24 @@ def compare(name, run, got, exp):
         checks.append(('bus: reset vector flag, hold', d[(SS['bus'], 0)] >> 16 & 5, 0))
         checks += [('row buffer %d' % i, d[(SS['row'], i)], st['fifo'][i]) for i in range(20)]
         checks.append(('FIFO counter', d[(SS['stic'], 0x35)] & 0x1FF, st['counter']))
+        # step 9: the ECS (its page and port latches, mode; PSG #2; its RAM)
+        checks.append(('ECS latches and mode', d[(SS['ecs'], 0)], st['ecs'][0]))
+        checks += [('psg2 %d' % i, d[(SS['psg2'], i)], st['psg2'][i]) for i in range(14)]
+        checks += [('psg2 %d' % (14 + i), d[(SS['psg2'], 14 + i)], st['psg2x'][i]) for i in range(7)]
+        checks += [('ECS RAM %03X' % (4 * i), d[(SS['eram'] + i // 256, i % 256)], st['ecsram'][i])
+                   for i in range(512)]
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (
                 k, cyc, len(bad), '; '.join('%s RTL %X model %X' % b for b in bad[:4])))
     probs += compare_stic(got, exp, range(exp.ncyc // FRAME - 1))
     probs += compare_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
+    probs += compare_ecs_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
+    if exp.ecs:
+        want = 'L ecs auto %d rom 1 mode %d' % (exp.ecs['auto'], exp.ecs['auto'] if exp.ecs['ovr'] == 'auto'
+                                                 else {'on': 1, 'off': 0}[exp.ecs['ovr']])
+        if want not in got[3]:
+            probs.append('RTL ECS: %s, want "%s"' % ([x for x in got[3] if x.startswith('L ecs')], want))
     return probs
 
 
@@ -756,6 +1012,7 @@ def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pad
         cmd.append('+cart=' + cart_path)
         if CFG_OF.get(cart_path):
             cmd.append('+cfg=' + CFG_OF[cart_path])
+    cmd += ecs_args(work, tag, exp.ecs, exp.ncyc // FRAME)
     with open(os.path.join(work, 'stdout_%s.txt' % tag), 'w') as f:
         r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout, cwd=work)
     if r.returncode != 0 or not os.path.exists(log):
@@ -763,6 +1020,45 @@ def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pad
     got = parse_log(log, pic)
     os.remove(pic)
     return got
+
+
+def ecs_bios():
+    d = os.environ.get('INTV_BIOS_DIR', os.path.expanduser('~/pocket_projects/intellivision/bios'))
+    for n in ('ECS.bin', 'ecs.bin'):
+        if os.path.exists(os.path.join(d, n)):
+            return os.path.join(d, n)
+    return None
+
+
+def ekey_lines(presses, nframes):
+    """The bench's +ekeys file: "k K" where frame k's ECS keyboard switches (press_keys of
+    notifier k - 1) change."""
+    out, last = [], 0
+    for k in range(nframes + 2):
+        v = isys.press_keys(presses, k - 1)
+        if v != last:
+            out.append('%d %016X\n' % (k, v))
+            last = v
+    return out
+
+
+def ecs_args(work, tag, ecs, nframes):
+    """The bench's ECS plusargs for an ECS_OF entry: the override (none: Off), the ECS
+    ROM slot, the synthesizer, the keys."""
+    if not ecs:
+        return ['+ecs=2']
+    args = ['+ecs=%d' % ECS_OVR[ecs['ovr']]]
+    rom = ecs_bios()
+    if rom:
+        args.append('+ecsrom=' + rom)
+    if ecs.get('synth'):
+        args.append('+synth=1')
+    if ecs.get('presses'):
+        kf = os.path.join(work, 'ekeys_%s.txt' % tag)
+        with open(kf, 'w') as f:
+            f.writelines(ekey_lines(isys.parse_presses(ecs['presses']), nframes))
+        args.append('+ekeys=' + kf)
+    return args
 
 
 def rt_runs(exp):
@@ -924,7 +1220,7 @@ def key_lines(presses, nframes):
 
 
 def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=True, presses=None,
-                 peeks=None):
+                 peeks=None, ecs=None):
     """One image of the frame gate: the bench (+bushash, +pic) runs while
     the model runs; then every picture, row fetch, card row and per-frame
     bus hash must be equal. With presses (the play bench) both hold the
@@ -944,12 +1240,22 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
         with open(kf, 'w') as f:
             f.writelines(key_lines(presses, npics))
         cmd.append('+keys=' + kf)
+    if ecs:                             # step 9: the ECS keys come with the same presses
+        e2 = dict(ecs, presses=None)
+        cmd += ecs_args(work, 'screen_' + name, e2, npics)
+        if presses and any(isinstance(c, tuple) and c[0] == 'ecs' for _, _, c in presses):
+            ef = os.path.join(work, 'screen_%s.ekeys' % name)
+            with open(ef, 'w') as f:
+                f.writelines(ekey_lines(presses, npics))
+            cmd.append('+ekeys=' + ef)
+    else:
+        cmd.append('+ecs=2')
     t0 = time.time()
     out = open(os.path.join(work, 'screen_%s.out' % name), 'w')
     proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=work)
     try:
         hashes, pics, sinfo, audio = model_stream(exec_path, grom_path, cart, npics, presses=presses,
-                                                  peeks=[(f, a) for f, a, _ in peeks or []])
+                                                  peeks=[(f, a) for f, a, _ in peeks or []], ecs=ecs)
         peeked = model_stream.peeked
         t1 = time.time() - t0
         r = proc.wait(timeout=7200)
@@ -964,6 +1270,7 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
     exp = Exp([], [], {}, None, [], ncyc, pics, sinfo)
     exp.hashes = hashes
     exp.audio = audio
+    exp.ecs_audio = model_stream.ecs_audio
     probs = list(got[4]) + compare_stic(got, exp, range(npics), check_hash=True)
     for f, a, want in peeks or []:
         val = peeked.get((f, a))
@@ -977,6 +1284,7 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
         if nk != [want]:
             probs.append('%s: bench read %s, want %s' % (name, nk, want))
     probs += compare_audio(got, exp, range(npics + 1), True)
+    probs += compare_ecs_audio(got, exp, range(npics + 1), True)
     if verbose:
         en = sum(1 for n in range(1, npics + 1) if exp.sinfo.get(n, ([], []))[1])
         print('  %s: %d pictures (%d with the display on, %d of them not blank), %d row fetches '
@@ -1387,6 +1695,28 @@ PLANTS = [
                                              "8'h3C, 8'h3D, 8'h3E, 8'h3F: ;")], 'sticmob', ['rt7']),
     ('ss_coll_lost', 'intv_stic.sv', [("8'h40: {coll_p[2], coll_p[1], coll_p[0]} <= ss_wdata[29:0];", "8'h40: ;")],
      'sticmob', ['rt6', 'rt7']),
+    # build step 9, the ECS: a page decode that takes any page but 1 for $7000 (IntyBASIC's $F would
+    # leave it in), the RAM read 16 bits wide, a byte write landing in all four cells of a word, the
+    # keyboard groups not widened through the columns (no masking: MAME's AND), PSG #2 with the
+    # 8914's two envelope bits, the UART's status 0 (MAME's), the ECS not owning its RAM (a
+    # cartridge at $4000 answering too: cart4000 with the ECS forced on), the mixed sound not
+    # saturated (wraps), the ECS's latches written while it is off
+    ('ecs_page_any', 'intv_cart.sv', [("(ba[15:12] == 4'h7 && ecs_pg[7:4] == 4'd0)",
+                                       "(ba[15:12] == 4'h7 && ecs_pg[7:4] != 4'd1)")], 'ecstest', None),
+    ('ecs_ram_16', 'intv_ecs.sv', [("else if (sel_ram) q = {8'h00, ram_q[8 * a[1:0] +: 8]};",
+                                    "else if (sel_ram) q = {ram_q[8 * a[1:0] +: 8], ram_q[8 * a[1:0] +: 8]};")],
+     'ecstest', None),
+    ('ecs_ram_word_write', 'intv_ecs.sv', [("4'b0001 << a[1:0];", "4'hF;")], 'ecstest', None),
+    ('ecs_no_masking', 'intv_ecs.sv', [("            r0 <= r0 | to_rows(c0, k);\n", "            r0 <= r0;\n"),
+                                       ("            r1 <= r1 | to_rows(c1, k);\n", "            r1 <= r1;\n")],
+     'ecstest', None),
+    ('ecs_env2', 'intv_ecs.sv', [(".ENV2(1'b0)", ".ENV2(1'b1)")], 'ecstest', None),
+    ('ecs_uart_0', 'intv_ecs.sv', [("a[1:0] == 2'd0 ? 16'h0002 : 16'h0000", "16'h0000")], 'ecstest', None),
+    ('ecs_ram_not_owned', 'intv_cart.sv', [("ba[15:11] == 5'b01000));", "1'b0));")], 'cart4000_on', None),
+    ('ecs_mix_wraps', 'intv_machine.sv', [("assign audio     = mix[16:15] != 2'd0 ? 16'h7FFF : mix[15:0];",
+                                          "assign audio     = mix[15:0];")], 'ecstest', None),
+    ('ecs_latch_when_off', 'intv_ecs.sv', [("        end else if (on) begin\n", "        end else begin\n")],
+     'cart4000', None),
 ]
 
 
@@ -1401,6 +1731,7 @@ def main():
     ap.add_argument('--mame', action='store_true', help='also compare the model with MAME traces')
     ap.add_argument('--screens', action='store_true', help='the step-4 frame gate (SCREENS)')
     ap.add_argument('--play', action='store_true', help='the step-6 play bench (PLAY)')
+    ap.add_argument('--ecs-play', action='store_true', help='the step-9 ECS runs (ECS_PLAY)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_system'))
@@ -1415,6 +1746,8 @@ def main():
         return screens_main(a, verilator, work, lib, exec_path, grom_path)
     if a.play:
         return play_main(a, verilator, work, lib, exec_path, grom_path)
+    if a.ecs_play:
+        return ecs_play_main(a, verilator, work, lib, exec_path, grom_path)
 
     imgs = IMAGES
     if a.only:
@@ -1430,6 +1763,8 @@ def main():
             cart = None
             if isinstance(zipname, tuple) and zipname[0] == 'step8':
                 cart, _ = step8_image(zipname[1], work)
+            elif isinstance(zipname, tuple) and zipname[0] == 'step9':
+                cart = step9_image(zipname[1], work)
             elif isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
                 cart = os.path.join(work, name + '.bin')
                 with open(cart, 'wb') as f:
@@ -1456,9 +1791,14 @@ def main():
                 with open(ex, 'wb') as f:
                     f.write(img)
             execs[name] = ex
-            exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode)
+            exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode, ECS_OF.get(name))
             exps[name].name = name
             e = exps[name]
+            if name in ECS_OF:
+                p9 = ecs_selfcheck(name, e)
+                print('  %s ECS self-check: %s' % (name, 'pass' if not p9 else 'FAIL: ' + '; '.join(p9)))
+                if p9:
+                    fails.append('ECS_SELFCHECK ' + name)
             print('model %s (STIC mode %s): %d bus phases, %d step starts, %d latch changes in %d cycles; '
                   '%d pictures with the display on, %d rows loaded, %d missed' % (
                       name, smode, len(e.blog), len(e.steps), len(e.mlog), e.ncyc,
@@ -1600,6 +1940,42 @@ def screens_main(a, verilator, work, lib, exec_path, grom_path):
         print('TB_SCREEN %s %s' % (name, 'FAIL' if p else 'pass'))
         fails += ['%s: %s' % (name, x) for x in p]
     print('TB_SCREENS %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:4])))
+    return 1 if fails else 0
+
+
+def ecs_play_main(a, verilator, work, lib, exec_path, grom_path):
+    """The step-9 ECS runs (--ecs-play, ECS_PLAY): RTL = model (mode stic) frame by frame, PSG #2
+    and the mixed sound included (E lines); the model's ECS mode must be the Auto rule's."""
+    import ecs as ecsm
+    sel = ECS_PLAY
+    if a.only:
+        sel = [x for x in ECS_PLAY if x[0] in a.only.split(',')]
+    binary = os.path.join(work, 'obj', 'tb_system')
+    if not a.no_build:
+        t1 = time.time()
+        binary = build(work, CORE, verilator)
+        if not binary:
+            print('TB_ECS_PLAY FAIL (build)')
+            return 1
+        print('build: %.1fs' % (time.time() - t1))
+    fails = []
+    for name, cart_spec, nframes, ptext, ecs in sel:
+        presses = isys.parse_presses(ptext)
+        if isinstance(cart_spec, tuple):
+            cart = step9_image(cart_spec[1], work)
+        else:
+            cart = screen_cart(work, name, cart_spec, lib)
+        try:
+            print('%s: keys %s' % (name, ptext[:200]))
+            p = check_screen(binary, work, name, cart, exec_path, grom_path, nframes, presses=presses, ecs=ecs)
+            dev = model_stream.bus.ecs
+            print('  %s: model ECS mode %s' % (name, ecsm.MODE_NAMES[dev.mode] if dev else None))
+        finally:
+            if cart and not isinstance(cart_spec, tuple):
+                os.remove(cart)
+        print('TB_ECS_PLAY %s %s' % (name, 'FAIL' if p else 'pass'), flush=True)
+        fails += ['%s: %s' % (name, x) for x in p]
+    print('TB_ECS_PLAY_ALL %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:4])))
     return 1 if fails else 0
 
 

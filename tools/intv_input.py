@@ -38,6 +38,11 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   and cont3_trig[15:0]) is player 1's keypad: 1-9 and 0 on the number row
   and on the numpad, Backspace = Clear, Enter and numpad Enter = Enter.
   Everything ORs into player 1's controller, like a second set of fingers.
+- With the ECS attached (build step 9; v["ecs"]) the USB keyboard is the
+  ECS keyboard key by key (ECS_HID; ecs_keys()), and only the numpad stays
+  player 1's keypad (1-9, 0, numpad Enter, numpad . = Clear). With the
+  "ECS Keyboard" setting on Synthesizer (v["synth"]) the two tracker rows
+  play the music synthesizer (SYNTH_HID) instead.
 - Keypad mode Layer (0, default): D-pad = disc (8 directions); A = lower
   right, B = lower left, X = top side action. R held: D-pad = the keypad
   ring by position (up-left/up/up-right = 1/2/3, left/right = 4/6,
@@ -108,6 +113,36 @@ MAME_DISCYX_TABLE = [[0xe3, 0xf3, 0xfb, 0xeb, 0xe9],
 HID = {0x1E: 1, 0x1F: 2, 0x20: 3, 0x21: 4, 0x22: 5, 0x23: 6, 0x24: 7, 0x25: 8, 0x26: 9, 0x27: 0,
        0x28: "E", 0x2A: "C", 0x58: "E",
        0x59: 1, 0x5A: 2, 0x5B: 3, 0x5C: 4, 0x5D: 5, 0x5E: 6, 0x5F: 7, 0x60: 8, 0x61: 9, 0x62: 0}
+
+# With the ECS attached (build step 9) the keypad keeps only the numpad: 1-9, 0, numpad Enter, and
+# numpad . (Del) as Clear; the number row, Enter and Backspace belong to the ECS keyboard.
+HID_ECS = {0x58: "E", 0x63: "C",
+           0x59: 1, 0x5A: 2, 0x5B: 3, 0x5C: 4, 0x5D: 5, 0x5E: 6, 0x5F: 7, 0x60: 8, 0x61: 9, 0x62: 0}
+
+# The ECS computer keyboard, key by key (build step 9): HID usage -> (row, column) of the ECS
+# matrix (row = port A bit, column = port B bit; MAME ecs_ctrl.cpp ROW.n, the wiki's
+# Entertainment_Computer_System table). Backspace is the ECS's left arrow too. Modifiers
+# (cont3_key[7:0], the HID modifier byte): either Shift -> SHIFT (6, 7), either Ctrl -> CTL (5, 6).
+ECS_HID = {
+    0x28: (0, 6), 0x27: (0, 5), 0x29: (0, 4), 0x13: (0, 3), 0x33: (0, 2), 0x37: (0, 1), 0x50: (0, 0),
+    0x2A: (0, 0),
+    0x0F: (1, 7), 0x12: (1, 6), 0x25: (1, 5), 0x26: (1, 4), 0x0C: (1, 3), 0x0E: (1, 2), 0x10: (1, 1),
+    0x36: (1, 0),
+    0x0D: (2, 7), 0x18: (2, 6), 0x23: (2, 5), 0x24: (2, 4), 0x1C: (2, 3), 0x0B: (2, 2), 0x05: (2, 1),
+    0x11: (2, 0),
+    0x0A: (3, 7), 0x17: (3, 6), 0x21: (3, 5), 0x22: (3, 4), 0x15: (3, 3), 0x09: (3, 2), 0x06: (3, 1),
+    0x19: (3, 0),
+    0x07: (4, 7), 0x08: (4, 6), 0x1F: (4, 5), 0x20: (4, 4), 0x1A: (4, 3), 0x16: (4, 2), 0x1D: (4, 1),
+    0x1B: (4, 0),
+    0x04: (5, 7), 0x4F: (5, 5), 0x1E: (5, 4), 0x14: (5, 3), 0x52: (5, 2), 0x51: (5, 1), 0x2C: (5, 0),
+}
+ECS_SHIFT, ECS_CTL = (6, 7), (5, 6)
+# The music synthesizer on two tracker rows: Z S X D C V G B H N J M = C3 .. B3 (notes 12-23),
+# Q 2 W 3 E R 5 T 6 Y 7 U I = C4 .. C5 (24-36); note n is matrix bit n (MAME ecs_ctrl.cpp SYNTH.n).
+SYNTH_HID = {0x1D: 12, 0x16: 13, 0x1B: 14, 0x07: 15, 0x06: 16, 0x19: 17, 0x0A: 18, 0x05: 19,
+             0x0B: 20, 0x11: 21, 0x0D: 22, 0x10: 23,
+             0x14: 24, 0x1F: 25, 0x1A: 26, 0x20: 27, 0x08: 28, 0x15: 29, 0x22: 30, 0x17: 31,
+             0x23: 32, 0x1C: 33, 0x24: 34, 0x18: 35, 0x0C: 36}
 
 DZ_DISC, DZ_RING = 40, 64
 SLOPES16 = (51, 171, 383, 1287)
@@ -214,14 +249,44 @@ def virtual(key, joy, mode, hand=None):
     return h
 
 
-def keyboard(key3, joy3, trig3, hand):
-    """The USB keyboard (cont3 type 4) into `hand`."""
+def hid_codes(joy3, trig3):
+    return [(joy3 >> s) & 0xFF for s in (0, 8, 16, 24)] + [trig3 & 0xFF, trig3 >> 8 & 0xFF]
+
+
+def keyboard(key3, joy3, trig3, hand, ecs=False):
+    """The USB keyboard (cont3 type 4) into `hand`; ecs: the ECS is attached (only the numpad
+    is the keypad then)."""
     if key3 >> 28 != 4:
         return hand
-    for code in [(joy3 >> s) & 0xFF for s in (0, 8, 16, 24)] + [trig3 & 0xFF, trig3 >> 8 & 0xFF]:
-        if code in HID:
-            hand.key(HID[code])
+    table = HID_ECS if ecs else HID
+    for code in hid_codes(joy3, trig3):
+        if code in table:
+            hand.key(table[code])
     return hand
+
+
+def ecs_keys(v):
+    """The ECS keyboard's pressed switches (bit 8 row + column) from the USB keyboard, while
+    the ECS is attached (v["ecs"]); v["synth"]: the synthesizer instead (tracker rows)."""
+    if not v.get("ecs") or v["key3"] >> 28 != 4:
+        return 0
+    bits = 0
+    codes = hid_codes(v["joy3"], v["trig3"])
+    if v.get("synth"):
+        for c in codes:
+            if c in SYNTH_HID:
+                bits |= 1 << SYNTH_HID[c]
+        return bits
+    for c in codes:
+        if c in ECS_HID:
+            r, col = ECS_HID[c]
+            bits |= 1 << (8 * r + col)
+    mods = v["key3"] & 0xFF
+    if mods & 0x22:
+        bits |= 1 << (8 * ECS_SHIFT[0] + ECS_SHIFT[1])
+    if mods & 0x11:
+        bits |= 1 << (8 * ECS_CTL[0] + ECS_CTL[1])
+    return bits
 
 
 def code(h):
@@ -252,7 +317,7 @@ def hands(v):
     """v: dict with key1 joy1 key2 joy2 key3 joy3 trig3 mode swap -> (p1, p2)."""
     mode = v["mode"] if v["mode"] in (FACE, RSTICK) else LAYER
     p1 = virtual(v["key1"], v["joy1"], mode)
-    keyboard(v["key3"], v["joy3"], v["trig3"], p1)
+    keyboard(v["key3"], v["joy3"], v["trig3"], p1, v.get("ecs", 0))
     p2 = virtual(v["key2"], v["joy2"], mode)
     return p1, p2
 
@@ -315,6 +380,22 @@ def self_check():
         turned.add(t if t == 1 << (15 - (d + 1) % 16) else None)
     ok(None not in turned and len(plain | turned) == 16,
        "Layer: D-pad = 8 disc directions, L + D-pad = the other 8, each one notch clockwise")
+    # The ECS keyboard: every matrix key of tools/ecs.py KEYPOS reachable, one HID code each
+    # (Backspace doubles the left arrow), Shift and Ctrl from the modifier byte
+    sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+    import ecs as ecsm
+    pos = {}
+    for c, rc in ECS_HID.items():
+        pos.setdefault(rc, []).append(c)
+    want = {rc for n, rc in ecsm.KEYPOS.items() if n not in ("SHIFT", "CTL")}
+    ok(set(pos) == want and all(len(v) == 1 for rc, v in pos.items() if rc != (0, 0)) and len(pos[(0, 0)]) == 2,
+       "ECS keyboard: the 47 matrix keys of tools/ecs.py KEYPOS, one HID code each (+ Backspace)")
+    base = dict(key1=0, joy1=0x80808080, key2=0, joy2=0x80808080, joy3=0, trig3=0, mode=LAYER, swap=0)
+    ok(ecs_keys(dict(base, key3=(4 << 28) | 0x02, ecs=1)) == 1 << 55 and
+       ecs_keys(dict(base, key3=(4 << 28) | 0x10, ecs=1)) == 1 << 46,
+       "ECS keyboard: Shift -> row 6 column 7, Ctrl -> row 5 column 6")
+    ok(ecs_keys(dict(base, key3=4 << 28, joy3=0x1A, ecs=0)) == 0, "ECS keyboard: nothing without the ECS")
+    ok(sorted(SYNTH_HID.values()) == list(range(12, 37)), "synthesizer: 25 notes C3-C5")
     return fails
 
 

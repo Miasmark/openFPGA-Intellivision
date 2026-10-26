@@ -302,3 +302,23 @@ Frames are machine frames (H, A, P lines: bus and CPU steps, PSG, picture);
 after a load the PSG's 48 kHz sample values are left out (its output filter
 is not machine state; docs/SAVESTATE.md 5). Last line
 `TB_SAVESTATE_ALL pass`.
+
+Step 9 (the ECS, docs/ECS_NOTES.md). `tb_system.py`: images ecstest and
+ecssynth (`sim/testroms/ecstest.asm` with the keyboard and with the
+synthesizer, keys from `+ekeys`), ecsboot (the ECS's boot with no
+cartridge), ecsastro (Astrosmash under the Auto rule: attached), the
+step-9 cartridges ecssound, ecshook, ecsavail, cart4000 and cart4000_on
+(the ECS forced on over a cartridge at $4000); the dumps add the ECS's
+words, PSG #2 and the ECS RAM, the E lines PSG #2 and the mixed sound;
+ecstest's keyboard scans are checked against ECSKBD_WANT (the matrix rule
+written out by hand) and the cartridges' PASS lines in the model. ECS
+plants: page decode, RAM width, byte writes, masking off, the 8914's
+envelope bits, the UART's status, the RAM not owned, the mix not
+saturated, the latches written while off. `--ecs-play` (TB_ECS_PLAY_ALL):
+RTL = model frame by frame over the keys of the MAME references (ECS
+BASIC typing, Mind Strike, WSMLB, Melody Blaster, Mr. BASIC, Astrosmash
+under Auto, ecssound). `tb_input.py` classes 10-11: the USB keyboard as
+the ECS keyboard and the synthesizer. `tb_loader.py`: the Auto rule's
+mode on every image (`ecs auto` lines) and six Auto plants.
+`tb_savestate.py`: ecsbasic, ecssound, ecsavail (SS_ECS) and the E runs
+(the own state into a core with the ECS off: refused).

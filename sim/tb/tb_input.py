@@ -30,6 +30,17 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
   8  MAME's analog disc: the 24 off-centre cells of handctrl.cpp:137-144's
      5 x 5 grid, at each cell's centre, in every mode and on both ports;
      the expected byte is that table's entry;
+  10 the ECS keyboard (step 9), written out by hand (ECS_SPEC, SYNTH_SPEC):
+     every ECS key by its HID usage code in each report byte gives its
+     switch (bit 8 row + column, tools/ecs.py KEYPOS: MAME ecs_ctrl.cpp's
+     ROW.n and the wiki's table) and no keypad key; nothing without the
+     ECS; Shift and Ctrl from either side of the modifier byte; the
+     synthesizer's tracker rows give their notes; with the ECS only the
+     numpad is the keypad (MAME's keypad names);
+  11 every usage code in each byte with and without the ECS and the
+     synthesizer, and 20,000 random reports with modifiers (expected: the
+     model). Every vector also carries the ECS settings (Auto / On / Off,
+     synthesizer), which must come out of the crossing unchanged.
   9  L + D-pad (the owner's Precision controls, 2026-10-26: in the Layer
      modes L turns the D-pad one notch, 22.5 degrees, clockwise; in
      Face-button ring L stays the top side action, no turn; the stick is
@@ -304,13 +315,21 @@ def l_oracle(btns, mode, stick_dir):
     return out
 
 
-def vec_line(cls, v, r, l):
-    return '%x %08x %08x %08x %08x %08x %08x %04x %x %x %02x %02x' % (
-        cls, v['key1'], v['joy1'], v['key2'], v['joy2'], v['key3'], v['joy3'], v['trig3'], v['mode'], v['swap'], r, l)
+def vec_line(cls, v, r, l, keys=0):
+    return '%x %08x %08x %08x %08x %08x %08x %04x %x %x %x %x %x %02x %02x %08x %08x' % (
+        cls, v['key1'], v['joy1'], v['key2'], v['joy2'], v['key3'], v['joy3'], v['trig3'], v['mode'], v['swap'],
+        v.get('ovr', 0), v.get('synth', 0), v.get('ecs', 0), r, l, keys >> 32, keys & 0xFFFFFFFF)
 
 
-def vec(key1=0, joy1=0x80808080, key2=0, joy2=0x80808080, key3=0, joy3=0, trig3=0, mode=0, swap=0):
-    return dict(key1=key1, joy1=joy1, key2=key2, joy2=joy2, key3=key3, joy3=joy3, trig3=trig3, mode=mode, swap=swap)
+def tear_line(v, r, l):
+    return '%08x %08x %08x %08x %08x %08x %04x %x %x %02x %02x' % (
+        v['key1'], v['joy1'], v['key2'], v['joy2'], v['key3'], v['joy3'], v['trig3'], v['mode'], v['swap'], r, l)
+
+
+def vec(key1=0, joy1=0x80808080, key2=0, joy2=0x80808080, key3=0, joy3=0, trig3=0, mode=0, swap=0, ovr=0,
+        synth=0, ecs=0):
+    return dict(key1=key1, joy1=joy1, key2=key2, joy2=joy2, key3=key3, joy3=joy3, trig3=trig3, mode=mode, swap=swap,
+                ovr=ovr, synth=synth, ecs=ecs)
 
 
 def generate(path):
@@ -319,15 +338,18 @@ def generate(path):
     problems = []
     counts = {}
 
-    def add(cls, v, want=None):
+    def add(cls, v, want=None, want_keys=None):
         r, l = m.ports(v)
         mr, ml = m.ports(v, mame=True)
+        k = m.ecs_keys(v)
         if (r, l) != (mr, ml):
             problems.append(f'class {cls}: model {r:02X} {l:02X} != MAME read_ctrl {mr:02X} {ml:02X} for {v}')
         if want is not None and want != (r, l):
             problems.append(f'class {cls}: model {r:02X} {l:02X} != expected {want[0]:02X} {want[1]:02X} for {v}')
+        if want_keys is not None and want_keys != k:
+            problems.append(f'class {cls}: model ECS keys {k:016X} != expected {want_keys:016X} for {v}')
         e = want if want is not None else (r, l)
-        lines.append(vec_line(cls, v, *e))
+        lines.append(vec_line(cls, v, *e, keys=want_keys if want_keys is not None else k))
         counts[cls] = counts.get(cls, 0) + 1
 
     def rkey(t=None):
@@ -437,10 +459,66 @@ def generate(path):
                         add(9, v, e)
                         if len(problems) > before:
                             problems[-1] = f'L+D-pad {mm} {"+".join(btns)} type {t} stick {sd}: ' + problems[-1]
+    # 10 the ECS keyboard (step 9), written out by hand: each key of the ECS keyboard by its HID
+    # usage code (ECS_SPEC) gives its switch of the matrix (MAME ecs_ctrl.cpp ROW.n, the wiki's table:
+    # tools/ecs.py KEYPOS); Shift and Ctrl from either side of the modifier byte; the synthesizer's two
+    # tracker rows give their notes; nothing without the ECS; the keypad keeps only the numpad with it
+    import ecs as ecsm
+    kb = 4 << 28
+    for name, code in ECS_SPEC.items():
+        r_, c_ = ecsm.KEYPOS[name]
+        for pos in range(6):
+            j3, t3 = (code << (8 * pos), 0) if pos < 4 else (0, code << (8 * (pos - 4)))
+            add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=1, ovr=pos % 3), (0xFF, 0xFF), 1 << (8 * r_ + c_))
+            add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=0, swap=pos & 1), None, 0)
+    for mod, name in ((0x02, 'SHIFT'), (0x20, 'SHIFT'), (0x01, 'CTL'), (0x10, 'CTL')):
+        r_, c_ = ecsm.KEYPOS[name]
+        add(10, vec(key3=kb | mod, ecs=1), (0xFF, 0xFF), 1 << (8 * r_ + c_))
+        add(10, vec(key3=kb | mod, ecs=1, synth=1), (0xFF, 0xFF), 0)
+    for code, note in SYNTH_SPEC:
+        add(10, vec(key3=kb, joy3=code, ecs=1, synth=1), (0xFF, 0xFF), 1 << note)
+        add(10, vec(key3=kb, trig3=code << 8, ecs=1, synth=1, ovr=2), (0xFF, 0xFF), 1 << note)
+    # with the ECS the numpad stays the keypad (numpad . = Clear) and the number row, Enter and
+    # Backspace do not; written out with MAME's keypad names
+    for code, key in ((0x59, '1'), (0x61, '9'), (0x62, '0'), (0x58, 'Enter'), (0x63, 'Clear')):
+        w = mame_read_ctrl([key])
+        add(10, vec(key3=kb, joy3=code, ecs=1), (0xFF, w), 0)
+        add(10, vec(key3=kb, joy3=code, ecs=1, swap=1), (w, 0xFF), 0)
+    for code in (0x1E, 0x27, 0x28, 0x2A):
+        add(10, vec(key3=kb, joy3=code, ecs=1), (0xFF, 0xFF), None)
+    # 11 every usage code in each report byte, with and without the ECS and the synthesizer; random
+    # reports of up to six keys with modifiers (expected: the model)
+    for c in range(256):
+        for pos in range(6):
+            j3, t3 = (c << (8 * pos), 0) if pos < 4 else (0, c << (8 * (pos - 4)))
+            add(11, vec(key3=kb | rng.getrandbits(8), joy3=j3, trig3=t3, ecs=1, synth=(c + pos) & 1,
+                        swap=c & 1, ovr=pos % 3))
+    for i in range(20000):
+        n = rng.randint(1, 6)
+        cs = [rng.choice(list(m.ECS_HID) + list(m.SYNTH_HID) + list(m.HID_ECS)) if rng.random() < 0.8
+              else rng.getrandbits(8) for _ in range(n)] + [0] * (6 - n)
+        rng.shuffle(cs)
+        add(11, vec(key1=rkey() if i % 2 else 0, joy1=rng.getrandbits(32), key3=kb | rng.getrandbits(16),
+                    joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24, trig3=cs[4] | cs[5] << 8,
+                    mode=i % 4, swap=(i >> 2) & 1, ecs=(i >> 3) & 1, synth=(i >> 4) & 1, ovr=i % 3))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
     return counts, problems
+
+
+# The ECS keyboard by USB HID usage code (step 9), written out from the HID usage tables (keyboard
+# page 0x07: a-z = 0x04-0x1D, 1-9 = 0x1E-0x26, 0 = 0x27, Enter 0x28, Esc 0x29, Backspace 0x2A,
+# Space 0x2C, ; 0x33, , 0x36, . 0x37, Right 0x4F, Left 0x50, Down 0x51, Up 0x52): the ECS key each
+# PC key is (tools/ecs.py KEYPOS names). Backspace is the ECS left arrow too (BS below).
+ECS_SPEC = dict(zip('ABCDEFGHIJKLMNOPQRSTUVWXYZ', range(0x04, 0x1E)))
+ECS_SPEC.update(zip('123456789', range(0x1E, 0x27)))
+ECS_SPEC.update({'0': 0x27, 'RTN': 0x28, 'ESC': 0x29, 'SPACE': 0x2C, ';': 0x33, ',': 0x36, '.': 0x37,
+                 'RIGHT': 0x4F, 'LEFT': 0x50, 'DOWN': 0x51, 'UP': 0x52})
+# the synthesizer's tracker rows: (HID usage, note; 0 = C2): Z S X D C V G B H N J M = C3-B3,
+# Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5
+SYNTH_SPEC = list(zip((0x1D, 0x16, 0x1B, 0x07, 0x06, 0x19, 0x0A, 0x05, 0x0B, 0x11, 0x0D, 0x10), range(12, 24)))
+SYNTH_SPEC += list(zip((0x14, 0x1F, 0x1A, 0x20, 0x08, 0x15, 0x22, 0x17, 0x23, 0x1C, 0x24, 0x18, 0x0C), range(24, 37)))
 
 
 def generate_tear(path, groups=2000):
@@ -452,7 +530,7 @@ def generate_tear(path, groups=2000):
 
     def vline(v):
         r, l = m.ports(v)
-        return vec_line(0, v, r, l).split(' ', 1)[1], (r, l)
+        return tear_line(v, r, l), (r, l)
 
     def btn(t=None):
         return ((rng.choice((1, 2, 3)) if t is None else t) << 28) | rng.getrandbits(16)
@@ -505,8 +583,8 @@ def generate_tear(path, groups=2000):
     return kinds
 
 
-SKEW_DECL = ("    localparam int W = 6 * 32 + 16 + 2 + 1;\n",
-             "    localparam int W = 6 * 32 + 16 + 2 + 1;\n"
+SKEW_DECL = ("    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;\n",
+             "    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;\n"
              "    logic [W-1:0] hold_v;      // tb_input skew build: the clk side's view of hold_74\n"
              "    logic         req_v;       // and of req_74, driven by tb_input.sv\n")
 CLK_BLOCK = re.compile(r'(    always_ff @\(posedge clk\) begin\n)(.*?)(\n    end\n)', re.S)
@@ -595,6 +673,17 @@ PLANTS = [
       ("p = p | stick16_code(joy[7:0], joy[15:8]);",
        "p = p | stick16_code(joy[7:0], joy[15:8], mode != 2'd1 && l1 && !r1);")], None),
     ('stick_on_pocket', 'intv_input.sv', "an = t == 4'd3;", "an = t[1];"),
+    # step 9, the ECS keyboard: Shift on the wrong switch; Backspace not the left arrow; the number row
+    # still the keypad with the ECS; the synthesizer an octave off; right Ctrl ignored; the keys sent
+    # without the ECS; the ECS setting's bits swapped
+    ('ecs_shift_pos', 'intv_input.sv', "? 64'd1 << 55 : 64'd0)", "? 64'd1 << 54 : 64'd0)"),
+    ('ecs_bs_none', 'intv_input.sv', "8'h50: p = 7'd0;   8'h2A: p = 7'd0;", "8'h50: p = 7'd0;"),
+    ('ecs_numrow_keypad', 'intv_input.sv', "kb = hid_code_ecs(j3[7:0]) | hid_code_ecs(j3[15:8])",
+     "kb = hid_code(j3[7:0]) | hid_code_ecs(j3[15:8])"),
+    ('synth_octave', 'intv_input.sv', "8'h1D: n = 7'd12;", "8'h1D: n = 7'd24;"),
+    ('ecs_rctrl', 'intv_input.sv', "((k3[0] | k3[4]) ?", "((k3[0]) ?"),
+    ('ecs_always', 'intv_input.sv', "            if (ecs_on) begin\n", "            if (1'b1) begin\n"),
+    ('ovr_swapped', 'intv_input.sv', "    assign ecs_ovr   = eo;", "    assign ecs_ovr   = {eo[0], eo[1]};"),
     # the crossing as it was before 0.0.5: every bit through two clk flip-flops on its own
     ('bitwise_sync', 'intv_input.sv',
      [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),

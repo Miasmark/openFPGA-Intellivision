@@ -43,6 +43,12 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   NEGR carry and its memory map (no GRAM alias above $3BFF, unmapped
   ranges read 0), and with `--timing computed` MAME's 59.92 Hz frames
   computed rather than read from the trace.
+- `ecs.py`: the ECS model (build step 9; docs/ECS_NOTES.md): its address
+  decode and page latches, ECS RAM, PSG #2 (`psg.py` variant 8917), the
+  keyboard matrix rule (ghosting and masking) and the synthesizer's diodes,
+  the UART stub, the modes and DESIGN 20's Auto rule (`auto_mode`), and a
+  MAME mode (MAME's ECS) for the reference comparisons. `ecs.py` runs its
+  selftest (ECS_SELFTEST). `intv_system.py` attaches it (`make_ecs`).
 - `intv_input.py`: the input model (DESIGN.md 7.2, build step 6): the
   Pocket's controllers and USB keyboard as two hand controllers, the bytes
   on the PSG's ports; its code table is checked against MAME's

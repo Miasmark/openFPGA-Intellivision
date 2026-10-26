@@ -166,7 +166,10 @@ module tb_savestate;
     logic [31:0] cart_len = 32'd0, cfg_len = 32'd0;
     logic        cfg_inlist = 1'b0;
     logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
+    logic [1:0]  ecs_ovr = 2'd2;          // +ecs (step 9): the menu's ECS override; Off by default
+    logic        synth = 1'b0;
     /* verilator lint_off UNUSEDSIGNAL */
+    wire logic        ecs_attached;
     wire logic [11:0] slot_st;
     wire logic [1:0]  len_st;
     wire logic        ce_pix;
@@ -193,12 +196,24 @@ module tb_savestate;
             if (cyc >= key_c[i]) kpads = key_v[i];
     end
 
+    // +ekeys: the ECS keyboard's switches by machine cycle (step 9)
+    int          nek = 0;
+    longint      ek_c[512];
+    logic [63:0] ek_v[512];
+    logic [63:0] ekeys;
+    always_comb begin
+        ekeys = 64'd0;
+        for (int i = 0; i < nek; i++)
+            if (cyc >= ek_c[i]) ekeys = ek_v[i];
+    end
+
     intv_core #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) core (
         .clk(clk), .timing_reset(treset), .hold_req(hold_req),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data), .len_valid(len_valid),
         .cart_len(cart_len), .len_chk(2'd0), .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
         .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
+        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .ecs_attached(ecs_attached),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),
@@ -660,6 +675,21 @@ module tb_savestate;
                 end
                 if (kf != 0) $fclose(kf);
             end
+            if ($value$plusargs("ekeys=%s", keys_f)) begin
+                int     kf;
+                longint k;
+                logic [63:0] v;
+                kf = $fopen(keys_f, "r");
+                if (kf == 0) fail($sformatf("cannot open %s", keys_f));
+                while (kf != 0 && nek < 512 && $fscanf(kf, "%d %h", k, v) == 2) begin
+                    ek_c[nek] = k * FRAME;
+                    ek_v[nek] = v;
+                    nek++;
+                end
+                if (kf != 0) $fclose(kf);
+            end
+            if ($value$plusargs("ecs=%d", p)) ecs_ovr = 2'(p);
+            if ($value$plusargs("synth=%d", p)) synth = p != 0;
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -668,6 +698,10 @@ module tb_savestate;
         repeat (8) @(negedge clk);
         load_file(exec_f, 4'd2, n);
         load_file(grom_f, 4'd3, n);
+        begin
+            string ecs_f;
+            if ($value$plusargs("ecsrom=%s", ecs_f)) load_file(ecs_f, 4'd4, n);
+        end
         n = 0;
         if ($value$plusargs("cart=%s", cart_f)) load_file(cart_f, 4'd0, n);
         $fdisplay(fd, "L cart %0d", n);
@@ -684,6 +718,7 @@ module tb_savestate;
         if (to >= 4000000) fail("loader not ready");
         repeat (8) @(negedge clk);            // the results reach intv_cart's registers
         $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
+        $fdisplay(fd, "L ecs mode %0d", core.ecs_mode);
         repeat (10) @(negedge clk);
         if (hold_on == 0) hold_req = 1'b0;
 

@@ -17,6 +17,11 @@
 //                   sound (audio, audio_stb) and the hand controllers
 //   intv_ram x 3    scratchpad 256 x 8 ($0100-$01EF), System RAM 352 x 16
 //                   ($0200-$035F), GRAM 512 x 8 ($3800-$3FFF)
+//   intv_ecs        the ECS (build step 9): UART stub, PSG #2 and the
+//                   keyboard, ECS RAM, the ROM page latches (its ROMs are
+//                   read through the cartridge port: ecs_on, ecs_pg to
+//                   intv_media); ecs_mode is taken at machine reset. The
+//                   sound is PSG #1 + PSG #2, at most 32,767.
 //
 // ce is the CPU cycle enable from intv_timing (ce_cpu: only while the
 // machine is live), ce_pix its pixel clock (ce_stic), live high on every
@@ -41,6 +46,9 @@
 //   SS_GRAM ($09, $0A)   GRAM, 512 words
 //   SS_ROW  ($0C)        the STIC's row buffer, 20 words
 //   SS_LINE ($0D)        the STIC's line buffer, 64 words (18 bits)
+//   SS_ECS  ($0E)        intv_ecs, 1 word
+//   SS_PSG2 ($0F)        PSG #2, 21 words
+//   SS_ERAM ($10, $11)   ECS RAM, 512 words
 // The timing ($01) and the cartridge ($0B) have their own modules.
 //
 // SPDX-License-Identifier: MIT
@@ -59,7 +67,10 @@ module intv_machine #(
     parameter logic [7:0] SS_SYS  = 8'h07,
     parameter logic [7:0] SS_GRAM = 8'h09,
     parameter logic [7:0] SS_ROW  = 8'h0C,
-    parameter logic [7:0] SS_LINE = 8'h0D
+    parameter logic [7:0] SS_LINE = 8'h0D,
+    parameter logic [7:0] SS_ECS  = 8'h0E,
+    parameter logic [7:0] SS_PSG2 = 8'h0F,
+    parameter logic [7:0] SS_ERAM = 8'h10
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
@@ -73,6 +84,11 @@ module intv_machine #(
     input  wire logic        busrq_en,
     input  wire logic [7:0]  pad_r,           // hand controllers ($FF: none)
     input  wire logic [7:0]  pad_l,
+    input  wire logic [1:0]  ecs_mode,        // 0 off, 1 on, 2 attached (taken at reset)
+    input  wire logic [63:0] ecs_keys,        // the ECS keyboard's pressed switches
+    input  wire logic        ecs_synth,       // the synthesizer instead of the keyboard
+    output logic             ecs_on,          // to intv_media: the ECS ROMs
+    output logic [11:0]      ecs_pg,
 
     // cartridge port and system ROMs (intv_media)
     output logic             cart_req,
@@ -126,7 +142,14 @@ module intv_machine #(
     logic        stic_open;
     logic [15:0] stic_q, sys_q;
     logic [7:0]  scr_q, psg_q, gram_q;
-    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram;
+    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs;
+    logic        ecs_hit;
+    logic [15:0] ecs_q, audio1, audio2;
+    logic        audio1_stb;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [7:0]  psg1_ctrl;
+    logic        audio2_stb;              // the same steps as PSG #1's (both reset together)
+    /* verilator lint_on UNUSEDSIGNAL */
 
     cp1610 #(.SS_ID(SS_CPU)) cpu (
         .clk, .reset(hold && !ss_en), .ce, .cfg_hlt_imm, .cfg_sdbd_r6_mame,
@@ -141,7 +164,7 @@ module intv_machine #(
         .a(addr), .rd, .wr, .vb, .scr_we, .psg_we, .sys_we, .gram_we, .stic_we,
         .stic_open, .stic_q, .scr_q, .psg_q, .sys_q, .exec_q, .grom_q, .gram_q,
         .cart_req, .cart_we, .cart_wdata, .cart_ack, .cart_rdata,
-        .cart_hit_in(cart_hit),
+        .cart_hit_in(cart_hit), .ecs_hit, .ecs_q,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_bus));
 
     assign cart_addr = addr;
@@ -160,8 +183,21 @@ module intv_machine #(
 
     intv_psg #(.SS_ID(SS_PSG)) psg (
         .clk, .reset(mreset), .ce, .run(!hold), .n(addr[3:0]), .we(psg_we), .wdata(dout[7:0]),
-        .q(psg_q), .pad_r, .pad_l, .audio, .audio_stb,
+        .q(psg_q), .pad_r, .pad_l, .ctrl(psg1_ctrl), .audio(audio1), .audio_stb(audio1_stb),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_psg));
+
+    intv_ecs #(.SS_ID(SS_ECS), .SS_PSG(SS_PSG2), .SS_RAM(SS_ERAM)) ecs (
+        .clk, .mreset, .mode(ecs_mode), .ce, .run(!hold),
+        .a(addr), .wr, .wdata(dout), .hit(ecs_hit), .q(ecs_q),
+        .on(ecs_on), .pg(ecs_pg), .keys(ecs_keys), .synth(ecs_synth),
+        .audio(audio2), .audio_stb(audio2_stb),
+        .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_ecs));
+
+    // the two PSGs' samples come together (same reset, same steps); PSG #2 is
+    // silent (0) unless the ECS is attached
+    wire logic [16:0] mix = 17'(audio1) + 17'(audio2);
+    assign audio     = mix[16:15] != 2'd0 ? 16'h7FFF : mix[15:0];
+    assign audio_stb = audio1_stb;
 
     intv_ram #(.AW(8), .DW(8), .WORDS(256), .SS_ID(SS_SCR)) scratch (
         .clk, .addr(addr[7:0]), .we(scr_we), .d(dout[7:0]), .q(scr_q),
@@ -178,7 +214,7 @@ module intv_machine #(
         .addr_b(v_gram_addr), .q_b(v_gram_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_gram));
 
-    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram;
+    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs;
 
 endmodule
 

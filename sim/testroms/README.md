@@ -83,3 +83,15 @@ to `sim/work*` and are not committed.
 - With ROMW 10 the EXEC ROM keeps 10 bits, so an address above $3FF must
   go through a pointer register; `tb_system.py` refuses a program with a
   word over 10 bits.
+- `ecstest.asm`: step 9, a program for the EXEC slot run with the ECS
+  attached (`sim/tb/tb_system.py` images ecstest and ecssynth): ECS RAM
+  widths, the UART stub, every ECS ROM page value, PSG #2's registers and
+  sound (both envelope-select bits), PSG #1 at full volume (the mix
+  saturates), and in every frame's ISR the keyboard matrix scanned four
+  ways (rows, columns, both ports out, both in), stored for the bench's
+  check against the matrix rule written out by hand (ECSKBD_WANT).
+- `step9/`: step 9's IntyBASIC test cartridges and their builder
+  (`build_images.py`): ecssound (SOUND 5-9 and CONT3: the $4800 hook, page
+  value $F), ecshook (the same without the CFG's ECS flag), ecsavail (no
+  ECS feature: the Auto rule's attached mode, IntyBASIC's ECS RAM test),
+  cart4000 (a cartridge at $4000: the ECS off). Each prints PASS / FAIL.

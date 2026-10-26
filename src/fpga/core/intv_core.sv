@@ -48,6 +48,13 @@ module intv_core #(
     input  wire logic [7:0]  pad_r,
     input  wire logic [7:0]  pad_l,
 
+    // the ECS (build step 9): the menu's override (0 Auto, 1 On, 2 Off; taken
+    // at the next machine reset), the keyboard from intv_input
+    input  wire logic [1:0]  ecs_override,
+    input  wire logic [63:0] ecs_keys,
+    input  wire logic        ecs_synth,
+    output logic             ecs_attached,    // the ECS answers (for intv_input's key routing)
+
     // raster and picture
     output logic             ce_pix,
     output logic [8:0]       hcnt,
@@ -101,6 +108,12 @@ module intv_core #(
     logic [31:0] cart_crc, cart_cfg_crc;
     logic        cart_noss;
     logic [63:0] pg_sel;
+    logic        ecs_on, ecs_rom_ok;
+    logic [11:0] ecs_pg;
+    logic [1:0]  ecs_auto, ecs_mode;
+    // the mode intv_ecs takes at machine reset: the menu's override or the Auto rule
+    assign ecs_mode = ecs_override == 2'd1 ? 2'd1 : ecs_override == 2'd2 ? 2'd0 : ecs_auto;
+    assign ecs_attached = ecs_on;
     logic [16:0] cart_words;
     logic [7:0]  cart_layout, cart_flags;
     logic        cbus_ack, cbus_hit, cbus_paged, cbus_req, cbus_we;
@@ -130,9 +143,11 @@ module intv_core #(
             x = x[0] ? (x >> 1) ^ 32'hEDB88320 : x >> 1;
         return x;
     endfunction
-    logic [31:0] ex_c = 32'hFFFFFFFF, gr_c = 32'hFFFFFFFF;
+    logic [31:0] ex_c = 32'hFFFFFFFF, gr_c = 32'hFFFFFFFF, es_c = 32'hFFFFFFFF;
     always_ff @(posedge clk)
         if (ld_wr) begin
+            if (ld_addr[27:24] == 4'd4)
+                es_c <= crc_byte(ld_addr[23:0] == 24'd0 ? 32'hFFFFFFFF : es_c, ld_data);
             if (ld_addr[27:24] == 4'd2)
                 ex_c <= crc_byte(ld_addr[23:0] == 24'd0 ? 32'hFFFFFFFF : ex_c, ld_data);
             if (ld_addr[27:24] == 4'd3)
@@ -151,6 +166,7 @@ module intv_core #(
         .bus_req(cbus_req), .bus_we(cbus_we), .bus_addr(cbus_addr), .bus_wdata(cbus_wdata),
         .bus_ack(cbus_ack), .bus_rdata(cbus_rdata), .bus_hit(cbus_hit), .bus_attr(cbus_attr),
         .bus_paged(cbus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
+        .ecs_on(ecs_on), .ecs_pg(ecs_pg), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
         .aux_be(2'b11), .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -182,12 +198,13 @@ module intv_core #(
     intv_machine #(
         .SS_CPU(SS_CPU), .SS_BUS(SS_BUS), .SS_STIC(SS_STIC), .SS_PSG(SS_PSG),
         .SS_SCR(SS_SCRATCH), .SS_SYS(SS_SYSRAM), .SS_GRAM(SS_GRAM), .SS_ROW(SS_ROW),
-        .SS_LINE(SS_LINE)
+        .SS_LINE(SS_LINE), .SS_ECS(SS_ECS), .SS_PSG2(SS_PSG2), .SS_ERAM(SS_ECSRAM)
     ) machine (
         .clk(clk), .mreset(machine_reset), .ce(ce_cpu), .ce_pix(ce_stic), .live(live),
         .hcnt(hcnt), .vcnt(vcnt),
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1),
         .pad_r(pad_r), .pad_l(pad_l),
+        .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_on(ecs_on), .ecs_pg(ecs_pg),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -214,6 +231,7 @@ module intv_core #(
         .cpu_fetch(m_fetch), .cpu_halted(m_halted), .cpu_hold(m_hold),
         .cart_crc(cart_crc), .cart_words(cart_words), .cfg_crc(cart_cfg_crc), .cart_noss(cart_noss),
         .exec_crc(~ex_c), .grom_crc(~gr_c),
+        .ecs_flag(ecs_on), .ecs_crc(ecs_on ? ~es_c : 32'd0),
         .run(run), .frozen(frozen), .ss_en(ss_en), .ss_addr(ss_addr), .ss_we(ss_we),
         .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
@@ -233,7 +251,7 @@ module intv_core #(
 
     /* verilator lint_off UNUSEDSIGNAL */
     wire unused = cart_busy | cart_hit | (|cart_err) | (|cart_fmt_err) | (|cart_layout) | (|cart_flags)
-                | (|cbus_attr) | cbus_paged | (|pg_sel) | frozen;
+                | (|cbus_attr) | cbus_paged | (|pg_sel) | frozen | ecs_rom_ok;
     /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule

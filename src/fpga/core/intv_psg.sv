@@ -9,7 +9,9 @@
 //   mask  FF   FF   FF   FF   0F   0F   0F   FF   FF   1F   0F   3F   3F   3F
 // $01FE / $01FF read the right / left hand controllers (pad_r, pad_l);
 // the ports are inputs, the direction bits 6-7 of the enable register are
-// ignored (DESIGN 7.1). Machine reset clears everything (MAME
+// ignored (DESIGN 7.1). PSG #2 of the ECS (intv_ecs, step 9) reads its
+// ports' lines through pad_r / pad_l too and takes the directions from
+// ctrl (register 8). Machine reset clears everything (MAME
 // ay8910_reset_ym: registers 0, LFSR 1, envelope restarted).
 //
 // Timing (DESIGN 2.3): the PSG divides its master / 2 clock by 8, so its
@@ -75,6 +77,7 @@ module intv_psg #(
     output logic      [7:0]  q,
     input  wire logic [7:0]  pad_r,           // $01FE
     input  wire logic [7:0]  pad_l,           // $01FF
+    output logic      [7:0]  ctrl,            // register 8 (port directions: the ECS, step 9)
 
     output logic      [15:0] audio,           // 48 kHz, 0..32766
     output logic             audio_stb,
@@ -136,6 +139,8 @@ module intv_psg #(
             default: dac = 14'd10922;
         endcase
     endfunction
+
+    assign ctrl = r[8];
 
     always_comb begin
         unique case (n)

@@ -1,10 +1,10 @@
 Mattel Intellivision for Analogue Pocket
 A clean-room core, written from Mattel's and General Instrument's
 documents, with save states designed in. Work in progress: this build
-runs the EXEC and cartridges and shows their picture: the background
-(cards, Color Stack, Colored Squares, Foreground/Background) and the
-eight moving objects (MOBs) with their collisions. No sound and no
-controls yet.
+runs the EXEC, cartridges (.int/.bin with the CRC table, BIN + CFG,
+Intellicart .rom) and the Entertainment Computer System (ECS): its
+ROMs, RAM, second sound chip, the computer keyboard and the music
+synthesizer from a USB keyboard on the Dock. No Intellivoice yet.
 
 System ROMs (yours to supply, in /Assets/intv/common/):
   exec.bin     EXEC ROM, 8,192 bytes (required)
@@ -13,6 +13,13 @@ System ROMs (yours to supply, in /Assets/intv/common/):
   ivoice.bin   Intellivoice SP0256-012 ROM, 2,048 bytes (optional)
 
 Cartridges: .int / .bin / .rom / .itv, with an optional .cfg.
+
+ECS (menu "ECS", taken at the next Reset or load): Auto attaches it as
+each cartridge needs (ECS games: on, with the ECS title where the game
+asks for it; other games: attached with its ROMs paged out, so they
+start straight; a cartridge that uses $4000-$47FF: off). On and Off
+force it. "ECS Keyboard": the USB keyboard as the computer keyboard
+or, on two rows (Z-M, Q-I), as the music synthesizer.
 
 While the files load, or when a required one is missing, a test pattern
 shows instead. Its bottom row has one block per file: cartridge, config,

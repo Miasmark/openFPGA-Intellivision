@@ -27,7 +27,11 @@
 //   $3000-$37FF             GROM: $FF00 | byte
 //   $3800-$3FFF             GRAM, 512 x 8, mirrored; writes also from
 //                           $7800, $B800, $F800 (+ $7FF)
-//   the cartridge port      everywhere its page table maps (intv_cart)
+//   the cartridge port      everywhere its page table maps (intv_cart);
+//                           the ECS ROMs through it too (build step 9)
+//   $00E0-$00E3, $00F0-$00FF, $4000-$47FF
+//                           the ECS when attached (intv_ecs: ecs_hit,
+//                           ecs_q); the cartridge does not answer there
 // STIC registers and GRAM are open to the CPU in the bus-copy window
 // (VBlank) or while the STIC handshake is clear; otherwise a read gives
 // the address offset and a write is dropped (MAME intv_m.cpp:484-512).
@@ -117,6 +121,10 @@ module intv_bus #(
     input  wire logic [15:0] cart_rdata,
     input  wire logic        cart_hit_in,
 
+    // the ECS (intv_ecs, build step 9): UART, PSG #2, RAM
+    input  wire logic        ecs_hit,
+    input  wire logic [15:0] ecs_q,
+
     // state port
     input  wire logic [15:0] ss_addr,
     input  wire logic        ss_we,
@@ -178,6 +186,7 @@ module intv_bus #(
             if (sel_grom) din &= {8'hFF, grom_q};
             if (sel_gram) din &= stic_open ? {8'h00, gram_q} : {7'd0, a[8:0]};
             if (cart_hit) din &= cart_q;
+            if (ecs_hit)  din &= ecs_q;
         end
     end
 

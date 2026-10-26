@@ -386,6 +386,8 @@ module cp1610 #(
                     st_n = S_RBAR;
                 end else if (cls_mvo) begin
                     tmp_n = r[f_r];             // old value, also when f_r is the pointer
+                    if (f_m == 3'd0 && f_r == 3'd7)
+                        tmp_n = r[7] + 16'd1;   // MVO R7, A: the PC after the address word
                     if (f_m == 3'd0) begin
                         ea_n = r[7]; r_n[7] = r[7] + 16'd1; st_n = S_ABAR;
                     end else begin

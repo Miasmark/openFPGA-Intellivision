@@ -10,22 +10,23 @@ Everything else is generated from LAYOUT below or checked against it:
   docs/SAVESTATE.md              the table between the GENERATED markers
   the SS_ID defaults of the RTL modules and intv_machine's parameters (checked only)
 
-The blob (format version 1) is 153,600 bytes (DESIGN decision 6), 32-bit words stored
+The blob (format version 2, build step 8; version 1 was step 7's) is 153,600 bytes (DESIGN decision 6), 32-bit words stored
 big-endian (the Pocket's bridge byte order):
   bytes 0-63        header, 16 words (HEADER below)
-  bytes 64-8191     the modules' state words in id order (1,324 used; the rest zero)
+  bytes 64-8191     the modules' state words in id order (1,319 used; the rest zero)
   bytes 8192-40959  cart RAM, the 16K cells of the SRAM's cart RAM area, two per word
                     (cell 2k in bits 31-16)
   bytes 40960-      reserved for later steps (ECS, Intellivoice, JLP): zero
 The payload is bytes 64 .. 64 + length - 1 (length in the header); its CRC32 (zlib's
 CRC-32, the same as the cartridge CRC) is in the header. A blob is refused unless the
-magic, version, size, length, cartridge CRC and length, flags, word counts and the
-EXEC and GROM CRCs match this core, its cartridge and its system ROMs, the reserved header words and the reserved area are
+magic, version, size, length, cartridge CRC and length, the CFG's CRC, flags, word
+counts and the EXEC and GROM CRCs match this core, its cartridge (and CFG) and its system
+ROMs, the reserved header words and the reserved area are
 zero, and the payload CRC is right.
 
 Usage:
   python3 -I tools/savestate.py gen [--check]   write (or check) the package and the doc table
-  python3 -I tools/savestate.py verify BLOB [--cart-crc X] [--cart-words N]
+  python3 -I tools/savestate.py verify BLOB [--cart-crc X] [--cart-words N] [--cfg-crc X]
   python3 -I tools/savestate.py show BLOB
   python3 -I tools/savestate.py selftest
 """
@@ -59,8 +60,8 @@ LAYOUT = [
      'System RAM 352 x 16 (ids $07-$08)'),
     (0x09, 'gram', 512, 'intv_ram.sv', None,
      'GRAM 512 x 8 (ids $09-$0A)'),
-    (0x0B, 'cart', 21, 'intv_cart.sv', 'SS_ID',
-     'image CRC, length, page table, page selects'),
+    (0x0B, 'cart', 16, 'intv_cart.sv', 'SS_ID',
+     'load results (read only), page selects, Intellicart bank registers'),
     (0x0C, 'row', 20, 'intv_ram.sv', None,
      "the STIC's row buffer 20 x 14"),
     (0x0D, 'line', 64, 'intv_ram.sv', None,
@@ -78,7 +79,7 @@ RESERVED_IDS = [
 MACHINE_PARAMS = {'SS_CPU': 0x02, 'SS_BUS': 0x03, 'SS_STIC': 0x04, 'SS_PSG': 0x05, 'SS_SCR': 0x06,
                   'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D}
 
-VERSION = 1
+VERSION = 2
 MAGIC = 0x494E5456                 # "INTV"
 BLOB_BYTES = 153600                # DESIGN 4.4, decision 6
 HDR_WORDS = 16
@@ -86,13 +87,13 @@ MOD_BYTE = 64                      # first module word
 MOD_AREA_END = 8192                # module words up to here
 CRAM_BYTE = 8192
 CRAM_CELLS = 16384                 # the SRAM's cart RAM area (intv_media.sv)
-LIVE_END = CRAM_BYTE + 2 * CRAM_CELLS        # 40960: the end of what version 1 uses
+LIVE_END = CRAM_BYTE + 2 * CRAM_CELLS        # 40960: the end of what versions 1 and 2 use
 PAYLOAD_BYTES = LIVE_END - MOD_BYTE          # 40896
-MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1324
+MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1319
 
 # header words
 (H_MAGIC, H_VERSION, H_SIZE, H_LENGTH, H_CART_CRC, H_CART_WORDS, H_FLAGS, H_CRC, H_NMOD, H_NCRAM,
- H_EXEC_CRC, H_GROM_CRC) = range(12)
+ H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC) = range(13)
 HEADER = [
     (H_MAGIC, 'magic', '$494E5456 "INTV"'),
     (H_VERSION, 'version', 'format version (%d)' % VERSION),
@@ -106,8 +107,9 @@ HEADER = [
     (H_NCRAM, 'cram_cells', 'cart RAM cells (%d)' % CRAM_CELLS),
     (H_EXEC_CRC, 'exec_crc', "the EXEC slot's CRC32 (the bytes the loader took)"),
     (H_GROM_CRC, 'grom_crc', "the GROM slot's CRC32"),
+    (H_CFG_CRC, 'cfg_crc', "the CFG's CRC32 when the map came with one (0: none; version 2)"),
 ]
-H_LAST = H_GROM_CRC
+H_LAST = H_CFG_CRC
 FLAG_ECS, FLAG_VOICE, FLAG_PAL = 1, 2, 0x100
 
 assert 4 * HDR_WORDS == MOD_BYTE
@@ -138,7 +140,8 @@ def crc32(b):
 
 
 # ------------------------------------------------------------- pack / unpack
-def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_crc=0, grom_crc=0):
+def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_crc=0, grom_crc=0,
+         cfg_crc=0, version=VERSION):
     """mods: {id: [words]} (every LAYOUT module, exact length); cram: CRAM_CELLS cells."""
     b = bytearray(BLOB_BYTES)
     for mid, name, n, w0 in module_offsets():
@@ -152,10 +155,12 @@ def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_
     for c, v in enumerate(cram):
         struct.pack_into('>H', b, CRAM_BYTE + 2 * c, v & 0xFFFF)
     h = [0] * HDR_WORDS
-    h[H_MAGIC], h[H_VERSION], h[H_SIZE], h[H_LENGTH] = MAGIC, VERSION, BLOB_BYTES, PAYLOAD_BYTES
+    h[H_MAGIC], h[H_VERSION], h[H_SIZE], h[H_LENGTH] = MAGIC, version, BLOB_BYTES, PAYLOAD_BYTES
     h[H_CART_CRC], h[H_CART_WORDS], h[H_FLAGS] = cart_crc, cart_words, flags
     h[H_NMOD], h[H_NCRAM] = MOD_WORDS, CRAM_CELLS
     h[H_EXEC_CRC], h[H_GROM_CRC] = exec_crc, grom_crc
+    if version >= 2:
+        h[H_CFG_CRC] = cfg_crc
     h[H_CRC] = crc32(b[MOD_BYTE:MOD_BYTE + PAYLOAD_BYTES]) if crc_override is None else crc_override
     for i, v in enumerate(h):
         struct.pack_into('>I', b, 4 * i, v & 0xFFFFFFFF)
@@ -175,7 +180,7 @@ def unpack(blob):
     return header(blob), mods, cram
 
 
-def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_crc=None):
+def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_crc=None, cfg_crc=None):
     """The core's load checks, in its order; [] if the blob would be taken."""
     if len(blob) != BLOB_BYTES:
         return ['size %d bytes, want %d' % (len(blob), BLOB_BYTES)]
@@ -190,6 +195,8 @@ def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_cr
         want[H_EXEC_CRC] = exec_crc
     if grom_crc is not None:
         want[H_GROM_CRC] = grom_crc
+    if cfg_crc is not None:
+        want[H_CFG_CRC] = cfg_crc
     bad = []
     names = {i: n for i, n, _ in HEADER}
     for i in range(HDR_WORDS):
@@ -235,7 +242,7 @@ def gen_pkg():
     L.append("    localparam int          SS_MOD_END    = %d;     // module area end" % MOD_AREA_END)
     L.append("    localparam int          SS_CRAM_BYTE  = %d;" % CRAM_BYTE)
     L.append("    localparam int          SS_CRAM_CELLS = %d;" % CRAM_CELLS)
-    L.append("    localparam int          SS_LIVE_END   = %d;    // version 1 uses bytes below" % LIVE_END)
+    L.append("    localparam int          SS_LIVE_END   = %d;    // version %d uses bytes below" % (LIVE_END, VERSION))
     L.append("    localparam int          SS_PAYLOAD    = %d;    // payload bytes from SS_MOD_BYTE" % PAYLOAD_BYTES)
     L.append('')
     L.append('    // header words')
@@ -364,7 +371,8 @@ def cmd_show(a):
 def cmd_verify(a):
     blob = open(a.blob, 'rb').read()
     hx = lambda x: None if x is None else int(x, 16)  # noqa: E731
-    bad = verify(blob, hx(a.cart_crc), a.cart_words, exec_crc=hx(a.exec_crc), grom_crc=hx(a.grom_crc))
+    bad = verify(blob, hx(a.cart_crc), a.cart_words, exec_crc=hx(a.exec_crc), grom_crc=hx(a.grom_crc),
+                 cfg_crc=hx(a.cfg_crc))
     for b in bad:
         print('  ' + b)
     print('SS_VERIFY %s' % ('pass' if not bad else 'FAIL'))
@@ -376,16 +384,17 @@ def selftest():
     rnd = random.Random(7)
     mods = {mid: [rnd.getrandbits(32) for _ in range(n)] for mid, _, n, *_ in LAYOUT}
     cram = [rnd.getrandbits(16) for _ in range(CRAM_CELLS)]
-    b = pack(mods, cram, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF)
+    b = pack(mods, cram, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE)
     fails = []
     if len(b) != BLOB_BYTES:
         fails.append('size')
-    if verify(b, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF):
+    if verify(b, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE):
         fails.append('good blob refused')
     h, m2, c2 = unpack(b)
     if m2 != mods or c2 != cram:
         fails.append('unpack differs')
-    if pack(m2, c2, h[H_CART_CRC], h[H_CART_WORDS], exec_crc=h[H_EXEC_CRC], grom_crc=h[H_GROM_CRC]) != b:
+    if pack(m2, c2, h[H_CART_CRC], h[H_CART_WORDS], exec_crc=h[H_EXEC_CRC], grom_crc=h[H_GROM_CRC],
+            cfg_crc=h[H_CFG_CRC]) != b:
         fails.append('pack(unpack) differs')
     # each refusal on its own
     cases = []
@@ -404,20 +413,26 @@ def selftest():
         x[off] = 0x80
         cases.append(('reserved byte %d' % off, bytes(x)))
     cases.append(('short', b[:-4]))
+    # an older (version 1) blob of the same machine: refused
+    cases.append(('version 1 blob', pack(mods, cram, 0x12345678, 4096, exec_crc=0xCAFEF00D,
+                                         grom_crc=0x0BADBEEF, version=1)))
     for what, x in cases:
-        if not verify(x, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF):
+        if not verify(x, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE):
             fails.append('not refused: ' + what)
+    if not verify(b, 0x12345678, 4096, cfg_crc=0x5EEDC0DF):
+        fails.append('foreign CFG CRC taken')
     if not verify(b, 0x12345679, 4096):
         fails.append('foreign cart CRC taken')
     if not verify(b, 0x12345678, 4096, exec_crc=0xCAFEF00E) or not verify(b, 0x12345678, 4096, grom_crc=1):
         fails.append('foreign system ROM taken')
-    if verify(b, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF):
+    if verify(b, 0x12345678, 4096, exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE):
         fails.append('own system ROM CRCs refused')
     # the state addresses: every word once, in id order
     addrs = [state_addr(i) for i in range(MOD_WORDS)]
     if len(set(addrs)) != MOD_WORDS or addrs != sorted(addrs):
         fails.append('state addresses')
-    if addrs[0] != 0x0100 or state_addr(1 + 8 + 2 + 67 + 21 + 256 + 256) != 0x0800:
+    if addrs[0] != 0x0100 or state_addr(1 + 8 + 2 + 67 + 21 + 256 + 256) != 0x0800 \
+            or state_addr(1 + 8 + 2 + 67 + 21 + 256 + 352 + 512) != 0x0B00:
         fails.append('state address spot checks')
     for f in fails:
         print('  FAIL ' + f)
@@ -438,6 +453,7 @@ def main():
     v.add_argument('--cart-words', type=int)
     v.add_argument('--exec-crc')
     v.add_argument('--grom-crc')
+    v.add_argument('--cfg-crc')
     sub.add_parser('selftest')
     a = ap.parse_args()
     return {'gen': cmd_gen, 'show': cmd_show, 'verify': cmd_verify,

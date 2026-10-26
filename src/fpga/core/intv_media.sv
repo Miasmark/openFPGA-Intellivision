@@ -10,10 +10,15 @@
 //
 // SRAM map (128K x 16 words):
 //   $00000-$0FFFF  plane 1: the cartridge image at file offsets (64K words)
+//                  (a .rom: its Intellicart space, 64K words at their
+//                  Intellicart addresses; build step 8)
 //   $10000-$12FFF  ECS ROM, 12K words, as ecs.bin holds it (step 9 maps it)
-//   $13000-$17FFF  free (JLP RAM, step 11)
-//   $18000-$1BFFF  cartridge RAM, 16K cells (cleared at load)
-//   $1C000-$1FFFF  free
+//   $13000-$17FFF  the save-state blob's staging area (intv_ss_ctl, step 7)
+//   $18000-$1BFFF  cartridge RAM, 64 blocks of 256 cells (cleared at load;
+//                  in the save state): RAM of any format (step 8)
+//   $1C000-$1DFFF  free (JLP RAM, step 11: 8,000 words)
+//   $1E000-$1FFFF  the loader's pool: 32 blocks of 256 words assembled at
+//                  load from a CFG's partial or shared blocks (step 8)
 //
 // Three SRAM masters, fixed priority: the loader (only while loading, when
 // the machine is held in reset), the cartridge port, and an auxiliary port
@@ -40,6 +45,8 @@ module intv_media #(
     input  wire logic        len_valid,       // clk_74a (apf_datatable)
     input  wire logic [31:0] cart_len,        // held while len_valid is high
     input  wire logic [1:0]  len_chk,         // apf_datatable, held like cart_len
+    input  wire logic [31:0] cfg_len,         // the CFG slot's size, held like cart_len
+    input  wire logic        cfg_inlist,
 
     // CPU bus: cartridge
     input  wire logic        bus_req,
@@ -49,8 +56,10 @@ module intv_media #(
     output logic             bus_ack,
     output logic [15:0]      bus_rdata,
     output logic             bus_hit,
-    output logic [1:0]       bus_kind,
+    output logic [3:0]       bus_attr,        // {B, N, W, R} (intv_cart)
     output logic             bus_paged,
+    input  wire logic [63:0] pg_rst,          // page selects at machine reset (step 9)
+    output logic [63:0]      pg_sel,
 
     // auxiliary SRAM port
     input  wire logic        aux_req,
@@ -74,7 +83,8 @@ module intv_media #(
     // status
     output logic             ready,
     output logic             busy,
-    output logic [4:0]       err,
+    output logic [5:0]       err,
+    output logic [7:0]       fmt_err,
     output logic [1:0]       len_st,          // len_chk of the last load (test pattern)
     output logic [11:0]      slot_st,
     output logic [31:0]      crc,
@@ -82,6 +92,8 @@ module intv_media #(
     output logic [7:0]       layout,
     output logic [7:0]       flags,
     output logic             hit,
+    output logic [31:0]      cfg_crc,
+    output logic             noss,            // no save state for this image
 
     // save state
     input  wire logic [15:0] ss_addr,
@@ -108,7 +120,7 @@ module intv_media #(
     always_ff @(posedge clk) lv_s <= {lv_s[1:0], len_valid};
 
     // -------------------------------------------------------------- loader
-    logic        l_req, l_ack;
+    logic        l_req, l_we, l_ack;
     logic [16:0] l_addr;
     logic [15:0] l_wdata;
     logic [1:0]  l_be;
@@ -116,26 +128,33 @@ module intv_media #(
     logic [1:0]  rom_wsel;
     logic [11:0] rom_waddr;
     logic [9:0]  rom_wdata;
-    logic        pt_we, res_we, res_hit;
-    logic [4:0]  pt_idx;
-    logic [15:0] pt_data;
-    logic [31:0] res_crc;
-    logic [16:0] res_words;
+    logic        tab_we, res_we, res_hit, res_noss;
+    logic [11:0] tab_idx;
+    logic [21:0] tab_d;
+    logic [31:0] res_crc, res_cfg_crc;
+    logic [16:0] res_words, res_limit;
     logic [7:0]  res_layout, res_flags;
+    logic [1:0]  res_fmt;
+    logic [15:0] res_paged;
+    logic [15:0] s_rdata;
 
     intv_loader #(
         .CRC_HEX(CRC_HEX), .LAYOUT_HEX(LAYOUT_HEX),
-        .ECS_BASE(17'h10000), .RAM_BASE(RAM_BASE), .RAM_CELLS(16384)
+        .ECS_BASE(17'h10000), .RAM_BASE(RAM_BASE), .RAM_CELLS(16384), .POOL_BASE(17'h1E000)
     ) loader (
         .clk(clk), .reset(reset),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data),
         .len_valid(lv_s[2]), .cart_len(cart_len), .len_chk(len_chk),
-        .m_req(l_req), .m_addr(l_addr), .m_wdata(l_wdata), .m_be(l_be), .m_ack(l_ack),
+        .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
+        .m_req(l_req), .m_we(l_we), .m_addr(l_addr), .m_wdata(l_wdata), .m_be(l_be), .m_ack(l_ack),
+        .m_rdata(s_rdata),
         .rom_we(rom_we), .rom_wsel(rom_wsel), .rom_waddr(rom_waddr), .rom_wdata(rom_wdata),
-        .pt_we(pt_we), .pt_idx(pt_idx), .pt_data(pt_data),
+        .tab_we(tab_we), .tab_idx(tab_idx), .tab_d(tab_d),
         .res_we(res_we), .res_crc(res_crc), .res_words(res_words),
         .res_layout(res_layout), .res_flags(res_flags), .res_hit(res_hit),
-        .busy(busy), .ready(ready), .err(err), .len_st(len_st), .slot_st(slot_st)
+        .res_cfg_crc(res_cfg_crc), .res_fmt(res_fmt), .res_noss(res_noss), .res_paged(res_paged),
+        .res_limit(res_limit),
+        .busy(busy), .ready(ready), .err(err), .fmt_err(fmt_err), .len_st(len_st), .slot_st(slot_st)
     );
 
     // ---------------------------------------------------------- cartridge
@@ -143,18 +162,25 @@ module intv_media #(
     logic [16:0] c_addr;
     logic [15:0] c_wdata;
     logic [1:0]  c_be;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [1:0]  c_fmt;                       // the save state's word 4 holds it
+    /* verilator lint_on UNUSEDSIGNAL */
 
-    intv_cart #(.SS_ID(SS_ID), .RAM_BASE(RAM_BASE)) cart (
+    intv_cart #(.SS_ID(SS_ID)) cart (
         .clk(clk), .mreset(mreset),
-        .ld_pt_we(pt_we), .ld_pt_idx(pt_idx), .ld_pt_data(pt_data),
+        .ld_tab_we(tab_we), .ld_tab_idx(tab_idx), .ld_tab_d(tab_d),
         .ld_res_we(res_we), .ld_crc(res_crc), .ld_words(res_words),
         .ld_layout(res_layout), .ld_flags(res_flags), .ld_hit(res_hit),
+        .ld_cfg_crc(res_cfg_crc), .ld_fmt(res_fmt), .ld_noss(res_noss), .ld_paged(res_paged),
+        .ld_limit(res_limit),
         .crc(crc), .words(words), .layout(layout), .flags(flags), .hit(hit),
+        .cfg_crc(cfg_crc), .fmt(c_fmt), .noss(noss),
+        .pg_rst(pg_rst), .pg_sel(pg_sel),
         .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
-        .bus_kind(bus_kind), .bus_paged(bus_paged),
+        .bus_attr(bus_attr), .bus_paged(bus_paged),
         .m_req(c_req), .m_we(c_we), .m_addr(c_addr), .m_wdata(c_wdata), .m_be(c_be),
-        .m_ack(c_ack), .m_rdata(aux_rdata),
+        .m_ack(c_ack), .m_rdata(s_rdata),
         .ss_addr(ss_addr), .ss_we(ss_we), .ss_wdata(ss_wdata), .ss_rdata(ss_rdata)
     );
 
@@ -173,14 +199,14 @@ module intv_media #(
     logic [1:0]  pick, gnt = 2'd0;
     logic        s_req, s_we;
     logic [16:0] s_addr;
-    logic [15:0] s_wdata, s_rdata;
+    logic [15:0] s_wdata;
     logic [1:0]  s_be;
 
     always_comb begin
         pick = l_req ? 2'd0 : c_req ? 2'd1 : 2'd2;
         s_req = l_req || c_req || aux_req;
         case (pick)
-            2'd0:    {s_we, s_addr, s_wdata, s_be} = {1'b1, l_addr, l_wdata, l_be};
+            2'd0:    {s_we, s_addr, s_wdata, s_be} = {l_we, l_addr, l_wdata, l_be};
             2'd1:    {s_we, s_addr, s_wdata, s_be} = {c_we, c_addr, c_wdata, c_be};
             default: {s_we, s_addr, s_wdata, s_be} = {aux_we, aux_addr, aux_wdata, aux_be};
         endcase

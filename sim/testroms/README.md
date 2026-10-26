@@ -21,6 +21,21 @@ to `sim/work*` and are not committed.
   synthetic cartridges (`tools/synth_image.py`: a word pattern whose CRC32
   is forced to a table entry, layout 25 with 8-bit RAM at $8800 and layout
   26 with paged ROM at $F000) as "cartram" and "cartpaged".
+- `cart8test.asm`: step 8, a program for the EXEC slot that writes and reads
+  back the Intellicart bank registers ($0040-$005F) and the windows they
+  map (loaded Intellicart memory, RAM, a wrap past $FFFF), 16- and 8-bit
+  cart RAM, a CFG gap, and page selects at $2000, $E000 and $F000, under
+  interrupts that change the bank and the page every frame. `tb_system.py`
+  runs it as "cartbank" (on `step8/rombank.rom`) and "cartcfg" (on
+  `step8/cfgmap.bin` + `.cfg`), with a self-check against the images'
+  words (CART8_SELFCHECK); `tb_savestate.py` saves and loads it.
+- `step8/`: the step-8 cartridge format images (docs/CARTFORMATS.md 7):
+  as1600 sources (`cfgmap.asm` BIN + CFG, `rombank.asm` and `rombankw.asm`
+  Intellicart .rom; assembled with jzIntv's as1600, run as a program), the
+  CFG zoo `cfg/zoo*.cfg` (each with a synthetic image), and
+  `build_images.py`, which builds them and the refusal set (CFGs with one
+  fault each, .rom files with a bad CRC, cut short, and the like) and
+  lists the loader's verdict for each.
 - `sticbus.asm`: step 4, the STIC test for backgrounds and BUSRQ (EXEC
   slot): every card kind, delays and border extension per frame, late
   display enables, a frame without INTAK, missed row fetches and the

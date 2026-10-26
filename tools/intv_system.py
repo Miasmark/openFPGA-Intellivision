@@ -436,6 +436,7 @@ class SystemBus:
                 "psg": list(self.psg), "handshake": int(self.handshake(cycle)),
                 "csmode": self.csmode,
                 "sel": list(self.cart.sel) if self.cart is not None else [0] * 16,
+                "bank": list(getattr(self.cart, "bank", [0] * 32)) if self.cart is not None else [0] * 32,
                 "fifo": list(self.vid.fifo), "counter": self.vid.counter}
 
 
@@ -447,22 +448,24 @@ def bios_paths(bios_dir):
     return os.path.join(d, "exec.bin"), os.path.join(d, "grom.bin")
 
 
-def load_cart(path):
-    """(CartModel, crc, words) as the loader maps the image, or None."""
+def load_cart(path, cfg_path=None):
+    """(cartridge model, crc, layout, flags, hit) as the loader maps the image (and its CFG,
+    build step 8: tools/mapper/cartfmt.py, any format), or None."""
     if not path:
         return None
     import intv_mapper
     import intvcart as m
+    import cartfmt
     data = m.load_image_bytes(path)
-    words = m.bytes_to_words(data)
-    crc = zlib.crc32(data) & 0xFFFFFFFF
-    cart, lid, flags, hit = intv_mapper.Tables().model(words, crc)
-    return cart, crc, lid, flags, hit
+    cfg = open(cfg_path, "rb").read() if cfg_path else None
+    tab = intv_mapper.Tables()
+    ld = cartfmt.load(data, cfg, tab, tab.pages)
+    return cartfmt.MapCart(ld), ld.crc, ld.layout, ld.flags, ld.hit
 
 
-def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none"):
+def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none", cfg_path=None):
     ex, gr = bios_paths(bios_dir)
-    cart = load_cart(cart_path)
+    cart = load_cart(cart_path, cfg_path)
     bus = SystemBus(load_words(ex), open(gr, "rb").read(),
                     cart[0] if cart else None, timing, stic_mode)
     cpu = CP1610(bus=bus, buslog=buslog)

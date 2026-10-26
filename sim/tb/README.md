@@ -6,7 +6,7 @@ to `sim/work*`.
 | Bench | Step | Run |
 |---|---|---|
 | `tb_timing.sv` | 1: timing, video port, timing state port | `sim/tb/run_tb_timing.sh --all` |
-| `tb_loader.sv` | 2: loader, CRC table, page table, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` |
+| `tb_loader.sv` | 2, 8: loader, CRC table, CFG and .rom parsers, map table, page selects, Intellicart bank registers, system ROMs, cart state port | `python3 -I sim/tb/tb_loader.py --all` (step-8 images: sim/testroms/step8; `--no-step8` leaves them out) |
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
 | `tb_system.sv` | 3-6: the machine (CPU, bus fabric, RAMs, STIC, PSG) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-6) `--screens` |
 | `tb_input.sv` | 6: the input module against the input model and MAME's hand-controller tables | `python3 -I sim/tb/tb_input.py --all` |

@@ -1,5 +1,5 @@
-// Step 2 bench (DESIGN.md 9): the loader, the CRC table lookup, the page
-// table and the system ROMs, driven through the APF bridge as core_top sees
+// Steps 2 and 8 bench (DESIGN.md 9): the loader, the CRC table lookup, the
+// CFG and .rom parsers, the map table and the system ROMs, driven through the APF bridge as core_top sees
 // it, against the Python mapper model (tools/intv_mapper.py).
 //
 //   python3 -I sim/tb/tb_loader.py ...   (builds with Verilator, prepares
@@ -17,12 +17,14 @@
 //
 // Then, through the cartridge bus port (as the CPU will reach it), the
 // auxiliary SRAM port, the system ROM read ports and the state port:
-//   status   CRC, words, layout, flags, hit, err, slot status
+//   status   CRC, words, layout, flags, hit, err, slot status; format,
+//            CFG CRC, no-state flag, format error (step 8)
 //   image    CRC of the stored image words; ECS ROM words; EXEC, GROM and
 //            Intellivoice ROMs
-//   ss0      the 21 state words after the load
+//   ss0      the 16 state words after the load
 //   A        machine reset, the 64K space (16 blocks of 4K)
-//   mapped   the mapped-space CRC of tools/mapper/README.md
+//   mapped   the mapped-space CRC of tools/mapper/README.md (each paged range's
+//            pages read to find its last mapped page)
 //   B        each 4K range at pages 1, 2, 3 and 15 ($xA5y to $xFFF)
 //   C        a write to every address (pattern P), then the space
 //   D        page selects (r + 5) & 15, machine reset: state words ssd, the
@@ -31,8 +33,10 @@
 //   Z        all state words written 0: state words ssz (all 0), the space
 //            (nothing may answer)
 //   F        ss1 written back: state words ss2 and the space (= E)
-// Each block is printed as a CRC32 over 3 bytes per word: {hit | kind << 1
-// | paged << 3}, data high, data low (data $FFFF when not answered). The
+// Each block is printed as a CRC32 over 3 bytes per word: {hit | attr << 1
+// | paged << 5} (attr = the window's {B, N, W, R}), data high, data low
+// (data $FFFF when not answered). The C phase's writes reach the page
+// selects and the Intellicart bank registers ($0040-$005F) too. The
 // Python side computes every line from the model and compares.
 //
 //   hazard   after all that, the host reads a slot (0x0080) and sends "all
@@ -53,7 +57,9 @@
 // used, err[4] set), +notable=1 leaves the cartridge out of the data table
 // (the 0x0082 size is used), +out= (result file), +gap=N (bridge clocks
 // between writes, default 75, +jitter=N adds 0..N-1), +pad=HH (pad byte),
-// +dtfirst=0/1, +seed=N, +cart2= and +notable2=1 (reload).
+// +dtfirst=0/1, +seed=N, +cart2= and +notable2=1 (reload); +cfg= (the CFG
+// slot), +cfglenadj=N (added to the CFG's size in the data table),
+// +cfgnotable=1 (no CFG entry in the table).
 //
 // SPDX-License-Identifier: MIT
 
@@ -135,15 +141,16 @@ module tb_loader;
         .write_en(ioctl_wr), .write_addr(ioctl_addr), .write_data(ioctl_dout)
     );
 
-    wire logic [31:0] cart_len;
+    wire logic [31:0] cart_len, cfg_len;
     wire logic [1:0]  len_chk;
-    wire logic        len_valid;
+    wire logic        len_valid, cfg_inlist;
     apf_datatable dtab (
         .clk(clk_74a), .allcomplete(dataslot_allcomplete),
         .wr_req(dataslot_requestwrite), .wr_id(dataslot_requestwrite_id),
         .wr_size(dataslot_requestwrite_size),
         .dt_addr(datatable_addr), .dt_wren(datatable_wren), .dt_data(datatable_data),
-        .dt_q(datatable_q), .cart_len(cart_len), .len_chk(len_chk), .len_valid(len_valid)
+        .dt_q(datatable_q), .cart_len(cart_len), .len_chk(len_chk), .cfg_len(cfg_len),
+        .cfg_inlist(cfg_inlist), .len_valid(len_valid)
     );
 
     // ---------------------------------------------------------------- DUT
@@ -152,7 +159,8 @@ module tb_loader;
     logic [15:0] bus_addr = 16'd0, bus_wdata = 16'd0;
     wire  logic  bus_ack, bus_hit, bus_paged;
     wire  logic [15:0] bus_rdata;
-    wire  logic [1:0]  bus_kind;
+    wire  logic [3:0]  bus_attr;
+    wire  logic [63:0] pg_sel;
     logic        aux_req = 1'b0;
     logic [16:0] aux_addr = 17'd0;
     wire  logic  aux_ack;
@@ -161,8 +169,10 @@ module tb_loader;
     logic [10:0] grom_addr = 11'd0, ivoice_addr = 11'd0;
     wire  logic [9:0]  exec_q;
     wire  logic [7:0]  grom_q, vgrom_q, ivoice_q;
-    wire  logic        ready, busy, hit;
-    wire  logic [4:0]  err;
+    wire  logic        ready, busy, hit, noss;
+    wire  logic [5:0]  err;
+    wire  logic [7:0]  fmt_err;
+    wire  logic [31:0] cfg_crc;
     wire  logic [1:0]  len_st;
     wire  logic [11:0] slot_st;
     wire  logic [31:0] crc;
@@ -182,16 +192,18 @@ module tb_loader;
         .clk(clk_sys), .reset(reset), .mreset(mreset),
         .ld_wr(ioctl_wr), .ld_addr(ioctl_addr), .ld_data(ioctl_dout),
         .len_valid(len_valid), .cart_len(cart_len), .len_chk(len_chk),
+        .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
         .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
-        .bus_kind(bus_kind), .bus_paged(bus_paged),
+        .bus_attr(bus_attr), .bus_paged(bus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
         .aux_req(aux_req), .aux_we(1'b0), .aux_addr(aux_addr), .aux_wdata(16'd0), .aux_be(2'b11),
         .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
         .vgrom_addr(grom_addr), .vgrom_q(vgrom_q),
         .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
-        .ready(ready), .busy(busy), .err(err), .len_st(len_st), .slot_st(slot_st),
+        .ready(ready), .busy(busy), .err(err), .fmt_err(fmt_err), .len_st(len_st), .slot_st(slot_st),
         .crc(crc), .words(words), .layout(layout), .flags(flags), .hit(hit),
+        .cfg_crc(cfg_crc), .noss(noss),
         .ss_addr(ss_addr), .ss_we(ss_we), .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),
         .sram_a(sram_a), .sram_dq_out(sram_dq_out), .sram_dq_oe(sram_dq_oe),
         .sram_dq_in(sram_dq_in), .sram_oe_n(sram_oe_n), .sram_we_n(sram_we_n),
@@ -217,6 +229,7 @@ module tb_loader;
 
     // --------------------------------------------------------- host side
     int gap = 75, jitter = 0, seed = 1, dtfirst = 0, lenadj = 0, reqadj = 0, notable = 0;
+    int cfglenadj = 0, cfgnotable = 0;
     logic [7:0] pad = 8'hA5;
 
     task automatic bwrite(input logic [31:0] a, input logic [31:0] d);
@@ -286,8 +299,10 @@ module tb_loader;
     task automatic send_table();
         // data.json order: 0x100 .. 0x106; size 0 for a slot not loaded
         for (int s = 0; s < 7; s++) begin
-            bwrite(32'hF800_2000 + 8 * s, (s == 0 && notable != 0) ? 32'h1FF : 32'h100 + s);
-            bwrite(32'hF800_2004 + 8 * s, (s < 6 && floaded[s]) ? fsize[s] + (s == 0 ? lenadj : 0) : 0);
+            bwrite(32'hF800_2000 + 8 * s, ((s == 0 && notable != 0) || (s == 1 && cfgnotable != 0)) ? 32'h1FF
+                                                                                               : 32'h100 + s);
+            bwrite(32'hF800_2004 + 8 * s, (s < 6 && floaded[s]) ? fsize[s] + (s == 0 ? lenadj : 0)
+                                                                + (s == 1 ? cfglenadj : 0) : 0);
         end
     endtask
 
@@ -302,7 +317,7 @@ module tb_loader;
         n = 0;
         while (!bus_ack && n < 100) begin @(negedge clk_sys); n++; end
         if (n >= 100) begin check(0, $sformatf("cart port answers at %04X", a)); r = 24'd0; return; end
-        r = {4'd0, bus_paged, bus_kind, bus_hit, bus_rdata};
+        r = {2'd0, bus_paged, bus_attr, bus_hit, bus_rdata};
     endtask
     task automatic cart_wr(input logic [15:0] a, input logic [15:0] d);
         logic [23:0] r;
@@ -344,7 +359,7 @@ module tb_loader;
         c = 32'hFFFFFFFF;
         for (int i = 0; i < 4096; i++) begin
             cart_op(1'b0, 16'(r * 4096 + i), 16'd0, q);
-            c = crc_byte(c, {4'd0, q[19:16]});
+            c = crc_byte(c, {2'd0, q[21:16]});
             c = crc_word(c, q[15:0]);
             if (mapped_rom_only) begin
                 v = (q[16] && q[18:17] == 2'd1) ? q[15:0] : 16'hFFFF;
@@ -383,7 +398,10 @@ module tb_loader;
     always @(negedge clk_sys) if (hz_mon && busy) busy_seen = 1'b1;
 
     // ------------------------------------------------------------ the run
-    logic [31:0] ss1 [21], ssq;
+    localparam int NSS = 16;
+    logic [31:0] ss1 [NSS], ssq;
+    logic [15:0] pgw [16][4096];
+    bit          pgany [16];
     localparam int YS [4] = '{1, 2, 3, 15};
     initial begin : run
         string outn;
@@ -399,14 +417,16 @@ module tb_loader;
         void'($value$plusargs("lenadj=%d", lenadj));
         void'($value$plusargs("reqadj=%d", reqadj));
         void'($value$plusargs("notable=%d", notable));
+        void'($value$plusargs("cfglenadj=%d", cfglenadj));
+        void'($value$plusargs("cfgnotable=%d", cfgnotable));
         if ($value$plusargs("seed=%d", seed)) void'($urandom(seed));
         outf = $fopen(outn, "w");
         read_file(0, "cart");
+        read_file(1, "cfg");
         read_file(2, "exec");
         read_file(3, "grom");
         read_file(4, "ecs");
         read_file(5, "ivoice");
-        floaded[1] = 1'b0;
         if ($test$plusargs("debug"))
             for (int s = 0; s < 6; s++)
                 $display("slot %0d loaded %0d size %0d first %02X", s, floaded[s], fsize[s],
@@ -431,6 +451,7 @@ module tb_loader;
         $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                   crc, words, layout, flags, hit, err, len_st);
         $fdisplay(outf, "slots %03X", slot_st);
+        $fdisplay(outf, "format cfgcrc %08X noss %0d ferr %02X", cfg_crc, noss, fmt_err);
         image_crc("image");
         if (floaded[4]) begin
             c = 32'hFFFFFFFF;
@@ -457,7 +478,7 @@ module tb_loader;
             c = crc_byte(c, ivoice_q);
         end
         $fdisplay(outf, "ivoice %08X", ~c);
-        for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ss0 %0d %08X", i, ssq); end
+        for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ss0 %0d %08X", i, ssq); end
 
         // ---- A: the space at reset paging, and the mapped-space CRC
         machine_reset();
@@ -466,15 +487,24 @@ module tb_loader;
             block(r, c, 1'b1, 1'b0);
             $fdisplay(outf, "A %0d %08X", r, c);
         end
+        ss_rd(4, ssq);                             // [15:0]: the paged ranges
         for (int r = 0; r < 16; r++) begin
-            logic [15:0] e;
-            ss_rd(3 + r, ssq);
-            e = ssq[15:0];                         // entry 2r: the page at r x $1000
-            if (e[15:14] == 2'd1 && e[13]) begin
-                for (int y = 1; y <= int'(e[12:9]); y++) begin
+            if (ssq[r]) begin
+                int n;
+                logic [23:0] q;
+                n = 1;
+                for (int y = 1; y < 16; y++) begin
                     cart_wr(16'(r * 4096 + 4095), 16'(r * 4096 + 32'hA50 + y));
-                    block(r, c, 1'b0, 1'b1);
+                    pgany[y] = 1'b0;
+                    for (int i = 0; i < 4096; i++) begin
+                        cart_op(1'b0, 16'(r * 4096 + i), 16'd0, q);
+                        pgw[y][i] = q[16] ? q[15:0] : 16'hFFFF;
+                        if (q[18:17] != 2'd0) pgany[y] = 1'b1;
+                    end
+                    if (pgany[y]) n = y + 1;
                 end
+                for (int y = 1; y < n; y++)
+                    for (int i = 0; i < 4096; i++) mcrc = crc_word(mcrc, pgw[y][i]);
                 cart_wr(16'(r * 4096 + 4095), 16'(r * 4096 + 32'hA50));
             end
         end
@@ -497,19 +527,19 @@ module tb_loader;
         for (int r = 0; r < 16; r++)
             cart_wr(16'(r * 4096 + 4095), 16'(r * 4096 + 32'hA50 + ((r + 5) & 15)));
         machine_reset();
-        for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssd %0d %08X", i, ssq); end
+        for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssd %0d %08X", i, ssq); end
         space("D");
 
         // ---- E, Z, F: the state round trip
         for (int r = 0; r < 16; r++)
             cart_wr(16'(r * 4096 + 4095), 16'(r * 4096 + 32'hA50 + (r & 3)));
-        for (int i = 0; i < 21; i++) begin ss_rd(i, ss1[i]); $fdisplay(outf, "ss1 %0d %08X", i, ss1[i]); end
+        for (int i = 0; i < NSS; i++) begin ss_rd(i, ss1[i]); $fdisplay(outf, "ss1 %0d %08X", i, ss1[i]); end
         space("E");
-        for (int i = 0; i < 21; i++) ss_wr(i, 32'd0);
-        for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssz %0d %08X", i, ssq); end
+        for (int i = 0; i < NSS; i++) ss_wr(i, 32'd0);
+        for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssz %0d %08X", i, ssq); end
         space("Z");
-        for (int i = 0; i < 21; i++) ss_wr(i, ss1[i]);
-        for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ss2 %0d %08X", i, ssq); end
+        for (int i = 0; i < NSS; i++) ss_wr(i, ss1[i]);
+        for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ss2 %0d %08X", i, ssq); end
         space("F");
 
         // ---- hazard: a slot read and "all complete" again, no cartridge
@@ -522,7 +552,7 @@ module tb_loader;
             hz_mon = 1'b0;
             check(len_valid, "len_valid again after the second all complete");
             $fdisplay(outf, "hazard busy %0d ready %0d", busy_seen, ready);
-            for (int i = 19; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssh %0d %08X", i, ssq); end
+            for (int i = 5; i < 15; i++) begin ss_rd(i, ssq); $fdisplay(outf, "ssh %0d %08X", i, ssq); end
         end
 
         // ---- reload: another cartridge, same session
@@ -543,7 +573,7 @@ module tb_loader;
                       crc, words, layout, flags, hit, err, len_st);
             $fdisplay(outf, "reload slots %03X", slot_st);
             image_crc("reload image");
-            for (int i = 0; i < 21; i++) begin ss_rd(i, ssq); $fdisplay(outf, "rss %0d %08X", i, ssq); end
+            for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "rss %0d %08X", i, ssq); end
             machine_reset();
             space("R");
         end

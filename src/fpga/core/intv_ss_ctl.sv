@@ -48,13 +48,19 @@
 //          into the blob with the payload CRC, then the header; ok; resume
 //          (unless the menu holds the freeze). About 5 ms.
 //   load   freeze; check the header (magic, version, size, length, the
-//          cartridge's CRC and length, the EXEC's and GROM's CRCs, flags,
+//          cartridge's CRC and length, the CFG's CRC (version 2, step 8),
+//          the EXEC's and GROM's CRCs, flags,
 //          word counts, reserved words 0) and the payload (CRC32, the
 //          unused module area 0, nothing written beyond the live part): a
 //          foreign or corrupt blob ends with err and the machine resumes
 //          untouched. Else every module
 //          word and the cart RAM are written (the timing word's mpos: the
 //          machine resumes at the saved position), then ok.
+//
+// (build step 8) An image whose writable storage the blob cannot hold
+// (cart_noss: an Intellicart bank window that writes, or more cart RAM than
+// the 16K cells; docs/CARTFORMATS.md 5) refuses saves and loads with err,
+// the machine untouched.
 //
 // Wake (sleep_supported): the order of the Pocket's 0x00A4 and its reset
 // exit on wake is not documented. A load asked for while the machine is
@@ -115,6 +121,8 @@ module intv_ss_ctl #(
     input  wire logic        cpu_hold,
     input  wire logic [31:0] cart_crc,
     input  wire logic [16:0] cart_words,
+    input  wire logic [31:0] cfg_crc,            // the CFG's CRC32, 0: none (step 8)
+    input  wire logic        cart_noss,          // the image's state cannot be saved (step 8)
     input  wire logic [31:0] exec_crc,           // the system ROM slots' CRC32s (intv_core)
     input  wire logic [31:0] grom_crc,
 
@@ -379,6 +387,7 @@ module intv_ss_ctl #(
             4'(SS_H_CRAM_CELLS): hdr_exp = 32'(SS_CRAM_CELLS);
             4'(SS_H_EXEC_CRC):   hdr_exp = ecrc;
             4'(SS_H_GROM_CRC):   hdr_exp = gcrc;
+            4'(SS_H_CFG_CRC):    hdr_exp = cfg_crc;
             default:             hdr_exp = 32'd0;
         endcase
     endfunction
@@ -472,7 +481,9 @@ module intv_ss_ctl #(
                     if (!mreset) tmo <= tmo + 3'd1;
                     tmo_all <= tmo_all + 8'd1;
                 end
-                if (frozen && !(is_load && mreset)) begin
+                if (cart_noss && cart_ready)
+                    ost <= O_FIN_ERR;                     // docs/CARTFORMATS.md 5: no state
+                else if (frozen && !(is_load && mreset)) begin
                     ss_en <= 1'b1;
                     w <= is_load ? 14'd0 : 14'(W_MOD0);
                     ph <= 2'd0;

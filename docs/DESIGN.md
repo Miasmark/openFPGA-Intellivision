@@ -251,7 +251,7 @@ Because the freeze always lands in the same frame phase, the STIC row buffer and
 | Cart RAM window (all 64K words of the cart plane, RAM pages only written back) | 131,072 | L-PSS |
 | **Total, padded** | **153,600 (0x25800, 150 KiB)** | L-PSS |
 
-The header holds the cart CRC32. A load with the wrong cartridge is refused with code 3. **(build step 7)** Version 1 of the blob keeps the fixed 153,600 bytes but uses only what the core has so far: a 64-byte header (with the payload CRC32 and the EXEC's and GROM's CRC32s too, so that a state made with other system ROMs is refused), the 1,324 module words, and the 16K cells of the SRAM's cart RAM area; the rest is zero and reserved for the ECS, the Intellivoice and JLP (docs/SAVESTATE.md 3). The input module, audio filters and all ROMs are not saved. Inputs are re-sampled after a restore [from L-PSS].
+The header holds the cart CRC32. A load with the wrong cartridge is refused with code 3. **(build step 8)** Version 2: the header also holds the CFG's CRC32; the cartridge module holds the page selects and the Intellicart bank registers, not the map table (docs/SAVESTATE.md 3, CARTFORMATS.md 5). **(build step 7)** Version 1 of the blob keeps the fixed 153,600 bytes but uses only what the core has so far: a 64-byte header (with the payload CRC32 and the EXEC's and GROM's CRC32s too, so that a state made with other system ROMs is refused), the 1,324 module words, and the 16K cells of the SRAM's cart RAM area; the rest is zero and reserved for the ECS, the Intellivoice and JLP (docs/SAVESTATE.md 3). The input module, audio filters and all ROMs are not saved. Inputs are re-sampled after a restore [from L-PSS].
 
 ### 4.5 Expected cost
 
@@ -333,6 +333,7 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 - **(review)** A `.bin` may be up to 1 MiB (`BC_MAXBIN`) [from S9 bincfg.h:34-38]; anything over the 128K-word SRAM needs the PSRAM path (section 5.1).
 - Unknown sections are skipped.
 - A CFG wins over the CRC table.
+- **(build step 8)** As built (`intv_cfgparse.sv`, `intv_loader.sv`; model `tools/mapper/cartfmt.py`; docs/CARTFORMATS.md 2): `[mapping]`, `[preload]`, `[memattr]` (RAM/WOM/ROM, 8/16), `[bankswitch]` and `[vars]` (`ecs`, `ecs_compat`, `voice`, `voice_compat`, `jlp`, `jlp_accel`; `lto_mapper` refused), word exact through a 4,096-entry map table of 256-word blocks (whole blocks point into the file, partial or shared ones are assembled at load into a pool, RAM gets the cart RAM area); `[macro]` has no specification in the jzIntv documents and is skipped. A CFG with no map lines adds its flags to the CRC table's map. Malformed CFGs are refused with a code (CARTFORMATS 2.3). The 1 MiB `.bin` is not supported: the image is at most 64K words (SRAM plane 1), as in step 2.
 
 ### 5.4 Intellicart `.rom`
 
@@ -340,13 +341,14 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 - The parser writes each segment to plane 1 at its address while it streams.
 - The tables fill the page table's readable/writable bits.
 - Intellicart bank registers are write-only at $0040-$005F; `addr = (a & $7FF) + (v << 8)` [from L-WIKI]. They are saved.
+- **(build step 8)** As built (`intv_romparse.sv`; docs/CARTFORMATS.md 3): segments to plane 1 at their Intellicart addresses (unwritten blocks cleared), CRC-16s checked (poly $1021, init $FFFF, from the Intellicart manual), the access nibbles (R, W, B and jzIntv's N) trimmed by the fine table, the tags walked for the compat tag $06 (ECS / Intellivoice / JLP flags; LTO refused). The bank registers add (intellicart.txt and the Intellicart manual; `doc/historic/intellicart/banksw.txt` says XOR, superseded), are 0 after a load and keep their values over a machine reset (the Intellicart does not see it). RAM windows move to the cart RAM area so the save state holds them; a bank window that writes, or more than 64 blocks of RAM windows, means no save states for that image.
 
 ### 5.5 Expansions
 
 | Expansion | Enable | Notes | Source |
 |---|---|---|---|
 | ECS | menu Auto / On / Off; Auto uses the table flag | keep off for titles with ROM at $7000 or $E000 (Centipede, Dig Dug, IMI and MTE201 test carts, and others) | L-TA; wiki Memory_Map |
-| ECS paging | write $xA5y to $xFFF selects page y of the 4K block at $x000 | build the general 16 x 16 case; MAME has only pages 0-1 (its own TODO) | wiki; MAME ecs.cpp:8-14, 200-245 |
+| ECS paging | write $xA5y to $xFFF selects page y of the 4K block at $x000 | build the general 16 x 16 case; MAME has only pages 0-1 (its own TODO). **(build step 8)** `intv_pagesel.sv`: all 16 ranges, 16 pages each, for the cartridge's map table (any format) and, from step 9, the ECS's ROMs (`pg_sel`, `pg_rst`; docs/CARTFORMATS.md 4.1) | wiki; MAME ecs.cpp:8-14, 200-245 |
 | Intellivoice | menu Auto / On / Off | six titles use it in the owner's library | L-TA |
 | Cart RAM | from table or CFG | 8-bit cells in some carts (USCF Chess, Triple Challenge, Land Battle, Game Factory) | MAME slot.cpp:331-340, rom.h:52-53; L-TA |
 | JLP | from CFG `[vars]` or table | RAM, accelerators, flash on its own nonvolatile slot. **(review)** `jlp_accel` 0-3: 1 = accelerators on at reset, no flash; 2 = accelerators *off* at reset with flash; 3 = on with flash. The accelerator on/off state is run-time state and goes in the save state. Flash size is per game, `jlp_flash` x 1.5 KiB sectors (default 4 when flash is enabled), so the flash slot size is not fixed | L-DSL; L-PSS; S9 as1600.txt:1124-1133; id_tag.txt:638-670 |
@@ -357,7 +359,7 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 | id | Name | Files | Notes |
 |---|---|---|---|
 | 0x100 | Cartridge | .int .bin .rom .itv | required |
-| 0x101 | Cartridge config | .cfg | optional |
+| 0x101 | Cartridge config | .cfg | optional; **(build step 8)** used with a raw image (ignored with a .rom), its length from the data table (docs/CARTFORMATS.md 1) |
 | 0x102 | EXEC | exec.bin (8,192 bytes) | required |
 | 0x103 | GROM | grom.bin (2,048 bytes) | required |
 | 0x104 | ECS ROM | ecs.bin (24,576 bytes) | optional |
@@ -525,7 +527,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | 5 | MOBs and collisions | 10 more games match; STIC test ROM passes |
 | 6 | PSG #1 and input module | register logs match MAME; games playable on the Pocket |
 | 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set **(build step 7: in simulation, `sim/tb/tb_savestate.py`; on the Pocket, the owner's test sheet)** |
-| 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) |
+| 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) **(build step 8: tb_loader over the step-2 set and the step-8 images built from our sources, tb_system `cartbank`/`cartcfg` with `sim/testroms/cart8test.asm`, tb_savestate `cartbank`/`cartcfg`/`cartnoss`, MAME as the .rom reference; docs/CARTFORMATS.md 7)** |
 | 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test |
 | 10 | Intellivoice | resident phrases and B-17 speech sound right; per-opcode tests pass |
 | 11 | JLP and flash slot | a JLP homebrew runs and keeps its flash |

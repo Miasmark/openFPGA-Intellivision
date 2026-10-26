@@ -39,6 +39,8 @@ module intv_core #(
     input  wire logic        len_valid,
     input  wire logic [31:0] cart_len,
     input  wire logic [1:0]  len_chk,
+    input  wire logic [31:0] cfg_len,
+    input  wire logic        cfg_inlist,
     output logic [11:0]      slot_st,
     output logic [1:0]       len_st,
     output logic             machine_reset,
@@ -94,13 +96,16 @@ module intv_core #(
     wire  logic [31:0] ss_rdata = ssr_media | ssr_timing | ssr_machine;
 
     logic        cart_ready, cart_busy, cart_hit;
-    logic [4:0]  cart_err;
-    logic [31:0] cart_crc;
+    logic [5:0]  cart_err;
+    logic [7:0]  cart_fmt_err;
+    logic [31:0] cart_crc, cart_cfg_crc;
+    logic        cart_noss;
+    logic [63:0] pg_sel;
     logic [16:0] cart_words;
     logic [7:0]  cart_layout, cart_flags;
     logic        cbus_ack, cbus_hit, cbus_paged, cbus_req, cbus_we;
     logic [15:0] cbus_addr, cbus_wdata, cbus_rdata;
-    logic [1:0]  cbus_kind;
+    logic [3:0]  cbus_attr;
     logic        aux_req, aux_we, aux_ack;
     logic [16:0] aux_addr;
     logic [15:0] aux_wdata, aux_rdata;
@@ -142,15 +147,18 @@ module intv_core #(
         .clk(clk), .reset(timing_reset), .mreset(machine_reset),
         .ld_wr(ld_wr), .ld_addr(ld_addr), .ld_data(ld_data),
         .len_valid(len_valid), .cart_len(cart_len), .len_chk(len_chk),
+        .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
         .bus_req(cbus_req), .bus_we(cbus_we), .bus_addr(cbus_addr), .bus_wdata(cbus_wdata),
-        .bus_ack(cbus_ack), .bus_rdata(cbus_rdata), .bus_hit(cbus_hit), .bus_kind(cbus_kind),
-        .bus_paged(cbus_paged),
+        .bus_ack(cbus_ack), .bus_rdata(cbus_rdata), .bus_hit(cbus_hit), .bus_attr(cbus_attr),
+        .bus_paged(cbus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
         .aux_be(2'b11), .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
         .vgrom_addr(vgrom_addr), .vgrom_q(vgrom_q), .ivoice_addr(11'd0), .ivoice_q(ivoice_q),
-        .ready(cart_ready), .busy(cart_busy), .err(cart_err), .len_st(len_st), .slot_st(slot_st),
+        .ready(cart_ready), .busy(cart_busy), .err(cart_err), .fmt_err(cart_fmt_err), .len_st(len_st),
+        .slot_st(slot_st),
         .crc(cart_crc), .words(cart_words), .layout(cart_layout), .flags(cart_flags), .hit(cart_hit),
+        .cfg_crc(cart_cfg_crc), .noss(cart_noss),
         .ss_addr(ss_addr), .ss_we(ss_we), .ss_wdata(ss_wdata), .ss_rdata(ssr_media),
         .sram_a(sram_a), .sram_dq_out(sram_dq_out), .sram_dq_oe(sram_dq_oe),
         .sram_dq_in(sram_dq_in), .sram_oe_n(sram_oe_n), .sram_we_n(sram_we_n),
@@ -204,7 +212,8 @@ module intv_core #(
         .clk(clk), .mreset(machine_reset), .cart_ready(cart_ready), .live(live), .vcnt(vcnt),
         .ce_cpu(ce_cpu),
         .cpu_fetch(m_fetch), .cpu_halted(m_halted), .cpu_hold(m_hold),
-        .cart_crc(cart_crc), .cart_words(cart_words), .exec_crc(~ex_c), .grom_crc(~gr_c),
+        .cart_crc(cart_crc), .cart_words(cart_words), .cfg_crc(cart_cfg_crc), .cart_noss(cart_noss),
+        .exec_crc(~ex_c), .grom_crc(~gr_c),
         .run(run), .frozen(frozen), .ss_en(ss_en), .ss_addr(ss_addr), .ss_we(ss_we),
         .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
@@ -223,8 +232,8 @@ module intv_core #(
     end
 
     /* verilator lint_off UNUSEDSIGNAL */
-    wire unused = cart_busy | cart_hit | (|cart_err) | (|cart_layout) | (|cart_flags)
-                | (|cbus_kind) | cbus_paged | frozen;
+    wire unused = cart_busy | cart_hit | (|cart_err) | (|cart_fmt_err) | (|cart_layout) | (|cart_flags)
+                | (|cbus_attr) | cbus_paged | (|pg_sel) | frozen;
     /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule

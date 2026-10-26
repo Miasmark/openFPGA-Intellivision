@@ -46,9 +46,10 @@ import as1610             # noqa: E402
 import synth_image        # noqa: E402
 import intv_mapper        # noqa: E402
 import intvcart as m      # noqa: E402
+import cartfmt as cf      # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
-RTL = ['intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_media.sv',
+RTL = ['intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
        'apf_datatable.sv']
 OTHER = [os.path.join(CORE, 'core_bridge_cmd.v'),
          os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
@@ -62,7 +63,7 @@ LIBCSV = os.path.join(ROOT, 'sim', 'regress', 'mapper_library.csv')
 SYNTH_SRC = os.path.join(ROOT, 'sim', 'testroms', 'loader_odd.asm')
 
 YS = (1, 2, 3, 15)
-NSS = 21
+NSS = cf.SS_WORDS
 
 
 def crc32(b, c=0):
@@ -115,75 +116,41 @@ def load_set(lib):
 
 # ------------------------------------------------------------------- expectations
 
-class Mirror:
-    """The cartridge port as the bench drives it: CartModel plus the state words."""
+def bench_sram(ld):
+    """The bench's SRAM model starts with $DEAD ^ address in every word (sram_as6c2016.sv)."""
+    sram = {a: 0xDEAD ^ (a & 0xFFFF) for a in range(cf.SRAM_WORDS)}
+    sram.update(ld.sram)
+    return sram
 
-    def __init__(self, words, pt, crc, lid, flags, hit):
-        self.cart = m.CartModel(words, pt)
-        self.words = words
-        self.nwords = len(words)
-        self.crc, self.lid, self.flags, self.hit = crc, lid, flags, hit
 
-    def read(self, a):
-        e = self.cart.pt[a >> 11]
-        kind, paged = (e >> 14) & 3, (e >> 13) & 1
-        v = None
-        if kind == m.KIND_ROM:
-            # CartModel reads the image list; a restored or cleared length cuts it
-            d = m.decode_page_entry(e)
-            unit = d['offset']
-            ok = True
-            if d['paged']:
-                y = self.cart.sel[a >> 12]
-                ok = y < d['npages']
-                unit += 2 * y
-            i = unit * m.PAGE_WORDS + (a % m.PAGE_WORDS)
-            if ok and i < self.nwords:
-                v = self.words[i]
-        elif kind != m.KIND_NONE:
-            v = self.cart.read(a)
-        return (v is not None), kind, paged, (0xFFFF if v is None else v)
+def blockcrc(cart, r):
+    buf = bytearray()
+    for a in range(r << 12, (r + 1) << 12):
+        hit, attr, paged = cart.attr(a)
+        v = cart.read(a)
+        v = 0xFFFF if v is None else v
+        buf += bytes((int(hit) | attr << 1 | paged << 5, v >> 8, v & 0xFF))
+    return crc32(bytes(buf))
 
-    def write(self, a, v):
-        self.cart.write(a, v)
 
-    def block(self, r):
-        c = 0
-        buf = bytearray()
-        for a in range(r << 12, (r + 1) << 12):
-            h, k, p, v = self.read(a)
-            buf += bytes((h | k << 1 | p << 3, v >> 8, v & 0xFF))
-        return crc32(bytes(buf), c)
-
-    def ss(self):
-        pt = self.cart.pt
-        w = [int(self.crc, 16), (int(self.hit) << 16) | (self.flags << 8) | self.lid, self.nwords]
-        w += [(pt[2 * k + 1] << 16) | pt[2 * k] for k in range(16)]
-        sel = self.cart.sel
-        w += [sum(sel[i] << (4 * i) for i in range(8)), sum(sel[8 + i] << (4 * i) for i in range(8))]
-        return w
-
-    def load_ss(self, w):
-        self.crc = '%08X' % w[0]
-        self.lid, self.flags, self.hit = w[1] & 0xFF, (w[1] >> 8) & 0xFF, bool(w[1] >> 16 & 1)
-        self.nwords = w[2]
-        for k in range(16):
-            self.cart.pt[2 * k] = w[3 + k] & 0xFFFF
-            self.cart.pt[2 * k + 1] = w[3 + k] >> 16
-        for i in range(8):
-            self.cart.sel[i] = (w[19] >> (4 * i)) & 15
-            self.cart.sel[8 + i] = (w[20] >> (4 * i)) & 15
+def load_model(img, tab):
+    """cartfmt.Loaded for a bench image (its CFG's data table length too)."""
+    cfg = img.get('cfg')
+    cfg_len = None
+    if cfg is not None and not img.get('cfgnotable'):
+        cfg_len = len(cfg) + img.get('cfglenadj', 0)
+    return cf.load(img['data'], cfg, tab, tab.pages, cfg_len=cfg_len)
 
 
 def expect(img, tab, bios):
     """Every line the bench prints for this image, and the model's summary.
 
     A refused load (img['neg']: no cartridge, or a data table length the
-    strobes do not cover) maps nothing: layout 0, no words, CRC 0, err 1.
-    The length check (apf_datatable len_chk, err[4]): the host's 0x0082 size
-    is the file's size plus img['reqadj']; the data table's is plus
-    img['lenadj'], or missing with img['notable'] (then the 0x0082 size is
-    used); no cartridge sends no 0x0082 and a table size of 0.
+    strobes do not cover; or a format the loader refuses) maps nothing:
+    layout 0. The length check (apf_datatable len_chk, err[4]): the host's
+    0x0082 size is the file's size plus img['reqadj']; the data table's is
+    plus img['lenadj'], or missing with img['notable'] (then the 0x0082 size
+    is used); no cartridge sends no 0x0082 and a table size of 0.
     """
     data = img['data']
     if img.get('neg') == 'nocart':
@@ -194,23 +161,31 @@ def expect(img, tab, bios):
         lenst = 1 if img.get('lenadj', 0) == img.get('reqadj', 0) else 2
     e4 = 16 if lenst == 2 else 0
     if img.get('neg'):
-        words, crc_v = [], 0
-        cart, lid, flags, hit = m.CartModel([], [0] * m.NPAGES), 0, 0, False
-        err, cslot = 1 | e4, (0 if img['neg'] == 'nocart' else 1)
+        ld = cf.Loaded()
+        for i in range(cf.RAM_BLOCKS * 256):
+            ld.sram[cf.RAM_BASE + i] = 0
+        err = 1 | e4
+        cslot = 0 if img['neg'] == 'nocart' else 1
     else:
-        crc_v, words = m.load_through_loader(data)
-        assert crc_v == crc32(data) and words == m.bytes_to_words(data)
-        for meth in ('linear', 'binary'):
-            assert tab.lookup(crc_v, len(words), meth) == tab.lookup(crc_v, len(words), 'linear')
-        cart, lid, flags, hit = tab.model(words, crc_v)
-        err = e4
-        cslot = 1 if err & 15 else 2      # err[4] alone: still ok (the second card shows it)
-    crc = '%08X' % crc_v
+        ld = load_model(img, tab)
+        if ld.err == -1:
+            err = 4 | e4                        # over 64K words: err[2]
+        else:
+            err = e4 | (32 if ld.err else 0)
+        cslot = 1 if err & 0x2F else 2          # err[4] alone: still ok (the second card shows it)
+    words = list(struct.unpack('>%dH' % ld.words, (data + b'\0')[:2 * ld.words])) if ld.words else []
+    crc = '%08X' % ld.crc
     L = []
     L.append('status crc %s words %d layout %d flags %02X hit %d err %d lenst %d' % (
-        crc, len(words), lid, flags, int(hit), err, lenst))
-    L.append('slots %03X' % (cslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
-    L.append('image %08X' % crc32(struct.pack('>%dH' % len(words), *words)))
+        crc, ld.words, ld.layout, ld.flags, int(ld.hit), err, lenst))
+    cfgslot = (2 << 2) if img.get('cfg') is not None else 0
+    L.append('slots %03X' % (cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+    L.append('format cfgcrc %08X noss %d ferr %02X' % (ld.cfg_crc, int(ld.noss), max(ld.err, 0)))
+    sram = bench_sram(ld)
+    if cf.is_rom(data) and ld.err:
+        L.append('image *')                     # a refused .rom: pad bytes may reach plane 1
+    else:
+        L.append('image %08X' % crc32(struct.pack('>%dH' % ld.words, *[sram[i] for i in range(ld.words)])))
     if bios.get('ecs'):
         L.append('ecs %08X' % crc32(bios['ecs']))
     ex = bios['exec']
@@ -218,88 +193,106 @@ def expect(img, tab, bios):
                                           for i in range(0, 8192, 2))))
     L.append('grom %08X' % crc32(bios['grom']))
     L.append('ivoice %08X' % crc32(bios['ivoice']))
-    mi = Mirror(words, cart.pt, crc, lid, flags, hit)
-    for i, w in enumerate(mi.ss()):
+    mi = cf.MapCart(ld)
+    mi.sram = sram
+    for i, w in enumerate(mi.ss_words()):
         L.append('ss0 %d %08X' % (i, w))
-    # A and the mapped-space CRC
-    mi.cart.reset()
+    # A and the mapped-space CRC (the bench reads every page of a paged range)
+    mi.reset()
     for r in range(16):
-        L.append('A %d %08X' % (r, mi.block(r)))
+        L.append('A %d %08X' % (r, blockcrc(mi, r)))
     mc = 0
     for a in range(0x10000):
-        h, k, p, v = mi.read(a)
-        mc = crc32(struct.pack('>H', v if (h and k == m.KIND_ROM) else 0xFFFF), mc)
+        hit, attr, paged = mi.attr(a)
+        v = mi.read(a)
+        mc = crc32(struct.pack('>H', v if (hit and attr & 3 == 1) else 0xFFFF), mc)
     for r in range(16):
-        d = m.decode_page_entry(mi.cart.pt[2 * r])
-        if d['kind'] == m.KIND_ROM and d['paged']:
-            for y in range(1, d['npages']):
+        if ld.paged >> r & 1:
+            pages, n = {}, 1
+            for y in range(1, 16):
                 mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50 + y)
-                mc = crc32(b''.join(struct.pack('>H', mi.read(a)[3])
-                                    for a in range(r << 12, (r + 1) << 12)), mc)
+                blk, anyw = [], False
+                for a in range(r << 12, (r + 1) << 12):
+                    hit, attr, paged = mi.attr(a)
+                    v = mi.read(a)
+                    blk.append(v if v is not None else 0xFFFF)
+                    anyw |= bool(attr & 3)
+                pages[y] = blk
+                if anyw:
+                    n = y + 1
+            for y in range(1, n):
+                mc = crc32(struct.pack('>4096H', *pages[y]), mc)
             mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50)
     L.append('mapped %08X' % mc)
-    model_mapped = cart.mapped_space_crc()
+    model_mapped = cf.MapCart(ld).mapped_space_crc() if not ld.err else mc
     # B
     for r in range(16):
         for y in YS:
             mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50 + y)
-            L.append('B %d %d %08X' % (r, y, mi.block(r)))
+            L.append('B %d %d %08X' % (r, y, blockcrc(mi, r)))
         mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50)
     # C, D
     for a in range(0x10000):
         mi.write(a, (a * 0x9E37 + 0x1234) & 0xFFFF)
     for r in range(16):
-        L.append('C %d %08X' % (r, mi.block(r)))
+        L.append('C %d %08X' % (r, blockcrc(mi, r)))
     for r in range(16):
         mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50 + ((r + 5) & 15))
-    mi.cart.reset()
-    for i, w in enumerate(mi.ss()):
+    mi.reset()
+    for i, w in enumerate(mi.ss_words()):
         L.append('ssd %d %08X' % (i, w))
     for r in range(16):
-        L.append('D %d %08X' % (r, mi.block(r)))
+        L.append('D %d %08X' % (r, blockcrc(mi, r)))
     # E, Z, F
     for r in range(16):
         mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50 + (r & 3))
-    ss1 = mi.ss()
+    ss1 = mi.ss_words()
     for i, w in enumerate(ss1):
         L.append('ss1 %d %08X' % (i, w))
-    eb = [mi.block(r) for r in range(16)]
     for r in range(16):
-        L.append('E %d %08X' % (r, eb[r]))
-    mi.load_ss([0] * NSS)
-    for i, w in enumerate(mi.ss()):
+        L.append('E %d %08X' % (r, blockcrc(mi, r)))
+    mi.ss_load([0] * NSS)
+    for i, w in enumerate(mi.ss_words()):
         L.append('ssz %d %08X' % (i, w))
     for r in range(16):
-        L.append('Z %d %08X' % (r, mi.block(r)))
-    mi.load_ss(ss1)
-    for i, w in enumerate(mi.ss()):
+        L.append('Z %d %08X' % (r, blockcrc(mi, r)))
+    mi.ss_load(ss1)
+    for i, w in enumerate(mi.ss_words()):
         L.append('ss2 %d %08X' % (i, w))
     for r in range(16):
-        L.append('F %d %08X' % (r, mi.block(r)))
-    # the hazard: no finish runs again, the selects stay
+        L.append('F %d %08X' % (r, blockcrc(mi, r)))
+    # the hazard: no finish runs again, the selects and bank registers stay
     L.append('hazard busy 0 ready 1')
-    ssf = mi.ss()
-    for i in (19, 20):
+    ssf = mi.ss_words()
+    for i in range(5, 15):
         L.append('ssh %d %08X' % (i, ssf[i]))
     # the reload: another cartridge (img['reload']) in the same session,
     # its own 0x0082 size, in the table or not (img['notable2'])
     if img.get('reload'):
-        rdata = img['reload']['data']
-        rcrc, rwords = m.load_through_loader(rdata)
-        rcart, rlid, rflags, rhit = tab.model(rwords, rcrc)
+        rimg = dict(img['reload'])
+        rimg.pop('cfg', None)
+        rl = cf.load(rimg['data'], None, tab, tab.pages)
+        rsram = dict(sram)
+        # the session's SRAM: the first image's words stay where the second does not write
+        for a, v in mi.sram.items():
+            rsram[a] = v
+        for a, v in rl.sram.items():
+            rsram[a] = v
         L.append('reload status crc %08X words %d layout %d flags %02X hit %d err 0 lenst %d' % (
-            rcrc, len(rwords), rlid, rflags, int(rhit), 3 if img.get('notable2') else 1))
-        L.append('reload slots %03X' % (2 | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
-        L.append('reload image %08X' % crc32(struct.pack('>%dH' % len(rwords), *rwords)))
-        rm = Mirror(rwords, rcart.pt, '%08X' % rcrc, rlid, rflags, rhit)
-        for i, w in enumerate(rm.ss()):
+            rl.crc, rl.words, rl.layout, rl.flags, int(rl.hit), 3 if img.get('notable2') else 1))
+        L.append('reload slots %03X' % (2 | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+        L.append('reload image %08X' % crc32(struct.pack('>%dH' % rl.words, *[rsram[i] for i in range(rl.words)])))
+        rm = cf.MapCart(rl)
+        rm.sram = rsram
+        rm.sel = list(mi.sel)
+        rm.reset()
+        for i, w in enumerate(rm.ss_words()):
             L.append('rss %d %08X' % (i, w))
-        rm.cart.reset()
         for r in range(16):
-            L.append('R %d %08X' % (r, rm.block(r)))
+            L.append('R %d %08X' % (r, blockcrc(rm, r)))
     L.append('end')
-    return L, dict(crc=crc, layout=lid, flags=flags, hit=hit, mapped='%08X' % mc,
-                   model_mapped='%08X' % model_mapped)
+    return L, dict(crc=crc, layout=ld.layout, flags=ld.flags, hit=ld.hit, mapped='%08X' % mc,
+                   model_mapped='%08X' % model_mapped, err=ld.err)
 
 
 # ---------------------------------------------------------------------- the bench
@@ -329,9 +322,15 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_loader')
 
 
-def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None):
+def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cpath=None):
     out = os.path.join(work, 'out_%s.txt' % img['crc'])
     args = [binary, '+out=' + out, '+seed=%d' % (k + 1)]
+    if cpath:
+        args.append('+cfg=' + cpath)
+    if img.get('cfglenadj'):
+        args.append('+cfglenadj=%d' % img['cfglenadj'])
+    if img.get('cfgnotable'):
+        args.append('+cfgnotable=1')
     if path2:
         args.append('+cart2=' + path2)
     if img.get('notable2'):
@@ -363,7 +362,7 @@ def compare(got, want):
     for i in range(max(len(got), len(want))):
         g = got[i] if i < len(got) else '<missing>'
         w = want[i] if i < len(want) else '<missing>'
-        if g != w:
+        if g != w and not (w.endswith(' *') and g.split(' ')[0] == w.split(' ')[0]):
             bad.append('line %d: got "%s", want "%s"' % (i + 1, g, w))
     return bad
 
@@ -375,17 +374,22 @@ def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
         path = os.path.join(tmp, '%s.bin' % img['crc'])
         with open(path, 'wb') as f:
             f.write(img['data'])
-        path2 = None
+        path2 = cpath = None
+        if img.get('cfg') is not None:
+            cpath = os.path.join(tmp, '%s.cfg' % img['crc'])
+            with open(cpath, 'wb') as f:
+                f.write(img['cfg'])
         if img.get('reload'):
             path2 = os.path.join(tmp, '%s_2.bin' % img['crc'])
             with open(path2, 'wb') as f:
                 f.write(img['reload']['data'])
         try:
-            so, got, dt = run_one(binary, img, path, bios_paths, work, k, path2=path2)
+            so, got, dt = run_one(binary, img, path, bios_paths, work, k, path2=path2, cpath=cpath)
         finally:
             os.remove(path)
-            if path2:
-                os.remove(path2)
+            for q in (path2, cpath):
+                if q:
+                    os.remove(q)
         bad = compare([g.upper() for g in got], [w.upper() for w in exp[img['crc']][0]])
         okrun = 'TB_LOADER run ok' in so
         if not okrun:
@@ -406,21 +410,22 @@ def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
 PLANTS = [
     ('crc_padded', 'intv_loader.sv', "crc_fin <= ~crc_at[len[1:0] - 2'd1];", "crc_fin <= ~crc;",
      'CRC over the padded (strobe) length'),
-    ('byte_order', 'intv_loader.sv', "s_d = {2'b11, off[17:1], hb, ld_data};",
+    ('byte_order', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "s_d = {2'b11, off[17:1], hb, ld_data};",
      "s_d = {2'b11, off[17:1], ld_data, hb};", 'little-endian words'),
-    ('pt_off_by_one', 'intv_loader.sv', "assign lay_ra = {lid[4:0], p[4:0]};",
-     "assign lay_ra = {lid[4:0], p[4:0] + 5'd1};", 'page table read one entry off'),
-    ('odd_low_byte', 'intv_loader.sv', "if (st == F_FIX && len[0] &&", "if (st == F_FIX && 1'b0 &&",
-     'odd length: pad byte left in the last word'),
-    ('default_uncut', 'intv_loader.sv', "else if (lid == 8'd1 && lay_q[15:14] == 2'd1",
-     "else if (1'b0 && lay_q[15:14] == 2'd1", 'default map not cut at the image length'),
+    ('pt_off_by_one', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "assign lay_ra = {lid[4:0], r, b[3]};",
+     "assign lay_ra = {lid[4:0], r, b[3]} + 10'd1;", 'layout entry read one entry off'),
+    ('odd_low_byte', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "F_FIX: if (len[0] && {1'b0, len[31:1]} < 32'h10000 && !rom_mode) begin",
+     "F_FIX: if (1'b0) begin", 'odd length: pad byte left in the last word'),
+    ('default_uncut', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv',
+     "if (lay_q[15:14] == 2'd1 && !(lid == 8'd1 && {1'b0, lay_q[8:0]} >= {4'd0, units})) begin",
+     "if (lay_q[15:14] == 2'd1) begin", 'default map not cut at the image length'),
     ('sram_early', 'intv_media.sv', "intv_sram #(.RD_CYC(3)", "intv_sram #(.RD_CYC(2)",
      'SRAM sampled one clock early'),
-    ('sel_no_reset', 'intv_cart.sv', "if (mreset || ld_res_we)", "if (ld_res_we)",
+    ('sel_no_reset', 'intv_cart.sv', ".rst(mreset || ld_res_we)", ".rst(ld_res_we)",
      'machine reset keeps the page selects'),
-    ('ss_no_sel', 'intv_cart.sv', "8'd19: for (int i = 0; i < 8; i++) sel[i] <= ss_wdata[4*i +: 4];",
-     "8'd19: ;", 'state restore drops the selects of ranges 0-7'),
-    ('no_size_check', 'intv_loader.sv',
+    ('ss_no_sel', 'intv_cart.sv', ".ss_we0(ss_hit && ss_addr[7:0] == 8'd5)", ".ss_we0(1'b0)",
+     'state restore drops the selects of ranges 0-7'),
+    ('no_size_check', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv',
      "&& (crc_q[15:0] == 16'd0 || {1'b0, crc_q[15:0]} == size256)) begin", ") begin",
      'a table hit whatever the image size'),
     ('len_xcheck_off', 'apf_datatable.sv',
@@ -430,15 +435,43 @@ PLANTS = [
      'no cartridge entry in the table: the 0x0082 size not used'),
     ('req_any_slot', 'apf_datatable.sv', "if (wr_req && wr_id == SLOT_ID[15:0]) begin",
      "if (wr_req) begin", 'the 0x0082 size of any slot taken'),
-    ('rerun', 'intv_loader.sv', "F_IDLE: if (len_valid && !len_d && pending) begin",
+    ('rerun', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "F_IDLE: if (len_valid && !len_d && pending) begin",
      "F_IDLE: if (len_valid && !len_d) begin", 'the finish runs again on every all complete'),
-    ('pending_byte0', 'intv_loader.sv', "                        pending <= 1'b1;\n                        seq_err <= 1'b0;",
-     "                        seq_err <= 1'b0;", 'a reload\'s byte 0 does not arm the finish'),
+    ('pending_byte0', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "                        pending  <= 1'b1;\n                        seq_err  <= 1'b0;",
+     "                        seq_err  <= 1'b0;", 'a reload\'s byte 0 does not arm the finish'),
     ('req_len_first', 'apf_datatable.sv', "            req_len  <= wr_size;",
      "            if (!req_seen) req_len <= wr_size;", 'only the first 0x0082 size kept'),
+    # build step 8
+    ('page_off_by_one', 'intv_cart.sv', "wire logic [3:0]  y_bus = paged[r_bus] ? pg_sel[4*r_bus +: 4] : 4'd0;",
+     "wire logic [3:0]  y_bus = paged[r_bus] ? pg_sel[4*r_bus +: 4] + 4'd1 : 4'd0;", 'page off by one'),
+    ('ram_width_read', 'intv_cart.sv', "bus_rdata <= qe[18] ? {8'h00, m_rdata[7:0]} : m_rdata;",
+     "bus_rdata <= m_rdata;", '8-bit RAM read as 16 bits'),
+    ('cfg_ram8_as16', 'intv_cfgparse.sv', "if (c == 8'h38) begin attr <= attr | 3'd4; st <= P_END; end",
+     "if (c == 8'h38) begin st <= P_END; end", 'CFG RAM 8 taken as 16-bit'),
+    ('cfg_memattr_ignored', 'intv_cfgparse.sv', "is_name(name, nlen, N_MEMATTR, 4'd7) ? S_MEM :",
+     "1'b0 ? S_MEM :", 'the CFG section [memattr] ignored'),
+    ('cfg_preload_ignored', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv',
+     "(q_kind == 3'd1 && rq[54:51] == ey) || (q_kind == 3'd2 && ey == 4'd0);",
+     "(q_kind == 3'd1 && rq[54:51] == ey);", 'the CFG section [preload] ignored'),
+    ('bank_decode', 'intv_cart.sv', "if (fx_we && qa[15:5] == 11'd2)", "if (fx_we && qa[15:4] == 12'd4)",
+     'bank registers $0050-$005F not decoded'),
+    ('bank_index', 'intv_cart.sv', "wire logic [7:0]  bk    = bank[{qa[11], qa[15:12]}];",
+     "wire logic [7:0]  bk    = bank[{1'b0, qa[15:12]}];", 'a bank window uses the lower 2K\'s register'),
+    ('bank_ss', 'intv_cart.sv', "bank[{ss_addr[2:0] - 3'd7, 2'(i)}] <= ss_wdata[8*i +: 8];",
+     "bank[{ss_addr[2:0] - 3'd6, 2'(i)}] <= ss_wdata[8*i +: 8];", 'bank registers restored one word off'),
+    ('pool_no_fill', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "st <= asm_q[30:29] == A_POOL ? F_FILL :",
+     "st <= asm_q[30:29] == A_POOL ? F_SCAN :", 'pool blocks not filled ($FFFF gaps)'),
+    ('rom_tabcrc_off', 'intv_romparse.sv', "                    if ({got, in_c} != crc) begin\n                        err <= 8'h23;",
+     "                    if (1'b0) begin\n                        err <= 8'h23;", '.rom table CRC not checked'),
+    ('rom_no_clear', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "st <= (src == 2'd3 && !cov_q) ? F_COV_Z : F_COV_N;",
+     "st <= F_COV_N;", '.rom: blocks no segment wrote not cleared'),
+    ('rom_fine_off', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "if (!(rp_tq[6:4] <= b[2:0] && b[2:0] <= rp_tq[2:0]))",
+     "if (!(rp_tq[6:4] <= b[2:0] && b[2:0] < rp_tq[2:0]))", '.rom fine range one block short'),
+    ('cfg_lag', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', "o = st == F_CF0 ? cfg_n - 25'd3 : st == F_CF1 ? cfg_n - 25'd2 : cfg_n - 25'd1;",
+     "o = st == F_CF0 ? cfg_n - 25'd3 : st == F_CF1 ? cfg_n - 25'd2 : cfg_n;", 'the CFG\'s last byte dropped'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
-                'RELOAD0', 'RELOAD1')
+                'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc')
 
 
 def main():
@@ -447,6 +480,7 @@ def main():
     ap.add_argument('--only', help='comma-separated CRCs or synthetic names')
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--plants-only', action='store_true')
+    ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_loader'))
@@ -489,6 +523,11 @@ def main():
     if syn and cpg:
         imgs.append(dict(syn[0], name='reload:synthetic:a then C2063C08, no table entry', crc='RELOAD1',
                          reload=cpg[0], notable2=True, dtfirst=1))
+    if not a.no_step8:
+        sys.path.insert(0, os.path.join(ROOT, 'sim', 'testroms', 'step8'))
+        import build_images
+        for im in build_images.images():
+            imgs.append(dict(im, crc=im['name'], image=im['name'], step8=True))
     if a.only:
         keep = set(a.only.split(','))
         imgs = [i for i in imgs if i['crc'] in keep or i['name'] in keep]
@@ -502,16 +541,20 @@ def main():
         lines, s = expect(img, tab, bios)
         exp[img['crc']] = (lines, s)
         # forced: images share a CRC with a library image, not its content
-        want = None if img.get('neg') or img['name'].startswith('forced:') else libcsv.get(img['crc'])
+        want = None if img.get('neg') or img['name'].startswith('forced:') or img.get('step8') \
+            else libcsv.get(img['crc'])
         notes = []
-        if s['mapped'] != s['model_mapped'] and not img.get('neg'):
+        if s['mapped'] != s['model_mapped'] and not img.get('neg') and not s['err']:
             notes.append('mapped %s != model %s' % (s['mapped'], s['model_mapped']))
         if want:
             if (int(want['layout']), want['flags'], want['mapped_crc']) != (s['layout'], '%02X' % s['flags'],
                                                                            s['mapped']):
                 notes.append('mapper_library.csv: layout %s flags %s mapped %s' %
                              (want['layout'], want['flags'], want['mapped_crc']))
-        if (int(img['layout']), img['flags']) != (s['layout'], '%02X' % s['flags']):
+        if img.get('step8'):
+            if s['err'] != img['want_err'] and not img.get('cfglenadj'):
+                notes.append('model err %s, the image wants %s' % (s['err'], img['want_err']))
+        elif (int(img['layout']), img['flags']) != (s['layout'], '%02X' % s['flags']):
             notes.append('set file: layout %s flags %s' % (img['layout'], img['flags']))
         if notes:
             rc_fail.append('expect ' + img['crc'])

@@ -94,7 +94,7 @@ with three pad values and checks that a strobe-count CRC would miss.
 | 0x02 | VOICE | usage says Intellivoice, or `name_list.c` says Voice |
 | 0x04 | RAM | the layout has cartridge RAM |
 | 0x08 | PAGED | the layout has ECS-style pages |
-| 0x10 | JLP | reserved: no table source marks JLP (CFG only, step 8/11) |
+| 0x10 | JLP | no table source marks JLP; a CFG's `jlp`/`jlp_accel` or a .rom's compat tag sets it (step 8; used at step 11) |
 | 0x20 | ECS_OFF | hard conflict: not an ECS title, and cartridge ROM or RAM overlaps $7000-$7FFF (ECS ROM page 0, there at reset) or the ECS RAM $4000-$47FF |
 | 0x40 | ESTIMATED | the layout is ours (`cart_extra.csv`), or only `name_list.c` knows the CRC |
 | 0x80 | ECS_RISK | paged conflict: not an ECS title, and cartridge ROM or RAM overlaps $2000-$2FFF or $E000-$EFFF, where the ECS ROM is page 1: absent at reset, there once the ECS selects page 1 |
@@ -159,8 +159,12 @@ by binary search (they must agree), and answers reads through the page table.
   $E000 (build step 9). This model is the cartridge alone.
 - 8-bit cart RAM returns the low byte with the upper byte 0 (MAME `rom.h:52-53`;
   ECS RAM per `ecs.html`).
-- Not yet: the CFG parser, the Intellicart `.rom` parser and its bank
-  registers at $0040-$005F (build step 8), JLP (step 11).
+- Build step 8: the CFG parser, the Intellicart `.rom` parser and its bank
+  registers at $0040-$005F are in `cartfmt.py` (docs/CARTFORMATS.md), with
+  the loader's 4,096-entry map table that any format becomes; `CartModel`
+  here stays the step-0 model of the CRC table's layouts, and the library
+  check (`check`) uses it. `cartfmt.MapCart` reproduces its mapped-space CRC
+  for all 188 library images. JLP: step 11.
 
 **Mapped-space CRC.** CRC32 over the 65,536-word space at reset paging,
 big-endian, ROM words as read and $FFFF for RAM and unmapped addresses; then,

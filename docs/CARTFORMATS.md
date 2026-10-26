@@ -205,6 +205,11 @@ writes again; `pg_rst` gives the reset pages (DESIGN 20: the ROMs paged out
 from reset for games that do not need the ECS). Step 9 must also decide who
 answers when the cartridge and an ECS ROM both map the same page (WSMLB maps
 $E000 itself and hands it over with $EA50), and add the ECS's state.
+WSMLB in step 8 (no ECS): its two $F000 pages map as the CRC table says
+(tb_loader: every word at pages 0 and 1, mapped-space CRC 44A70D1A as
+`sim/regress/mapper_library.csv`); booted with the real EXEC in the model
+for 300 frames it writes $EA50 to $EFFF once and selects no $F000 page (it
+waits for the ECS), so its $FA50/$FA51 flips are step 9's to see.
 
 ## 5 Save states (blob version 2)
 

@@ -10,13 +10,16 @@
 //   them;
 // - keypad mode 0 Layer: D-pad = disc, A/B/X = side actions lower right /
 //   lower left / top; R: D-pad = ring keys by position, A/B/X/Y =
-//   1/2/3/Enter; L (R not held): A/B/X = 5/Clear/0;
+//   1/2/3/Enter; L (R not held): A/B/X = 5/Clear/0 and the D-pad turned
+//   one notch (22.5 deg) clockwise, the 8 in-between disc directions
+//   (NNE, ENE, ... NNW), so the D-pad reaches all 16;
 // - mode 1 Face-button ring: D-pad = disc, X/B/Y/A = ring 2/8/4/6 (pairs
-//   for 1/3/7/9), L = top side action, R = 5;
+//   for 1/3/7/9), L = top side action (no turn: L is a button there),
+//   R = 5;
 // - mode 2 Right stick: Layer, plus the right stick = ring key (8 sectors),
 //   R3 = 5; mode 3 works as Layer;
-// - analog left stick: the disc in 16 directions; opposite directions
-//   cancel;
+// - analog left stick: the disc in 16 directions, never turned by L;
+//   opposite directions cancel;
 // - USB keyboard (cont3 type 4): player 1's keypad (1-9, 0 on the number
 //   row and the numpad, Backspace = Clear, Enter / numpad Enter = Enter).
 // Every input pulls its lines low and the lines are wired-OR'd, as on the
@@ -112,21 +115,27 @@ module intv_input (
         endcase
     endfunction
 
-    // The disc from a D-pad: 8 directions (opposites cancel)
-    function automatic logic [7:0] dpad_code(input logic u, input logic d, input logic l, input logic r);
-        logic uu, dd, ll, rr;
+    // The disc from a D-pad: 8 directions (opposites cancel); turn = 1 turns
+    // each one notch (22.5 deg) clockwise, to the 8 in-between directions
+    // (L in Layer mode: N -> NNE, E -> ESE, S -> SSW, W -> WNW)
+    function automatic logic [7:0] dpad_code(input logic u, input logic d, input logic l, input logic r,
+                                             input logic turn);
+        logic uu, dd, ll, rr, on;
+        logic [3:0] k;
         uu = u & ~d;  dd = d & ~u;  ll = l & ~r;  rr = r & ~l;
+        on = 1'b1;
         unique case ({uu, dd, ll, rr})
-            4'b1000: dpad_code = disc_code(4'd0);
-            4'b1001: dpad_code = disc_code(4'd2);
-            4'b0001: dpad_code = disc_code(4'd4);
-            4'b0101: dpad_code = disc_code(4'd6);
-            4'b0100: dpad_code = disc_code(4'd8);
-            4'b0110: dpad_code = disc_code(4'd10);
-            4'b0010: dpad_code = disc_code(4'd12);
-            4'b1010: dpad_code = disc_code(4'd14);
-            default: dpad_code = 8'h00;
+            4'b1000: k = 4'd0;
+            4'b1001: k = 4'd2;
+            4'b0001: k = 4'd4;
+            4'b0101: k = 4'd6;
+            4'b0100: k = 4'd8;
+            4'b0110: k = 4'd10;
+            4'b0010: k = 4'd12;
+            4'b1010: k = 4'd14;
+            default: begin k = 4'd0; on = 1'b0; end
         endcase
+        dpad_code = on ? disc_code(k + {3'b000, turn}) : 8'h00;
     endfunction
 
     // -------------------------------------------------------------------
@@ -200,7 +209,7 @@ module intv_input (
         an = t == 4'd3;
         p = 8'h00;
         if (mode == 2'd1) begin                                 // Face-button ring
-            p = dpad_code(up, dn, lt, rt) | ring_code(bx, bb, by, ba)
+            p = dpad_code(up, dn, lt, rt, 1'b0) | ring_code(bx, bb, by, ba)
               | (l1 ? S_TOP : 8'h00) | (r1 ? key_code(4'd5) : 8'h00);
         end else begin                                          // Layer, Right stick
             if (r1)
@@ -208,11 +217,11 @@ module intv_input (
                   | (ba ? key_code(4'd1) : 8'h00) | (bb ? key_code(4'd2) : 8'h00)
                   | (bx ? key_code(4'd3) : 8'h00) | (by ? K_ENTER : 8'h00);
             else if (l1)
-                p = dpad_code(up, dn, lt, rt)
+                p = dpad_code(up, dn, lt, rt, 1'b1)
                   | (ba ? key_code(4'd5) : 8'h00) | (bb ? K_CLEAR : 8'h00)
                   | (bx ? key_code(4'd0) : 8'h00);
             else
-                p = dpad_code(up, dn, lt, rt)
+                p = dpad_code(up, dn, lt, rt, 1'b0)
                   | (ba ? S_LR : 8'h00) | (bb ? S_LL : 8'h00) | (bx ? S_TOP : 8'h00);
             if (mode == 2'd2 && an)
                 p = p | stick8_code(joy[23:16], joy[31:24]) | (r3 ? key_code(4'd5) : 8'h00);

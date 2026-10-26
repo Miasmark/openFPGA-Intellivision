@@ -86,6 +86,7 @@ from cp1610 import CP1610  # noqa: E402
 
 import stic as sticm  # noqa: E402
 import psg as psgm  # noqa: E402
+import intv_input as inm  # noqa: E402
 from stic import FRAME, VBLANK, STIC_DEF, STIC_REGS, STIC_DER, STIC_GMR  # noqa: E402,F401
 
 VEC_RESET, VEC_INTR = 0x1000, 0x1004
@@ -124,27 +125,60 @@ for _i, _n in enumerate(DISC_NAMES):
     KEYCODE[_n] = ~_MAME_DISC_TABLE[15 - _i] & 0xFF
 
 
+# Pocket buttons for "pocket:" presses (tools/intv_input.py's bit numbers)
+POCKET_BTN = {"up": inm.UP, "down": inm.DOWN, "left": inm.LEFT, "right": inm.RIGHT, "A": inm.A, "B": inm.B,
+              "X": inm.X, "Y": inm.Y, "L": inm.L1, "R": inm.R1}
+
+
 def parse_presses(text):
     """"F1-F2:KEY,..." (KEY held from MAME's frame notifier F1 until F2)
-    -> [(F1, F2, lines pulled low)]."""
+    -> [(F1, F2, lines pulled low)]. KEY is a hand-controller input (KEYCODE)
+    or "pocket:B1+B2..." (Pocket buttons, POCKET_BTN), which gives
+    (F1, F2, ("pocket", button bits)): press_pads combines the Pocket buttons
+    held in a frame and maps them through the input model (tools/intv_input.py,
+    Layer mode, player 1 on the Pocket), as intv_input.sv does on the core."""
     out = []
     for p in filter(None, (text or "").split(",")):
         fr, key = p.split(":", 1)
         f1, f2 = (int(x) for x in fr.split("-"))
+        if key.startswith("pocket:"):
+            bits = 0
+            for b in key[7:].split("+"):
+                if b not in POCKET_BTN:
+                    raise SystemExit("unknown Pocket button %r" % b)
+                bits |= 1 << POCKET_BTN[b]
+            out.append((f1, f2, ("pocket", bits)))
+            continue
         if key not in KEYCODE:
             raise SystemExit("unknown key %r" % key)
         out.append((f1, f2, KEYCODE[key]))
     return out
 
 
+def pocket_lines(bits):
+    """The lines the Pocket's buttons `bits` pull low on player 1's hand
+    controller (the input model, Layer mode, slot type 1)."""
+    v = dict(key1=(1 << 28) | bits, joy1=0x80808080, key2=0, joy2=0x80808080, key3=0, joy3=0, trig3=0,
+             mode=inm.LAYER, swap=0)
+    return ~inm.ports(v)[1] & 0xFF
+
+
 def press_pads(presses, k):
     """Both hand controllers' byte after frame notifier k: MAME's notifier
     k runs before the CPU sees frame k + 1, so frame k + 1 (timing.frame,
-    the picture numbering) reads press_pads(presses, k)."""
+    the picture numbering) reads press_pads(presses, k). Pocket presses
+    held at k are combined as buttons first (L + right is one turned
+    direction, not two discs)."""
     v = 0xFF
+    pocket = 0
     for f1, f2, code in presses:
         if f1 <= k < f2:
-            v &= ~code & 0xFF
+            if isinstance(code, tuple):
+                pocket |= code[1]
+            else:
+                v &= ~code & 0xFF
+    if pocket:
+        v &= ~pocket_lines(pocket) & 0xFF
     return v
 
 

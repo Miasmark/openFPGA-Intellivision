@@ -29,7 +29,16 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
   7  random: everything random, both Swap settings;
   8  MAME's analog disc: the 24 off-centre cells of handctrl.cpp:137-144's
      5 x 5 grid, at each cell's centre, in every mode and on both ports;
-     the expected byte is that table's entry.
+     the expected byte is that table's entry;
+  9  L + D-pad (the owner's Precision controls, 2026-10-26: in the Layer
+     modes L turns the D-pad one notch, 22.5 degrees, clockwise; in
+     Face-button ring L stays the top side action, no turn; the stick is
+     never turned): every D-pad state (none, the 8, up+down, up+down+left)
+     with every set of A/B/X/Y, with and without L and R, every mode, slot
+     types 1-3 (type 3 with the left stick centred and, on every 4th, in
+     each of its 16 directions), either player, both Swap settings; the
+     expected bytes are MAME's read_ctrl() of the inputs l_oracle() writes
+     out from the mapping, not the model's, and the model must agree.
 For classes 1-7 the expected bytes are the model's, and the model with
 this core's code table must equal MAME's read_ctrl() for every vector.
 
@@ -135,7 +144,8 @@ def spec_rows():
         for i, d in enumerate(DPAD8):
             r(f'{L}: D-pad {"+".join(d)} = disc {DIRS[2 * i]}', mode, keys(*d), [DIRS[2 * i]])
             r(f'{L}: R + D-pad {"+".join(d)} = key {ring_pos[d]}', mode, keys('R', *d), [ring_pos[d]])
-            r(f'{L}: L + D-pad {"+".join(d)} = disc {DIRS[2 * i]}', mode, keys('L', *d), [DIRS[2 * i]])
+            r(f'{L}: L + D-pad {"+".join(d)} = disc {DIRS[2 * i + 1]} (one notch clockwise)', mode,
+              keys('L', *d), [DIRS[2 * i + 1]])
         r(f'{L}: up+down = nothing', mode, keys('up', 'down'), [])
         r(f'{L}: left+right = nothing', mode, keys('left', 'right'), [])
         r(f'{L}: up+down+left = disc Left', mode, keys('up', 'down', 'left'), ['Left'])
@@ -157,6 +167,22 @@ def spec_rows():
         r(f'{L}: L+R+A = 1 (R beats L)', mode, keys('L', 'R', 'A'), ['1'])
         r(f'{L}: R+up+A = keys 2 and 1 together', mode, keys('R', 'up', 'A'), ['2', '1'])
         r(f'{L}: up+A = disc Up and Lower-Right together', mode, keys('up', 'A'), ['Up', 'Lower-Right'])
+        # L + D-pad (the owner's Precision controls, 2026-10-26): the chords and the turned disc together
+        r(f'{L}: L+up+A = disc Up-Up-Right and 5', mode, keys('L', 'up', 'A'), ['Up-Up-Right', '5'])
+        r(f'{L}: L+right+B = disc Right-Down-Right and Clear', mode, keys('L', 'right', 'B'),
+          ['Right-Down-Right', 'Clear'])
+        r(f'{L}: L+down+X = disc Down-Down-Left and 0', mode, keys('L', 'down', 'X'), ['Down-Down-Left', '0'])
+        r(f'{L}: L+left+Y = disc Left-Up-Left (Y nothing)', mode, keys('L', 'left', 'Y'), ['Left-Up-Left'])
+        r(f'{L}: L+up+left+A+B+X = disc Up-Up-Left, 5, Clear, 0', mode, keys('L', 'up', 'left', 'A', 'B', 'X'),
+          ['Up-Up-Left', '5', 'Clear', '0'])
+        r(f'{L}: L+down+right+A = disc Down-Down-Right and 5', mode, keys('L', 'down', 'right', 'A'),
+          ['Down-Down-Right', '5'])
+        r(f'{L}: L+up+down = nothing', mode, keys('L', 'up', 'down'), [])
+        r(f'{L}: L+up+down+left = disc Left-Up-Left', mode, keys('L', 'up', 'down', 'left'), ['Left-Up-Left'])
+        r(f'{L}: L+left+right+X = 0 only', mode, keys('L', 'left', 'right', 'X'), ['0'])
+        r(f'{L}: L+R+up = key 2 (R beats L, no turn)', mode, keys('L', 'R', 'up'), ['2'])
+        r(f'{L}: L+R+up+right+B = keys 3 and 2', mode, keys('L', 'R', 'up', 'right', 'B'), ['3', '2'])
+        r(f'{L}: L+Start+up = disc Up-Up-Right', mode, keys('L', 'Start', 'up'), ['Up-Up-Right'])
         r(f'{L}: Start, Select, L2, R2, L3, R3 = nothing', mode, keys('Start', 'Select', 'L2', 'R2', 'L3', 'R3'), [])
     L = 'Face-button ring'
     for desc, ks, want in [('X = 2', ('X',), ['2']), ('B = 8', ('B',), ['8']), ('Y = 4', ('Y',), ['4']),
@@ -165,6 +191,10 @@ def spec_rows():
                            ('X+B = nothing', ('X', 'B'), []), ('Y+A = nothing', ('Y', 'A'), []),
                            ('X+B+A = 6', ('X', 'B', 'A'), ['6']),
                            ('L = Upper', ('L',), ['Upper']), ('R = 5', ('R',), ['5']),
+                           ('L+up = Upper and disc Up (no turn)', ('L', 'up'), ['Upper', 'Up']),
+                           ('L+down+right = Upper and disc Down-Right (no turn)', ('L', 'down', 'right'),
+                            ['Upper', 'Down-Right']),
+                           ('L+left+X = Upper, disc Left, 2', ('L', 'left', 'X'), ['Upper', 'Left', '2']),
                            ('R+X = 5 and 2', ('R', 'X'), ['5', '2']), ('up = disc Up', ('up',), ['Up']),
                            ('R+up = 5 and disc Up', ('R', 'up'), ['5', 'Up']),
                            ('down+left+B = disc Down-Left and 8', ('down', 'left', 'B'), ['Down-Left', '8']),
@@ -183,6 +213,10 @@ def spec_rows():
     r('Right stick: R3 = 5', 2, keys('R3', t=3), ['5'])
     r('Layer: R3 = nothing', 0, keys('R3', t=3), [])
     r('Right stick: R+A = 1 (Layer kept)', 2, keys('R', 'A', t=3), ['1'])
+    for i, d in enumerate(DPAD8):
+        r(f'Right stick: L + D-pad {"+".join(d)} = disc {DIRS[2 * i + 1]} (Layer kept)', 2, keys('L', *d, t=3),
+          [DIRS[2 * i + 1]])
+    r('Right stick: L+up+X = disc Up-Up-Right and 0', 2, keys('L', 'up', 'X', t=2), ['Up-Up-Right', '0'])
     r('Right stick on the Pocket (type 1): stick words ignored', 2, keys(t=1), [], j1=0x00FF00FF)
     # Left stick: 16 directions, all modes
     for mode in range(4):
@@ -194,6 +228,18 @@ def spec_rows():
     r('left stick on the Pocket (type 1) = nothing', 0, keys(t=1), [], j1=0x80800000)
     r('left stick on a docked digital pad (type 2) = nothing', 0, keys(t=2), [], j1=0x80800000)
     r('left stick N with D-pad right = two disc lines ORed', 0, keys('right', t=3), ['Up', 'Right'], j1=0x80800080 | (20 << 8))
+    # L never turns the left stick (16 directions already)
+    for mode in range(4):
+        for i in (0, 3, 4, 9):
+            x, y = stick(22.5 * i, 100)
+            r(f'mode {mode}: L + left stick at {22.5 * i} degrees = disc {DIRS[i]} (no turn)'
+              + (' and Upper' if mode == 1 else ''), mode, keys('L', t=3), [DIRS[i]] + (['Upper'] if mode == 1 else []),
+              j1=0x80800000 | (y << 8) | x)
+    x, y = stick(90, 100)
+    r('Layer: L+up with the left stick at 90 degrees = discs Up-Up-Right and Right', 0, keys('L', 'up', t=3),
+      ['Up-Up-Right', 'Right'], j1=0x80800000 | (y << 8) | x)
+    r('Layer: L+A with the left stick at 90 degrees = disc Right and 5', 0, keys('L', 'A', t=3),
+      ['Right', '5'], j1=0x80800000 | (y << 8) | x)
     # Keyboard
     kb = [(0x1E + i, str(i + 1)) for i in range(9)] + [(0x27, '0'), (0x28, 'Enter'), (0x2A, 'Clear'), (0x58, 'Enter')] \
         + [(0x59 + i, str(i + 1)) for i in range(9)] + [(0x62, '0')]
@@ -214,10 +260,48 @@ def spec_rows():
     r('cont1 type 2 (docked digital) A = Lower-Right', 0, keys('A', t=2), ['Lower-Right'])
     r('player 2 type 2: B = Lower-Left on the other port', 0, 0, [], k2=keys('B', t=2), want2=['Lower-Left'])
     r('player 2 type 1, mode Face: X+A = 3', 1, 0, [], k2=keys('X', 'A', t=1), want2=['3'])
+    r('player 2 type 2, Layer: L+left = disc Left-Up-Left', 0, 0, [], k2=keys('L', 'left', t=2),
+      want2=['Left-Up-Left'])
+    r('both players, Layer: L+up on player 1, up on player 2', 0, keys('L', 'up'), ['Up-Up-Right'],
+      k2=keys('up', t=2), want2=['Up'])
     r('both players at once', 0, keys('up'), ['Up'], k2=keys('down', t=2), want2=['Down'])
     r('player 2 in Layer: R+Y = Enter, keyboard stays with player 1', 0, 0, ['7'], k3=4 << 28, j3=0x24,
       k2=keys('R', 'Y', t=2), want2=['Enter'])
     return rows
+
+
+def l_oracle(btns, mode, stick_dir):
+    """Class 9's expectation, written from the agreed mapping without the model: the MAME inputs one
+    controller presses for a set of button names (D-pad, A/B/X/Y, L, R), a keypad mode and the left
+    stick's direction (an index into DIRS, or None)."""
+    b = set(btns)
+    v = ('up' in b) - ('down' in b)
+    h = ('right' in b) - ('left' in b)
+    pos = {(1, 0): 0, (1, 1): 1, (0, 1): 2, (-1, 1): 3, (-1, 0): 4, (-1, -1): 5, (0, -1): 6, (1, -1): 7}
+    ring = {0: '2', 1: '3', 2: '6', 3: '9', 4: '8', 5: '7', 6: '4', 7: '1'}
+    out = []
+    if mode == 1:                               # Face-button ring: L = Upper, no turn
+        if (v, h) in pos:
+            out.append(DIRS[2 * pos[(v, h)]])
+        fv = ('X' in b) - ('B' in b)
+        fh = ('A' in b) - ('Y' in b)
+        if (fv, fh) in pos:
+            out.append(ring[pos[(fv, fh)]])
+        out += ['Upper'] * ('L' in b) + ['5'] * ('R' in b)
+    elif 'R' in b:                              # R beats L
+        if (v, h) in pos:
+            out.append(ring[pos[(v, h)]])
+        out += [k for btn, k in (('A', '1'), ('B', '2'), ('X', '3'), ('Y', 'Enter')) if btn in b]
+    else:
+        turn = 1 if 'L' in b else 0             # L: one notch clockwise
+        if (v, h) in pos:
+            out.append(DIRS[2 * pos[(v, h)] + turn])
+        side = (('A', '5'), ('B', 'Clear'), ('X', '0')) if 'L' in b else \
+            (('A', 'Lower-Right'), ('B', 'Lower-Left'), ('X', 'Upper'))
+        out += [k for btn, k in side if btn in b]
+    if stick_dir is not None:
+        out.append(DIRS[stick_dir])             # the stick is never turned
+    return out
 
 
 def vec_line(cls, v, r, l):
@@ -318,6 +402,41 @@ def generate(path):
                     want = m.MAME_DISCYX_TABLE[gy][gx]
                     add(8, vec(key1=3 << 28, joy1=0x80800000 | (y << 8) | x, mode=mode, swap=swap),
                         (want, 0xFF) if swap else (0xFF, want))
+    # 9 L + D-pad: each D-pad state (none, the 8, up+down, up+down+left) with every set of A/B/X/Y,
+    # with and without L and R, in every mode, on slot types 1, 2 and 3 (type 3 with the left stick
+    # centred and in each of its 16 directions), on either player, both Swap settings; the expected bytes
+    # from l_oracle (the mapping written out), and the model must agree
+    dstates = [()] + DPAD8 + [('up', 'down'), ('up', 'down', 'left')]
+    n9 = 0
+    for mode in range(4):
+        for ds in dstates:
+            for fb in range(16):
+                face = [nm for i, nm in enumerate(('A', 'B', 'X', 'Y')) if fb >> i & 1]
+                for lr in range(4):
+                    sh = ['L'] * (lr & 1) + ['R'] * (lr >> 1)
+                    btns = list(ds) + face + sh
+                    for t, sd in [(1, None), (2, None)] + [(3, None)] + [(3, i) for i in range(16)]:
+                        if t == 3 and sd is not None and (fb + lr + n9) % 4:
+                            n9 += 1
+                            continue
+                        n9 += 1
+                        joy = 0x80808080
+                        if sd is not None:
+                            x, y = stick(22.5 * sd, 100)
+                            joy = 0x80800000 | (y << 8) | x
+                        k = keys(*btns, t=t)
+                        mm = 'Layer' if mode != 1 else 'Face'
+                        want = mame_read_ctrl(l_oracle(btns, mode, sd))
+                        p2 = n9 & 1
+                        swap = (n9 >> 1) & 1
+                        v = vec(key1=0 if p2 else k, joy1=0x80808080 if p2 else joy, key2=k if p2 else 0,
+                                joy2=joy if p2 else 0x80808080, mode=mode, swap=swap)
+                        left = swap ^ p2 == 0           # player 1 left unless swapped
+                        e = (0xFF, want) if left else (want, 0xFF)
+                        before = len(problems)
+                        add(9, v, e)
+                        if len(problems) > before:
+                            problems[-1] = f'L+D-pad {mm} {"+".join(btns)} type {t} stick {sd}: ' + problems[-1]
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
@@ -457,6 +576,24 @@ PLANTS = [
     ('type_any', 'intv_input.sv', "(t == 4'd1 || t == 4'd2 || t == 4'd3) ? p", "(t != 4'd0) ? p"),
     ('no_r3', 'intv_input.sv', "| (r3 ? key_code(4'd5) : 8'h00)", ''),
     ('rstick_any_mode', 'intv_input.sv', "if (mode == 2'd2 && an)", 'if (an)'),
+    # L + D-pad (Precision controls): the turn the wrong way (counter-clockwise); no turn (as before
+    # 0.0.7); L turning the D-pad in Face-button ring too; an L chord (A/B/X) dropping the disc, or undoing
+    # the turn; L turning the left stick as well; the turn by two notches
+    ('turn_ccw', 'intv_input.sv', "disc_code(k + {3'b000, turn})", "disc_code(k - {3'b000, turn})"),
+    ('turn_none', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b1)", "p = dpad_code(up, dn, lt, rt, 1'b0)"),
+    ('turn_in_face', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b0) | ring_code(bx, bb, by, ba)",
+     "p = dpad_code(up, dn, lt, rt, l1) | ring_code(bx, bb, by, ba)"),
+    ('chord_drops_disc', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b1)",
+     "p = ((ba | bb | bx) ? 8'h00 : dpad_code(up, dn, lt, rt, 1'b1))"),
+    ('chord_unturns', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b1)",
+     "p = dpad_code(up, dn, lt, rt, !(ba | bb | bx))"),
+    ('turn_two', 'intv_input.sv', "disc_code(k + {3'b000, turn})", "disc_code(k + {2'b00, turn, 1'b0})"),
+    ('turn_stick', 'intv_input.sv',
+     [("function automatic logic [7:0] stick16_code(input logic [7:0] x, input logic [7:0] y);",
+       "function automatic logic [7:0] stick16_code(input logic [7:0] x, input logic [7:0] y, input logic turn);"),
+      ("stick16_code = disc_code(d);", "stick16_code = disc_code(d + 4'(turn));"),
+      ("p = p | stick16_code(joy[7:0], joy[15:8]);",
+       "p = p | stick16_code(joy[7:0], joy[15:8], mode != 2'd1 && l1 && !r1);")], None),
     ('stick_on_pocket', 'intv_input.sv', "an = t == 4'd3;", "an = t[1];"),
     # the crossing as it was before 0.0.5: every bit through two clk flip-flops on its own
     ('bitwise_sync', 'intv_input.sv',

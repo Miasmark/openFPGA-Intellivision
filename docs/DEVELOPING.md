@@ -171,6 +171,12 @@ blocks (143,756 bits), 20 DSP; worst setup `clk_sys` +0.757 ns (slow
 no negative slack, no critical warnings. The four `set_net_delay` bounds
 (the input word and the save states' request, read word and result bits)
 are met with 6.709 ns to spare (slow model); 40 synchronizer chains.
+0.0.7 (L + D-pad turns the disc one notch in Layer mode; seed 1):
+6,449 ALMs (`intv_input` 347), 6,450 registers, 26 RAM blocks (143,756
+bits), 20 DSP; worst setup `clk_sys` +0.757 ns (slow 85 C), `clk_74a`
++2.612 ns; worst hold +0.038 ns (`clk_sys`, fast 0 C); no negative slack,
+no critical warnings. The four `set_net_delay` bounds are met with
+7.122 ns to spare (slow model); FIT_CROSSING pass.
 
 ## Simulation
 

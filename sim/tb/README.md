@@ -200,27 +200,43 @@ per-frame bus hash and PSG hash must be equal, mode `stic`. With
 model in mode `mame` must also equal MAME given the same keys: every
 10th frame's snapshot pixel for pixel (`stic_frames.py compare --press`)
 and the PSG register log and step stream (`psg_compare.py --press`). The
+third case, PGA Golf (760 frames, 0.0.7), presses Pocket buttons
+(`pocket:L+right`: `press_pads` combines the buttons held in a frame and
+maps them through the input model, Layer mode): from the start sequence
+recorded in MAME (research/golf/NOTES.md), Right, L+Right, Up, L+Up, each
+held 10 frames, and the model's aim, RAM $015F, must read 0, 15, 4, 3
+40 frames after each press (`PLAY_PEEKS`), with the RTL equal to the model
+as above (it has no MAME reference run: Pocket presses). The
 last line is `TB_PLAY_ALL pass`.
 
-`tb_input.py` writes about 541,000 vectors (`sim/work/tb_input/vectors.txt`)
+`tb_input.py` writes about 561,000 vectors (`sim/work/tb_input/vectors.txt`)
 and runs `tb_input.sv` (`intv_input.sv` alone) over them: the agreed
 mapping written out row by row as the hand-controller inputs each Pocket
 input must press, with MAME's `read_ctrl()` of those inputs as the expected
 bytes; every combination of the 16 Pocket buttons in each keypad mode
 (player 1 on the Pocket, player 2 docked); both sticks over their whole
 range; every keyboard usage code in each report byte and random reports;
-every slot type on each slot; random vectors; and the centres of MAME's
-analog grid, expected as its table says. Both Swap settings throughout.
+every slot type on each slot; random vectors; the centres of MAME's
+analog grid, expected as its table says; and class 9, L + D-pad (0.0.7:
+in the Layer modes L turns the D-pad one notch clockwise; not in
+Face-button ring; never the stick): every D-pad state with every set of
+A/B/X/Y, with and without L and R, every mode, slot types 1-3 with the
+stick centred and in its 16 directions, on either player, expected from
+the mapping written out (`l_oracle`), not from the model. Both Swap
+settings throughout.
 The bench runs `clk` (clk_sys) and `clk_74a` (period drawn each cycle
 between 12.5 and 14.5 ns) and drives the inputs as clk_74a signals; each
 vector is checked 16 clocks after it is driven.
 For all but the spec rows and the grid the expected bytes are the model's,
 and the model must equal MAME's `read_ctrl()` on every vector. `--all`
-then builds 18 planted faults (Swap ignored, a disc code, the dead zone's
+then builds 25 planted faults (Swap ignored, a disc code, the dead zone's
 edge, a sector slope, stick y flipped, L beating R, no cancel on the ring,
 the face buttons' left and right swapped, Backspace, the keyboard on any
 slot type, the keyboard's sixth byte, any slot type a controller, no R3,
-the right stick in every mode, sticks on the Pocket, and `bitwise_sync`:
+the right stick in every mode, sticks on the Pocket; for L + D-pad the
+turn counter-clockwise, no turn, the turn in Face-button ring too, an L
+chord dropping the disc, an L chord undoing the turn, two notches, L
+turning the stick; and `bitwise_sync`:
 the crossing before 0.0.5, every bit through two flip-flops on its own;
 `copy_while_in_flight`: the copy retaken at every clk_74a edge;
 `reg_then_bitwise`: a registered copy crossed bit by bit); each must fail.

@@ -42,19 +42,27 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   right, B = lower left, X = top side action. R held: D-pad = the keypad
   ring by position (up-left/up/up-right = 1/2/3, left/right = 4/6,
   down-left/down/down-right = 7/8/9; the disc is released), A/B/X = 1/2/3,
-  Y = Enter. L held (and R not): A/B/X = 5/Clear/0. R beats L. Y alone,
+  Y = Enter. L held (and R not): A/B/X = 5/Clear/0, and the D-pad turned
+  one notch (1/16 turn, 22.5 degrees) clockwise: D-pad alone N, NE, E, SE,
+  S, SW, W, NW; L + D-pad NNE, ENE, ESE, SSE, SSW, WSW, WNW, NNW, so the
+  D-pad reaches all 16 disc directions (the owner's "Precision controls",
+  2026-10-26; PGA Golf aims with all 16). The chords and the turned disc
+  work together (L + up + A = disc NNE and key 5). R beats L. Y alone,
   L+Y, Start and Select do nothing yet (Select is kept for the on-screen
   keypad, DESIGN.md 9 step 13).
 - Keypad mode Face-button ring (1): D-pad = disc; the face buttons are a
   second D-pad on the ring, by position on the Pocket (X up = 2, B down = 8,
   Y left = 4, A right = 6; X+A = 3, X+Y = 1, B+A = 9, B+Y = 7); L = top side
-  action, R = 5.
+  action, R = 5. L does not turn the D-pad here: it is the side action a
+  game may need while moving, so L + D-pad stays one of the 8 directions
+  plus the side action.
 - Keypad mode Right stick (2): Layer, plus on a docked analog controller
   the right stick picks the ring key by direction (8 sectors) and its click
   (R3) is 5, the ring's centre (R3 = 5 is this core's addition).
 - Opposite directions together (up+down, left+right, X+B, Y+A) cancel.
 - Analog left stick (type 3, every mode): the disc in 16 directions, ORed
-  with the D-pad's disc; inside a dead zone it does nothing.
+  with the D-pad's disc; inside a dead zone it does nothing. L never turns
+  it (it has its 16 directions already).
 
 Stick geometry: unsigned bytes, 0x80 the centre, x grows to the right and y
 downwards (the APF bus-communication page gives the byte layout; the y
@@ -107,7 +115,9 @@ SLOPES8 = (106, 618)
 
 # ring key by (v, h): v = +1 up, -1 down; h = +1 right, -1 left
 RING = {(1, -1): 1, (1, 0): 2, (1, 1): 3, (0, -1): 4, (0, 1): 6, (-1, -1): 7, (-1, 0): 8, (-1, 1): 9}
-# disc direction (index into DISC_CODE) by (v, h), the D-pad's 8
+# disc direction (index into DISC_CODE) by (v, h), the D-pad's 8; L in the
+# Layer modes adds TURN_L (one notch clockwise)
+TURN_L = 1
 DPAD_DIR = {(1, 0): 0, (1, 1): 2, (0, 1): 4, (-1, 1): 6, (-1, 0): 8, (-1, -1): 10, (0, -1): 12, (1, -1): 14}
 
 
@@ -160,9 +170,9 @@ class Hand:
         if (v, h) in RING:
             self.key(RING[(v, h)])
 
-    def dpad(self, v, h):
+    def dpad(self, v, h, turn=0):
         if (v, h) in DPAD_DIR:
-            self.dir(DPAD_DIR[(v, h)])
+            self.dir((DPAD_DIR[(v, h)] + turn) % 16)
 
 
 def virtual(key, joy, mode, hand=None):
@@ -187,7 +197,7 @@ def virtual(key, joy, mode, hand=None):
                 if b[btn]:
                     h.key(k)
         else:
-            h.dpad(*dp)
+            h.dpad(*dp, turn=TURN_L if b[L1] else 0)
             for btn, k, kl in ((A, "lr", 5), (B, "ll", "C"), (X, "top", 0)):
                 if b[btn]:
                     h.key(kl if b[L1] else k)
@@ -295,6 +305,16 @@ def self_check():
             err = min(abs(ang - 22.5 * d), 360 - abs(ang - 22.5 * d))
             worst = max(worst, err)
     ok(worst < 11.25 + 0.1, f"stick16: every stick position within {worst:.3f} degrees of its sector centre")
+    # L + D-pad in Layer mode: the D-pad's 8 turned one notch clockwise; with the plain 8, all 16
+    plain, turned = set(), set()
+    for (v, hh), d in DPAD_DIR.items():
+        bits = {(1, 0): 1 << UP, (-1, 0): 1 << DOWN, (0, 1): 1 << RIGHT, (0, -1): 1 << LEFT}
+        k = (1 << 28) | bits.get((v, 0), 0) | bits.get((0, hh), 0)
+        plain.add(virtual(k, 0, LAYER).disc)
+        t = virtual(k | 1 << L1, 0, LAYER).disc
+        turned.add(t if t == 1 << (15 - (d + 1) % 16) else None)
+    ok(None not in turned and len(plain | turned) == 16,
+       "Layer: D-pad = 8 disc directions, L + D-pad = the other 8, each one notch clockwise")
     return fails
 
 

@@ -64,7 +64,10 @@ the CPU is held by a BUSRQ, during a row fetch, while the PSG sounds; the
 bench asks at each of these (section 5) and the freeze still lands at the
 quiet point. The modules' state ports would allow a freeze in any clk_sys
 (the step 3-6 round trips do that), so the quiet point is a margin, not a
-need.
+need. The machine's time is its position on the raster, so the timing
+word must come back exactly: a resume one CPU cycle late (a planted
+fault) changes the whole run. (A slip of a few clk_sys inside VBlank that
+skips no CPU or STIC clock enable would change nothing in the machine.)
 
 ## 3 The blob
 
@@ -193,7 +196,7 @@ psgtest):
 
 Planted faults, each of which must make a check fail: a module (the STIC)
 dropped from the saved stream, a word restored one place off, the payload
-CRC not checked, the machine resumed one pixel late, the cartridge not
+CRC not checked, the machine resumed one CPU cycle late, the cartridge not
 checked, the system ROMs not checked.
 
 ## 7 Open points for the Pocket

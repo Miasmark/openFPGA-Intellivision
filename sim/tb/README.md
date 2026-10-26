@@ -263,8 +263,8 @@ every frame equal to R, every blob verified by `tools/savestate.py`), each
 state loaded into a fresh core (L: every frame after the restore equal to
 R's), another image's state (F: refused, untouched) and five bad blobs (C:
 refused, then the good one loads). `--plants` builds six planted faults
-(a module dropped, a word off by one, no CRC check, the resume one pixel
-late, no cartridge check, no system-ROM check), each of which must fail.
+(a module dropped, a word off by one, no CRC check, the resume one CPU
+cycle late, no cartridge check, no system-ROM check), each of which must fail.
 Frames are machine frames (H, A, P lines: bus and CPU steps, PSG, picture);
 after a load the PSG's 48 kHz sample values are left out (its output filter
 is not machine state; docs/SAVESTATE.md 5). Last line

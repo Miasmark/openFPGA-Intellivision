@@ -24,7 +24,9 @@ in play with keys, B-17 Bomber in flight, Atlantis, Buzz Bombers, our sticmob an
      run untouched, then the good blob loads.
 Planted faults (PLANTS, each a change to a copy of the RTL) must each make a check fail:
 a module dropped from the stream, a word off by one, the CRC not checked, the resume
-at the wrong position, the cartridge not checked, the system ROMs not checked.
+at the wrong position (one CPU cycle late: four pixel clocks; a slip that skips no CPU or
+STIC enable in VBlank changes nothing in the machine), the cartridge not checked, the
+system ROMs not checked.
 
   python3 -I sim/tb/tb_savestate.py [--only nocart,psgtest] [--plants] [--no-build]
                                     [--jobs 2] [--plants-only]
@@ -452,7 +454,7 @@ PLANTS = [
      [("if (bad || resv_bad || ~crc != hdr_crc)", "if (bad || resv_bad)")], 'sticmob', 'psgtest'),
     ('ss_resume_wrong_pos', 'intv_ss_ctl.sv',
      [("                              ss_wdata <= v;\n",
-       "                              ss_wdata <= mi == 11'd0 ? v + 32'd16 : v;\n")], 'sticmob', 'psgtest'),
+       "                              ss_wdata <= mi == 11'd0 ? v + 32'd64 : v;\n")], 'sticmob', 'psgtest'),
     ('ss_cart_unchecked', 'intv_ss_ctl.sv',
      [(CHK, "else if (w != 14'(SS_H_CART_CRC) && w != 14'(SS_H_CART_WORDS)\n"
             "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],

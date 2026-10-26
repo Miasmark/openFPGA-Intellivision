@@ -413,6 +413,15 @@ One input module builds a virtual hand controller per player. Every source feeds
 
 Check `cont3_key[31:28] == 4` before reading the keyboard [from L-PSS, APF docs]. Per-game profiles (for example B-17 Bomber, Space Spartans) come from our own CRC-keyed table with function facts only, no artwork [from IN].
 
+**(build step 6) As built** (`src/fpga/core/intv_input.sv`, model `tools/intv_input.py`, bench `sim/tb/tb_input.py`):
+
+- Player 1 = cont1, player 2 = cont2; a slot counts only with type 1 (Pocket), 2 (docked digital) or 3 (docked analog), and the sticks only on type 3. Player 1 is the **left** controller ($01FF, port B) and player 2 the right ($01FE, port A), because many games read only the left one; the Swap Controllers item (0x1000020C) exchanges them. The USB keyboard (cont3 type 4, six usage codes in `cont3_joy` and `cont3_trig`) is player 1's keypad: 1-9 and 0 on the number row and the numpad, Backspace = Clear, Enter and numpad Enter = Enter. ECS keys and the music rows come with step 9.
+- Keypad Mode item (0x10000208): 0 Layer (default), 1 Face-button ring, 2 Right stick; 3 works as Layer. Details beyond the table: R beats L when both are held; R releases the D-pad's disc (the D-pad is the ring), L does not; Y alone, L + Y, Start, Select, L2/R2/L3 press nothing yet (Select is kept for the on-screen keypad); Face-button ring's L is the top side action. Right stick mode is Layer plus the right stick (8 sectors) and R3 = 5, the ring's centre (R3 is this core's addition).
+- Opposite directions together (D-pad up + down, X + B in the ring) cancel. Everything else is wired-OR: each input pulls its code's lines low, so presses combine as on the hardware, the stick's disc with the D-pad's too.
+- Analog left stick: 16 directions by integer slopes (sector boundaries at 11.25 + 22.5 n degrees), dead zone radius 40 of 128; right stick: 8 sectors, dead zone 64. Stick y is taken as growing downwards (to be confirmed on a docked analog controller). At the centres of MAME's 5 x 5 analog grid the disc equals MAME's table (handctrl.cpp:137-144).
+- The controller words are synchronised from clk_74a by two flip-flops; the module keeps no machine state and has no state port (4.4).
+- Interact menu limits learned on the owner's Pocket (2026-10-25, openFPGA-2600): at most 15 options a list (the documents say 16), and interact.json at most 8,740 bytes (10,213 failed), kept minified; `sim/check/apf_json_check.py` enforces both.
+
 ### 7.3 ECS keyboard matrix model
 
 - ECS PSG at $00F0-$00FF. Port $FE = rows, $FF = columns. Register $F8 bits 6/7 set each port's direction. Each port is all-input or all-output, with pull-ups [from IN; AA].

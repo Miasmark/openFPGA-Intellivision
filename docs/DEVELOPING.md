@@ -117,6 +117,12 @@ registers, 18 RAM blocks (110,860 bits), 2 DSP; worst setup +2.817 ns
 +0.111 ns (`clk_vid`, fast 0 C model). The machine's only outputs are the
 debugging status word on the bridge (0x60000000), which keeps it in the
 netlist until the STIC drives the picture (step 4).
+Step 6, input module added to steps 0-5 (seed 1): 3,726 ALMs, 4,879
+registers, 140,108 RAM bits, 19 DSP; `intv_input` 326 ALMs, 367 registers
+and 16 DSP blocks (the sticks' squares and slope products; `multstyle`
+"logic" would move them to ALMs if DSPs run short); worst setup +0.757 ns
+(`clk_sys`, the SRAM data inputs, not the input module, whose worst path
+has +7.457 ns), worst hold +0.038 ns (fast 0 C model).
 
 ## Simulation
 

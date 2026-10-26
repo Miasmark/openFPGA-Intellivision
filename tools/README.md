@@ -38,6 +38,11 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   NEGR carry and its memory map (no GRAM alias above $3BFF, unmapped
   ranges read 0), and with `--timing computed` MAME's 59.92 Hz frames
   computed rather than read from the trace.
+- `intv_input.py`: the input model (DESIGN.md 7.2, build step 6): the
+  Pocket's controllers and USB keyboard as two hand controllers, the bytes
+  on the PSG's ports; its code table is checked against MAME's
+  hand-controller tables (`handctrl.cpp`), and every byte against MAME's
+  `read_ctrl()` transcribed. The golden model of `sim/tb/tb_input.py`.
 - `stic.py`: the STIC model (build steps 4 and 5): registers, Color
   Stack / Colored Squares / Foreground-Background cards from GROM and
   GRAM, border colour, delays and border extension, the display enable,

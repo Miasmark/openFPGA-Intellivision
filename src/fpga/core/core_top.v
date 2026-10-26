@@ -21,6 +21,9 @@
 // Step 4: the STIC (backgrounds, BUSRQ) draws the picture once the machine
 // runs; the test pattern shows while it is held (loading, a required slot
 // missing or refused). The step-3 status register at 0x60000000 is gone.
+// Step 6: intv_input turns the Pocket's controllers and USB keyboard into
+// the two hand controllers on the PSG's ports; settings Keypad Mode (0x208)
+// and Swap Controllers (0x20C).
 //
 
 `default_nettype none
@@ -397,6 +400,8 @@ localparam [31:0] SS_SIZE = 32'd153600;
 
 // Settings, written by the host from interact.json (clk_74a).
     reg             set_border = 1'b1;      // Border: 1 = show (slot 1), 0 = playfield only (slot 0)
+    reg     [1:0]   set_kp_mode = 2'd0;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick
+    reg             set_swap = 1'b0;        // Swap Controllers: 1 = player 1 on the right controller
     reg     [7:0]   menu_reset_cnt = 8'd0;
 
 always @(posedge clk_74a) begin
@@ -407,6 +412,8 @@ always @(posedge clk_74a) begin
         case (bridge_addr[11:0])
             12'h200: menu_reset_cnt <= 8'hFF;
             12'h204: set_border     <= bridge_wr_data[0];
+            12'h208: set_kp_mode    <= bridge_wr_data[1:0];
+            12'h20C: set_swap       <= bridge_wr_data[0];
             default: ;
         endcase
     end
@@ -779,6 +786,29 @@ intv_timing timing (
 );
 
 ////////////////////////////////////////////////////////////////////////////////
+// Input (step 6): the Pocket's controllers and keyboard as the two hand
+// controllers on the PSG's ports (DESIGN.md 7). intv_input synchronises the
+// clk_74a words and the settings into clk_sys itself.
+////////////////////////////////////////////////////////////////////////////////
+
+    wire    [7:0]   pad_r, pad_l;
+
+intv_input input_map (
+    .clk        ( clk_sys ),
+    .cont1_key  ( cont1_key ),
+    .cont1_joy  ( cont1_joy ),
+    .cont2_key  ( cont2_key ),
+    .cont2_joy  ( cont2_joy ),
+    .cont3_key  ( cont3_key ),
+    .cont3_joy  ( cont3_joy ),
+    .cont3_trig ( cont3_trig ),
+    .kp_mode    ( set_kp_mode ),
+    .swap       ( set_swap ),
+    .pad_r      ( pad_r ),
+    .pad_l      ( pad_l )
+);
+
+////////////////////////////////////////////////////////////////////////////////
 // The machine (steps 3-4)
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -799,8 +829,8 @@ intv_machine machine (
     .cfg_hlt_imm    ( 1'b0 ),
     .cfg_sdbd_r6_mame ( 1'b0 ),
     .busrq_en       ( 1'b1 ),
-    .pad_r          ( 8'hFF ),          // input module: step 6
-    .pad_l          ( 8'hFF ),
+    .pad_r          ( pad_r ),
+    .pad_l          ( pad_l ),
     .cart_req       ( cbus_req ),
     .cart_we        ( cbus_we ),
     .cart_addr      ( cbus_addr ),

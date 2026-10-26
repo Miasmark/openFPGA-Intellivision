@@ -26,7 +26,9 @@ Planted faults (PLANTS, each a change to a copy of the RTL) must each make a che
 a module dropped from the stream, a word off by one, the CRC not checked, the resume
 at the wrong position (one CPU cycle late: four pixel clocks; a slip that skips no CPU or
 STIC enable in VBlank changes nothing in the machine), the cartridge not checked, the
-system ROMs not checked.
+system ROMs not checked, the cart RAM not restored or one word off, the menu ignored, a
+bridge access's direction not latched (B's race), the PSG's envelope counter (0 at boot)
+ignored on restore. A plant counts as caught only when a problem matches its own reason.
 
   python3 -I sim/tb/tb_savestate.py [--only nocart,psgtest] [--plants] [--no-build]
                                     [--jobs 2] [--plants-only]
@@ -38,6 +40,7 @@ Environment: VERILATOR, WORK (default sim/work/tb_savestate), INTV_LIBRARY, INTV
 import argparse
 import concurrent.futures
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -518,12 +521,13 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         end = min(nframes, zc0 // FRAME + 12) * FRAME
         lf.append((img, 'C', zc0, end, p0, sub('C', end, sc)))
         # B: two blob reads while a save reads the state: the second overwrites
-        # the first (one drop counted), the save and the run untouched
+        # the first (one drop counted), the save and the run untouched; then
+        # the race: a write arriving while a read is served
         if name in BURST_IMAGES:
             pb = bench.blob_path(name, 0, 'b')
             fb = saves[name][0][1] // FRAME
             lf.append((img, 'B', None, nframes * FRAME, pb,
-                       sub('B', nframes * FRAME, ['saveb %d %s' % (fb * FRAME, pb)])))
+                       sub('B', nframes * FRAME, ['saveb %d %s' % (fb * FRAME, pb), 'race 0'])))
     for img, tag, zc, end, blob, fut in lf:
         name = img[0]
         run = fut.result()
@@ -552,6 +556,9 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 elif ss.verify(open(blob, 'rb').read(), *bench.prep[name][3:5],
                                exec_crc=bench.prep[name][5], grom_crc=bench.prep[name][6]):
                     q.append('burst save: blob does not verify')
+                rw = run.tagged('RW')
+                if len(rw) != 1 or int(rw[0].split()[1]) < 1 or int(rw[0].split()[2]) != 0:
+                    q.append('race: %s (want at least one write taken in during a read, none wrong)' % rw)
                 q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
             elif zc is None:                   # F: untouched all the way
                 if run.set_cycle is not None or applied:
@@ -579,39 +586,60 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
 
 
 # ------------------------------------------------------------------ plants
-# (name, file, [(from, to)], image, the image whose state is the foreign one)
+# (name, file, [(from, to)], image, the image whose state is the foreign one,
+#  the reason: a regular expression one of the run's problems must match, so a
+#  plant counts as caught only for its own fault, not for any failure)
+AFTER = r' (L\d|D|W\d|C) after: frame \d+ differs'
 CHK = "else if (m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))"
 PLANTS = [
     ('ss_drop_stic', 'intv_ss_ctl.sv',
      [("                              v <= ss_rdata;\n",
-       "                              v <= ss_addr[15:8] == 8'h04 ? 32'd0 : ss_rdata;\n")], 'sticmob', 'psgtest'),
+       "                              v <= ss_addr[15:8] == 8'h04 ? 32'd0 : ss_rdata;\n")], 'sticmob', 'psgtest',
+     AFTER),
     ('ss_word_off_by_one', 'intv_ss_ctl.sv',
      [("                              ss_addr  <= intv_ss_pkg::ss_word_addr(mi);\n",
-       "                              ss_addr  <= intv_ss_pkg::ss_word_addr(mi + 11'd1);\n")], 'sticmob', 'psgtest'),
+       "                              ss_addr  <= intv_ss_pkg::ss_word_addr(mi + 11'd1);\n")], 'sticmob', 'psgtest',
+     AFTER),
     ('ss_crc_unchecked', 'intv_ss_ctl.sv',
-     [("if (bad || resv_bad || ~crc != hdr_crc)", "if (bad || resv_bad)")], 'sticmob', 'psgtest'),
+     [("if (bad || resv_bad || ~crc != hdr_crc)", "if (bad || resv_bad)")], 'sticmob', 'psgtest',
+     r' C: FAIL load \S+_bad_\w+\.blob: code \d+, expected err'),
     ('ss_resume_wrong_pos', 'intv_ss_ctl.sv',
      [("                              ss_wdata <= v;\n",
-       "                              ss_wdata <= mi == 11'd0 ? v + 32'd64 : v;\n")], 'sticmob', 'psgtest'),
+       "                              ss_wdata <= mi == 11'd0 ? v + 32'd64 : v;\n")], 'sticmob', 'psgtest',
+     AFTER),
     ('ss_cart_unchecked', 'intv_ss_ctl.sv',
      [(CHK, "else if (w != 14'(SS_H_CART_CRC) && w != 14'(SS_H_CART_WORDS)\n"
             "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],
-     'nocart', 'astrosmash'),
+     'nocart', 'astrosmash', r' F: FAIL load \S+plant_foreign_astrosmash\.blob: code \d+, expected err'),
     ('ss_rom_unchecked', 'intv_ss_ctl.sv',
      [(CHK, "else if (w != 14'(SS_H_EXEC_CRC) && w != 14'(SS_H_GROM_CRC)\n"
             "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],
-     'sticmob', 'psgtest'),
+     'sticmob', 'psgtest', r' F: FAIL load \S+plant_foreign_psgtest\.blob: code \d+, expected err'),
     # the cart RAM: its restore skipped; its cells taken one blob word off (save and load)
     ('ss_cram_not_restored', 'intv_ss_ctl.sv',
      [("                              ph <= 2'd1;                 // cart RAM: m_go now\n",
-       "                              ph <= 2'd2;                 // cart RAM: m_go now\n")], 'chess', 'psgtest'),
+       "                              ph <= 2'd2;                 // cart RAM: m_go now\n")], 'chess', 'psgtest',
+     r' (L\d|D|W\d|C): cart RAM after the load '),
     ('ss_cram_offset', 'intv_ss_ctl.sv',
      [("cram_a  = CRAM + {2'd0, w - 14'(W_CRAM), 1'b0};",
-       "cram_a  = CRAM + 17'd2 + {2'd0, w - 14'(W_CRAM), 1'b0};")], 'chess', 'psgtest'),
+       "cram_a  = CRAM + 17'd2 + {2'd0, w - 14'(W_CRAM), 1'b0};")], 'chess', 'psgtest',
+     r'(S: blob \S+: cart RAM |: cart RAM after the load )'),
     # the menu ignored: the machine runs on while the menu is open
     ('ss_menu_ignored', 'intv_ss_ctl.sv',
      [("    wire logic menu_hold = mn_s[2] && pz_s[2];\n",
-       "    wire logic menu_hold = 1'b0 && mn_s[2] && pz_s[2];\n")], 'psgtest', 'astrosmash'),
+       "    wire logic menu_hold = 1'b0 && mn_s[2] && pz_s[2];\n")], 'psgtest', 'astrosmash',
+     r'S: menu \d+ \(open at cycle \d+\): (\d+ freezes|frozen at|froze at|a wait ended|frozen \d+ raster)'),
+    # a bridge access's direction not latched: a write arriving while a read
+    # is served takes the read's answer away (the B run's race)
+    ('ss_brw_dir', 'intv_ss_ctl.sv',
+     [("                if (!cur_we) begin r_q <= m_q; r_t <= !r_t; end\n",
+       "                if (!bp_we) begin r_q <= m_q; r_t <= !r_t; end\n")], 'psgtest', 'astrosmash',
+     r' B: FAIL race \d+: the read answered '),
+    # a state word that boots to 0 ignored on restore (the PSG's envelope
+    # counter): only the loads whose saved value is not 0 can show it
+    ('ss_psg_ecnt_ignored', 'intv_psg.sv',
+     [("                5'd19: ecnt <= ss_wdata[16:0];\n", "                5'd19: ;\n")], 'psgtest', 'astrosmash',
+     AFTER),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 
@@ -671,7 +699,7 @@ def main():
                 if r is None or not r.end or r.fails or not os.path.exists(fbs[fname]):
                     fails.append('plants: no foreign state of ' + fname)
             sel = a.plant.split(',') if a.plant else None
-            for pname, f, edits, iname, fname in PLANTS:
+            for pname, f, edits, iname, fname, why in PLANTS:
                 if sel and pname not in sel:
                     continue
                 d = os.path.join(work, 'plant_' + pname)
@@ -697,8 +725,13 @@ def main():
                 pb.prep = bench.prep
                 img = allimgs[iname]
                 pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='')
-                if pr:
-                    print('PLANT %s: caught: %s' % (pname, pr[0][:150]), flush=True)
+                own = [x for x in pr if re.search(why, x)]
+                if own:
+                    print('PLANT %s: caught: %s' % (pname, own[0][:150]), flush=True)
+                elif pr:
+                    print('PLANT %s: not caught for its own reason (/%s/); first problem: %s'
+                          % (pname, why, pr[0][:150]), flush=True)
+                    fails.append('plant ' + pname)
                 else:
                     print('PLANT %s: not caught' % pname, flush=True)
                     fails.append('plant ' + pname)

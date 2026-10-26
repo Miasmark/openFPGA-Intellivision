@@ -254,14 +254,23 @@ More runs and checks:
   blob is checked; both must restore the state exactly as L does;
 - B (psgtest): two blob reads while a save reads the state; the second
   overwrites the first, `br_drops` counts it, the save and the run are
-  unharmed. Every other run must end with no access overwritten.
+  unharmed. Every other run must end with no access overwritten. Then the
+  race: six times a blob read, and a blob write strobed while ss_ctl's
+  SRAM access for the read is under way (faster than the bridge sends
+  them); the read must be answered with its own word and the write must
+  land, and at least one write must reach ss_ctl inside the read's access
+  (the case the direction latch is for).
 
 Planted faults, each of which must make a check fail: a module (the STIC)
 dropped from the saved stream, a word restored one place off, the payload
 CRC not checked, the machine resumed one CPU cycle late, the cartridge not
 checked, the system ROMs not checked, the cart RAM not restored, the cart
 RAM's cells taken one blob word off (on save and load), the menu ignored
-(the machine runs on while it is open).
+(the machine runs on while it is open), a bridge access's direction not
+latched (B's race), the PSG's envelope counter ignored on restore (a word
+that boots to 0: only loads whose saved value is not 0 show it). Each
+plant has its own reason, a pattern one of the run's problems must match,
+so a plant is not counted as caught by an unrelated failure.
 
 ## 7 Open points for the Pocket
 

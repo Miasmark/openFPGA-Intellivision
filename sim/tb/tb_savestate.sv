@@ -25,6 +25,11 @@
 //       saveb C FILE          a save as "save C any FILE", and while it
 //                             reads the state two bridge reads at 0x50000000
 //                             (the second overwrites the first: br_drops)
+//       race C                at cycle C (or at once) six tries: a blob read,
+//                             and a blob write strobed while ss_ctl's SRAM
+//                             access for the read is under way (faster than
+//                             the bridge sends them); the read must still be
+//                             answered with its own word, the write must land
 //       load C FILE EXPECT R  at cycle C write FILE over the bridge, ask for
 //                             a load (0x00A4); EXPECT ok or err; on ok the
 //                             bench's machine cycle becomes R (the saved
@@ -60,6 +65,9 @@
 //   S code ...          a host command's result (code as the host reads it)
 //   SAVE ok|err c FILE  /  LOAD ok|err EXPECT e
 //   MENU open c         before the host opens the menu; MENU 0 c after it closed it
+//   R race d hit h      a race try: h = 1 if its write reached ss_ctl while the
+//                       read's SRAM access was under way
+//   RW hits wrong       after the race: tries that hit, words read wrong
 //   E drops n           at the end: bridge accesses ss_ctl overwrote (br_drops)
 //   END / FAIL text
 // Checked on every clk: never live while frozen; the sound 0 once the
@@ -487,6 +495,67 @@ module tb_savestate;
         $fdisplay(fd, "SAVE ok %0d %s", cyc, fname);
     endtask
 
+    // race: ss_ctl latches an access's direction when it takes it (cur_we),
+    // so a write that arrives while a read is being served neither drops
+    // the read's answer nor answers itself. Word RACE_W is read; the write
+    // to RACE_W + 1 is strobed d = 0..5 clk_sys after the read's SRAM access
+    // starts (it reaches ss_ctl about 5 clk_sys later; the read's two SRAM
+    // accesses take about 10). race_hits counts the writes taken in while a
+    // read was in flight (the case that needs the latch).
+    localparam int RACE_W = 40;
+    int   race_hits = 0;
+    logic race_on = 1'b0;
+    always @(posedge clk)
+        if (race_on && core.ssc.b_s[2] != core.ssc.b_s[1] && int'(core.ssc.mst) != 0 && !core.ssc.cur_we)
+            race_hits <= race_hits + 1;
+
+    task automatic do_race(input longint c);
+        logic [31:0] v, want_r, want_w;
+        int n, h0, wrong;
+        wait_cyc(c);
+        host_on();
+        race_on = 1'b1;
+        wrong = 0;
+        for (int d = 0; d < 6; d++) begin
+            want_r = 32'hA5C30000 | 32'(d);
+            want_w = 32'h3C5A0000 | 32'(d);
+            br_wr(32'h50000000 + 32'(4 * RACE_W), want_r);
+            br_wr(32'h50000000 + 32'(4 * (RACE_W + 1)), ~want_w);
+            br_rd(32'h50000000 + 32'(4 * (RACE_W + 1)), v);   // the bridge's word: ~want_w
+            h0 = race_hits;
+            @(negedge clk74);
+            bridge_addr = 32'h50000000 + 32'(4 * RACE_W);
+            @(negedge clk74);
+            bridge_rd = 1'b1;
+            @(negedge clk74);
+            bridge_rd = 1'b0;
+            n = 0;
+            while (int'(core.ssc.mst) == 0 && n < 4000) begin @(negedge clk); n++; end
+            repeat (d) @(negedge clk);
+            @(negedge clk74);
+            bridge_addr = 32'h50000000 + 32'(4 * (RACE_W + 1));
+            bridge_wr_data = want_w;
+            bridge_wr = 1'b1;
+            @(negedge clk74);
+            bridge_wr = 1'b0;
+            repeat (85) @(negedge clk74);
+            v = bridge_rd_data;
+            if (v != want_r) begin
+                wrong++;
+                fail($sformatf("race %0d: the read answered %08x, want %08x", d, v, want_r));
+            end
+            br_rd(32'h50000000 + 32'(4 * (RACE_W + 1)), v);
+            if (v != want_w) begin
+                wrong++;
+                fail($sformatf("race %0d: the written word reads %08x, want %08x", d, v, want_w));
+            end
+            $fdisplay(fd, "R race %0d hit %0d", d, race_hits - h0);
+        end
+        race_on = 1'b0;
+        $fdisplay(fd, "RW %0d %0d", race_hits, wrong);
+        host_off();
+    endtask
+
     task automatic do_load(input longint c, input string fname, input string expect_s, input longint r,
                            input bit rel_reset = 1'b0);
         logic [15:0] code;
@@ -621,6 +690,10 @@ module tb_savestate;
                     "saveb": begin
                         k = $fscanf(sf, "%d %s", c, a2);
                         do_save(c, "any", a2, 1'b1);
+                    end
+                    "race": begin
+                        k = $fscanf(sf, "%d", c);
+                        do_race(c);
                     end
                     "load", "loadr": begin
                         k = $fscanf(sf, "%d %s %s %d", c, a1, a2, r);

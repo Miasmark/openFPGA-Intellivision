@@ -271,13 +271,17 @@ blob is checked), another image's state (F: refused, untouched) and five
 bad blobs (C: refused, then the good one loads). psgtest also runs S with
 Pause in Menu off (S0: the machine runs through the menu) and B (two blob
 reads while a save reads the state: one overwritten access counted, the
-save unharmed). On every clk the bench checks: never live while frozen,
+save unharmed; then six blob reads, each with a blob write arriving while
+the read is served: every read answered with its own word, every write
+landed). On every clk the bench checks: never live while frozen,
 the sound 0 once the machine has not been live for 4 ms, no state access
 while the machine runs; every run ends with `E drops 0` (B: 1).
-`--plants` builds nine planted faults (a module dropped, a word off by
+`--plants` builds eleven planted faults (a module dropped, a word off by
 one, no CRC check, the resume one CPU cycle late, no cartridge check, no
 system-ROM check, the cart RAM not restored, the cart RAM one word off,
-the menu ignored), each of which must fail.
+the menu ignored, a bridge access's direction not latched, the PSG's
+envelope counter ignored on restore), each of which must fail for its own
+reason (a pattern per plant in `PLANTS`).
 Frames are machine frames (H, A, P lines: bus and CPU steps, PSG, picture);
 after a load the PSG's 48 kHz sample values are left out (its output filter
 is not machine state; docs/SAVESTATE.md 5). Last line

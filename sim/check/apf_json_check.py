@@ -394,16 +394,10 @@ def main():
             check(i < len(stub_sizes) and stub_sizes[i] == (size or 0), f"{name}: intv_loader expects {size or 'any size'}")
             check(i < len(req) and req[i] == required, f"{name}: core_top tells the test pattern required = {required}")
     cart, cfg = slots[0], slots[1]
-    # From 0.0.10 the cartridge slot also takes an instance JSON (a .bin + .cfg pair in one pick;
-    # tools/make_instances.py), which openFPGA allows only in the first slot and only for a
-    # core-specific one (bits 4 and 1), so the cartridge and its CFG live in
-    # /Assets/intv/Miasmark.Intellivision/; four extensions at most, so .itv gave way to .json
-    check(slots.index(cart) == 0 and int(cart["parameters"], 16) == 0x11B,
-          "cartridge: first slot, reloadable, core-specific, instance JSON, read-only, full core reload (0x11B)")
-    check(int(cfg["parameters"], 16) == 0x10B,
-          "config: reloadable, core-specific (beside its cartridge), read-only, full core reload (0x10B)")
-    check(cart["extensions"] == ["int", "bin", "rom", "json"] and cfg["extensions"] == ["cfg"],
-          "extensions: cartridge int/bin/rom/json, config cfg (DESIGN.md 5.6)")
+    check(int(cart["parameters"], 16) == 0x109 and int(cfg["parameters"], 16) == 0x109,
+          "cartridge and config: reloadable, full core reload (0x109)")
+    check(cart["extensions"] == ["int", "bin", "rom", "itv"] and cfg["extensions"] == ["cfg"],
+          "extensions: cartridge int/bin/rom/itv, config cfg (DESIGN.md 5.6)")
     jlp = slots[6]
     check(jlp.get("nonvolatile") is True and int(jlp["parameters"], 16) == 0x84 and "filename" not in jlp,
           "JLP flash: nonvolatile, one file per game (0x84)")

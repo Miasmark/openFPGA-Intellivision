@@ -118,6 +118,3 @@ Where the sources disagree and what the model does: `docs/CPU_NOTES.md`
 Packaging (build step 1): `package.sh` assembles the SD card zip from
 `dist/` and a Quartus bitstream (`release/M_Intellivision_Pocket_<version>.zip`);
 `reverse_bits.py` makes the bit-reversed `.rbf_r` the Pocket loads.
-`make_instances.py FOLDER` writes an openFPGA instance JSON for each `.bin`/`.int`
-with a `.cfg` beside it, so the Pocket loads the pair with one pick in the
-Cartridge slot (DESIGN.md 5.6).

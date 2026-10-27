@@ -43,13 +43,6 @@ The core needs the console's own ROMs, supplied by the user:
 
 They go in `/Assets/intv/common/` on the SD card (DESIGN.md section 5.6).
 
-Cartridges (`.int`, `.bin`, `.rom`) and their `.cfg` files go in
-`/Assets/intv/Miasmark.Intellivision/`. A `.bin` that needs a `.cfg` loads in
-one pick through a small instance file: run
-`python3 tools/make_instances.py <folder>` on the folder holding the pairs and
-copy the `.json` files it writes next to them; choose the `.json` in the
-Cartridge slot. (`.itv` files are `.bin` files: rename them.)
-
 ## License
 
 The project's own code is under the MIT License ([LICENSE](LICENSE)).

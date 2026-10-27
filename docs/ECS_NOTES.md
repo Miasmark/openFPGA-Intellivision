@@ -66,7 +66,8 @@ the ECS is in their way. Test images: `sim/testroms/step9` ecsoffcfg (ecsavail w
 `ecs_compat = 0`) and ecsoffrom (a .rom tagged incompatible), both off; tb_loader's plant
 auto_ecs_off_ignored.
 
-**Refined here (a change to DESIGN 20's second row, for the owner to confirm):** code at `$4800`
+**Refined here (DESIGN 20's second row; recorded there as the rule in force on 2026-10-26, the owner
+may override it):** code at `$4800`
 turns the ECS on only when the ECS boot would then start the cartridge straight, i.e. its header
 word at `$500C`, byte-swapped and ANDed with `$FD`, is 1 (the ECS ROM's own test, REPORT 2 step 5;
 IntyBASIC's hook cartridges have `$03C0` there and pass); otherwise the ECS is attached with its ROMs

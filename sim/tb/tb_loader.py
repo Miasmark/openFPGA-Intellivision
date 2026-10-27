@@ -561,7 +561,6 @@ def main():
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names (with --all or --plants-only)')
     ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
-    ap.add_argument('--plant', help='comma-separated plant names: only these (with --plants-only)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_loader'))

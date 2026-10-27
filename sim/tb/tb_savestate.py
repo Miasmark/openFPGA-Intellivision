@@ -155,6 +155,16 @@ def blob_cram(path):
     return cram_hash(cram), sum(1 for c in cram if c)
 
 
+def bank_hash(mods):
+    """FNV-1a over the 32 Intellicart bank registers of a blob's cart words 7-14 (four
+    registers a word, the lowest byte first: intv_cart's state read), as the K lines."""
+    return cram_hash([(mods[0x0B][7 + k // 4] >> (8 * (k % 4))) & 0xFF for k in range(32)])
+
+
+def blob_bank(path):
+    return bank_hash(ss.unpack(open(path, 'rb').read())[1])
+
+
 def build(work, rtl_dir, verilator, strict=True):
     obj = os.path.join(work, 'obj')
     os.makedirs(work, exist_ok=True)
@@ -468,20 +478,23 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
     # pause freezes too (a Z without a Q)
     # each save's request (Q) and the freeze it was taken in: the last Z
     # before its SAVE line (a menu pause may have frozen the machine first)
-    qs, zs, ms, last_z, last_m = [], [], [], None, None
+    qs, zs, ms, ks, last_z, last_m, last_k = [], [], [], [], None, None, None
     for ln in run.lines:
         t = ln.split()
         if t[0] == 'Z':
             last_z = ln
         elif t[0] == 'M':
             last_m = ln
+        elif t[0] == 'K':
+            last_k = ln
         elif t[0] == 'Q' and t[1] == 'save':
             qs.append(ln)
         elif t[0] == 'SAVE':
             zs.append(last_z)
             ms.append(last_m)
+            ks.append(last_k)
     info = []
-    for (p, kind), s, q, z, mline in zip(blobs, saves, qs, zs, ms):
+    for (p, kind), s, q, z, mline, kline in zip(blobs, saves, qs, zs, ms, ks):
         qt = q.split()
         cond = {'busrq': qt[4] == '1', 'rowfetch': qt[6] == '1', 'midinst': qt[8] == '0',
                 'sound': qt[10] != '0'}.get(kind, True)
@@ -504,6 +517,10 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
         if mline is None or ' '.join(mline.split()[2:4]) != want_m:
             probs.append('S: blob %s: cart RAM %s, the SRAM at the freeze %s' % (
                 os.path.basename(p), want_m, mline))
+        want_k = '%08x' % bank_hash(mods)
+        if kline is None or kline.split()[2] != want_k:
+            probs.append('S: blob %s: bank registers %s, the core at the freeze %s' % (
+                os.path.basename(p), want_k, kline))
         if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], flags=h[ss.H_FLAGS],
                    exec_crc=h[ss.H_EXEC_CRC], grom_crc=h[ss.H_GROM_CRC], cfg_crc=h[ss.H_CFG_CRC],
                    ecs_crc=h[ss.H_ECS_CRC]) != blob:
@@ -704,6 +721,9 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 want_m = '%08x %d' % blob_cram(blob)
                 if len(applied) != 1 or ' '.join(applied[0].split()[2:4]) != want_m:
                     q.append('cart RAM after the load %s, blob %s' % (applied, want_m))
+                ka, want_k = run.tagged('KA'), '%08x' % blob_bank(blob)
+                if len(ka) != 1 or ka[0].split()[2] != want_k:
+                    q.append('bank registers after the load %s, blob %s' % (ka, want_k))
                 # before the load: the fresh core's own frames are R's too
                 pre = sorted(k for t, k in run.frames if t == 'H' and k < img[4])
                 q += compare_frames(ref, run.frames, 0, (pre[-1] + 1) if pre else 0, tag + ' before')
@@ -724,6 +744,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
 #  the reason: a regular expression one of the run's problems must match, so a
 #  plant counts as caught only for its own fault, not for any failure)
 AFTER = r' (L\d|D|W\d|C) after: frame \d+ differs'
+BANKS = r' (L\d|D|W\d|C): bank registers after the load '
 CHK = "else if (m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))"
 PLANTS = [
     ('ss_drop_stic', 'intv_ss_ctl.sv',
@@ -775,8 +796,9 @@ PLANTS = [
      [("                5'd19: ecnt <= ss_wdata[16:0];\n", "                5'd19: ;\n")], 'psgtest', 'astrosmash',
      AFTER),
     # build step 8: the CFG's CRC not checked (C: a blob of another CFG taken); the bank
-    # registers not restored (a load runs on with the fresh core's); an image without save
-    # states saved all the same
+    # registers not restored (a load runs on with the fresh core's: cart8test's windows all
+    # read alike and its ISR sets $0046 again every frame, so no frame shows it; the KA
+    # line after the load does); an image without save states saved all the same
     ('ss_cfg_unchecked', 'intv_ss_ctl.sv',
      [(CHK, "else if (w != 14'(SS_H_CFG_CRC)\n"
             "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],
@@ -784,7 +806,7 @@ PLANTS = [
     ('ss_bank_not_restored', 'intv_cart.sv',
      [("                bank[{ss_addr[2:0] - 3'd7, 2'(i)}] <= ss_wdata[8*i +: 8];",
        "                bank[{ss_addr[2:0] - 3'd7, 2'(i)}] <= bank[{ss_addr[2:0] - 3'd7, 2'(i)}];")],
-     'cartbank', 'psgtest', AFTER),
+     'cartbank', 'psgtest', BANKS),
     ('ss_noss_ignored', 'intv_ss_ctl.sv',
      [("                if (cart_noss && cart_ready)", "                if (1'b0 && cart_noss && cart_ready)")],
      'cartnoss', 'psgtest', r'NOSS: '),

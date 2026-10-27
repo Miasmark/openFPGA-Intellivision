@@ -525,8 +525,11 @@ PLANTS = [
      "if (y != 4'd0 && !paged[r]) begin", 'cart RAM in a paged range not shared by its pages'),
     # build step 9: the ECS Auto rule (intv_media's probe, intv_cart's m4): the ECS flag ignored
     # (Game Factory), the $4800 word not checked against $03FF (ecsnohook: $1234 there), the hook
-    # ignored (ecshook), the $500C header ignored (Atlantis), the $4000 map ignored (cart4000), no
-    # cartridge not on (NEGNOCART), the probe at $4801
+    # ignored (ecshook), the $500C header ignored (Atlantis), the off case ignored (a $4000-$47FF map:
+    # cart4000; the ECS incompatible tag: ecsoffcfg, ecsoffrom), no cartridge not on (NEGNOCART), the
+    # probe at $4801. intv_cart's m4 alone cannot be planted: the loader sets ECS_OFF for every page-0
+    # entry of $4000-$47FF that m4 counts (R, W or B: intv_loader's CFG and .rom paths; the table path
+    # has no B entries), so with m4 ignored every image keeps its mode (the fix9 run: not caught)
     ('auto_flag', 'intv_media.sv', "ecs_auto <= (res_ecs || res_none) ? 2'd1", "ecs_auto <= (res_none) ? 2'd1",
      'Auto: the ECS flag ignored'),
     ('auto_4800_any', 'intv_media.sv', "code48 <= c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0;",
@@ -535,8 +538,8 @@ PLANTS = [
      'Auto: the $4800 hook ignored'),
     ('auto_header_ignored', 'intv_media.sv', ": (code48 && hdr_ok) ? 2'd1", ": code48 ? 2'd1",
      'Auto: code at $4800 turns the ECS on whatever the header (the Imagic titles get its menu)'),
-    ('auto_m4_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": res_off ? 2'd0 : 2'd2;",
-     'Auto: $4000-$47FF mapped ignored'),
+    ('auto_off_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": 1'b0 ? 2'd0 : 2'd2;",
+     'Auto: never off ($4000-$47FF mapped, the ECS incompatible tag)'),
     # the step-9 review: the ECS_OFF flag (the "ECS incompatible" tag of a .rom or a CFG: ecsoffrom,
     # ecsoffcfg) ignored, so those cartridges run with the ECS attached
     ('auto_ecs_off_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": c_m4 ? 2'd0 : 2'd2;",

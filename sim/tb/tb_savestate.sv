@@ -60,6 +60,9 @@
 //   M c hash nz         at each freeze: FNV-1a over the SRAM's cart RAM area
 //                       ($18000-$1BFFF, 16,384 cells) and its nonzero cells
 //   MA c hash nz        the same when a load's state is in
+//   K c hash            at each freeze: FNV-1a over the 32 Intellicart bank
+//                       registers (intv_cart bank[0..31], one byte each)
+//   KA c hash           the same when a load's state is in
 //   W f c0 c1           a "wait f": machine cycle at its start and end
 //   D clks zero         the machine was not live for clks clk_sys; the
 //                       sound was 0 from zero clk_sys on (-1: never)
@@ -321,6 +324,7 @@ module tb_savestate;
         frz_q <= core.ssc.frozen;
         if (core.ssc.frozen && !frz_q) begin
             cram_hash("M");
+            bank_hash("K");
             frz_rf <= rframes;
             $fdisplay(fd, "Z %0d %06x %04x %04x %04x %04x %04x %04x %04x %04x %0d", cyc, core.timing.mpos,
                       core.machine.cpu.r[0], core.machine.cpu.r[1], core.machine.cpu.r[2],
@@ -334,6 +338,7 @@ module tb_savestate;
         set_req <= 1'b0;
         if (core.ssc.ld_applied) begin
             cram_hash("MA");
+            bank_hash("KA");
             if (rcyc_next >= 0) begin
                 set_val <= rcyc_next;
                 set_req <= 1'b1;
@@ -376,6 +381,13 @@ module tb_savestate;
             if (sram.mem[17'h18000 + 17'(i)] != 16'd0) nz++;
         end
         $fdisplay(fd, "%s %0d %08x %0d", tag, cyc, h, nz);
+    endtask
+
+    task automatic bank_hash(input string tag);
+        logic [31:0] h;
+        h = 32'h811C9DC5;
+        for (int i = 0; i < 32; i++) h = fnv(h, {24'd0, core.media.cart.bank[i]});
+        $fdisplay(fd, "%s %0d %08x", tag, cyc, h);
     endtask
 
     // ------------------------------------------------------------ bridge

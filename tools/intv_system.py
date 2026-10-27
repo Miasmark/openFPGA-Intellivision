@@ -102,6 +102,11 @@ PSG_MAP = psgm.MAP8910
 PSG_MASK = psgm.MASK
 
 
+def _bank0():
+    import cartfmt
+    return list(cartfmt.BANK0)
+
+
 def load_words(path):
     data = open(path, "rb").read()
     return [data[i] << 8 | data[i + 1] for i in range(0, len(data) - 1, 2)]
@@ -297,6 +302,7 @@ class SystemBus:
         self.presses = None             # scripted keys (press_pads): override self.pad
         self.zero = ()                  # MAME mode: unmapped ranges MAME reads as 0
         self.mame_map = False           # MAME's memory map (MAME_MAP_ZERO, no aliases)
+        self.bank0 = _bank0()           # no cartridge: intv_cart's bank registers (kept over resets)
         self.reset()
 
     def reset(self):
@@ -421,6 +427,8 @@ class SystemBus:
                 self.gram[a & 0x1FF] = value & 0xFF
         if self.cart is not None:
             self.cart.write(a, value)
+        elif 0x40 <= a <= 0x5F:
+            self.bank0[a & 0x1F] = value & 0xFF     # intv_cart takes them with no cartridge too
 
     def _stic_write(self, n, value, cycle):
         t = self._t(cycle)
@@ -436,7 +444,9 @@ class SystemBus:
                 "psg": list(self.psg), "handshake": int(self.handshake(cycle)),
                 "csmode": self.csmode,
                 "sel": list(self.cart.sel) if self.cart is not None else [0] * 16,
-                "bank": list(getattr(self.cart, "bank", [0] * 32)) if self.cart is not None else [0] * 32,
+                # no cartridge: the loader still finishes and sets the bank registers to their
+                # start (identity, intv_cart.sv; step 8's review); the model's cart is None then
+                "bank": list(getattr(self.cart, "bank", [0] * 32)) if self.cart is not None else list(self.bank0),
                 "fifo": list(self.vid.fifo), "counter": self.vid.counter}
 
 

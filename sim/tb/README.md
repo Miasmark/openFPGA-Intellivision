@@ -19,7 +19,8 @@ AS6C2016 SRAM with its read and write timing checked). For every image of
 `sim/regress/step2_set.csv` it computes each line the bench prints from the
 mapper model and compares: CRC, words, layout, flags, slot status, the stored
 image, ECS/EXEC/GROM/Intellivoice ROMs, the full mapped space at reset paging
-and at pages 1, 2, 3 and 15 of every 4K range, after a write to every
+and at pages 1, 2, 3 and 15 of every 4K range, every 2K of the Intellicart
+memory through the bank windows (all bank registers swept), after a write to every
 address, after a machine reset, and the state round trip (save, clear,
 restore), and last a slot read (0x0080) and "all complete" again with no
 cartridge stream, which must not run the loader's finish again. The host

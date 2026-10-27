@@ -26,6 +26,12 @@
 //   mapped   the mapped-space CRC of tools/mapper/README.md (each paged range's
 //            pages read to find its last mapped page)
 //   B        each 4K range at pages 1, 2, 3 and 15 ($xA5y to $xFFF)
+//   K        the bank sweep: all 32 Intellicart bank registers set to v
+//            (v = 0, 8, ... 248: each 2K of the Intellicart memory in turn),
+//            then every 2K window whose first word is a bank window (attr B)
+//            read: "K v CRC" (CRC of nothing = 0); the registers then go back
+//            to their start. It reaches Intellicart memory no CPU address
+//            maps at the start values (a CFG's [preload], fix 8)
 //   C        a write to every address (pattern P), then the space
 //   D        page selects (r + 5) & 15, machine reset: state words ssd, the
 //            space
@@ -528,6 +534,25 @@ module tb_loader;
             end
             cart_wr(16'(r * 4096 + 4095), 16'(r * 4096 + 32'hA50));
         end
+
+        // ---- K: the bank sweep (every 2K of the Intellicart memory through
+        // the bank windows), then the bank registers back at their start
+        for (int k = 0; k < 32; k++) begin
+            logic [23:0] q;
+            for (int i = 0; i < 32; i++) cart_wr(16'(32'h40 + i), 16'(k * 8));
+            c = 32'hFFFFFFFF;
+            for (int w = 0; w < 32; w++) begin
+                cart_op(1'b0, 16'(w * 2048), 16'd0, q);
+                if (q[20])
+                    for (int i = 0; i < 2048; i++) begin
+                        cart_op(1'b0, 16'(w * 2048 + i), 16'd0, q);
+                        c = crc_byte(c, {2'd0, q[21:16]});
+                        c = crc_word(c, q[15:0]);
+                    end
+            end
+            $fdisplay(outf, "K %0d %08X", k * 8, ~c);
+        end
+        for (int i = 0; i < 32; i++) cart_wr(16'(32'h40 + i), 16'({i[3:0], i[4], 3'd0}));
 
         // ---- C: write everywhere, D: after a machine reset
         for (int a = 0; a < 65536; a++)

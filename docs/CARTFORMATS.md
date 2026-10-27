@@ -26,18 +26,27 @@ only):
 | Slot | File | Use |
 |---|---|---|
 | 0x100 Cartridge | `.bin` `.int` `.itv` (raw) or `.rom` (Intellicart) | the image; a `.rom` is recognised by its first three bytes, whatever its name |
-| 0x101 Cartridge CFG | `.cfg` | optional; used with a raw image only (ignored with a `.rom`) |
+| 0x101 Cartridge CFG | `.cfg` | found by the core: NAME.cfg beside NAME.bin; used with a raw image only (ignored with a `.rom`) |
 
-The Pocket reloads the core when either slot is loaded (parameters `0x109`),
-and streams every slot that has a file. The loader reads the CFG slot's
-length from the data table (as the cartridge's), so the bridge's pad bytes
-are never parsed. A CFG slot the data table lists with size 0 means no CFG:
-should the host ever reload a cartridge alone (no core reload), a CFG
-streamed earlier is then not used; one still listed applies to the new
-cartridge (tb_loader's reloads RELOAD2 and RELOAD3). The Pocket keeps the CFG slot's file selected until the
-user changes it: a CFG chosen for one game stays with the next game loaded
-unless it is cleared (owner check on hardware: how the menu clears an
-optional slot).
+The Pocket reloads the core when a cartridge is loaded (parameters `0x109`)
+and streams it. Since build step 9b the user does not pick the CFG: the CFG
+slot is a deferload slot (parameters `0x8`, not in the menu) and the core
+finds the CFG by the cartridge's name (`apf_cfgfetch.sv`, started by
+`apf_datatable.sv` after "all complete" for a new cartridge). It asks the
+host for the cartridge's path (target command 0x0190), puts `cfg` in place
+of its extension, opens that file into the CFG slot (0x0192: not found means
+no CFG) and reads it (0x0180) to the slot's bridge address, so the loader
+gets it exactly as a streamed slot; only then does the loader get the
+lengths (len_valid). Its length: the data table's size for the slot if the
+host puts one there after the open, else found by reading in chunks
+(256 bytes, then 128 down to 4, then 3, 2, 1 at the end). The core keeps
+`NAME.cfg` and `NAME.CFG` alike (FAT ignores case). The test pattern's
+CFG second card shows the result. The loader cuts the CFG at that length,
+so the bridge's pad bytes are never parsed; a fetch that finds nothing
+gives "no CFG" (size 0), so a CFG of an earlier cartridge in the session is
+not used (tb_loader's reloads RELOAD2 and RELOAD3: none, and the same file
+under the second cartridge's name). An "all complete" with no new
+cartridge does not fetch again.
 
 ## 2 BIN + CFG
 

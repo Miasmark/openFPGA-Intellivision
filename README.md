@@ -42,6 +42,8 @@ The core needs the console's own ROMs, supplied by the user:
 | `ivoice.bin` | Intellivoice SP0256-012 ROM, 2,048 bytes | for Intellivoice titles |
 
 They go in `/Assets/intv/common/` on the SD card (DESIGN.md section 5.6).
+Cartridges go there too, and a `.bin` that needs a `.cfg` takes it from
+beside it: `NAME.cfg` next to `NAME.bin` is loaded automatically.
 
 ## License
 

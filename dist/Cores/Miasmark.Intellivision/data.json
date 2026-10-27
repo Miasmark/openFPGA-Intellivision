@@ -15,7 +15,8 @@
         "name": "Cartridge CFG",
         "id": "0x101",
         "required": false,
-        "parameters": "0x109",
+        "deferload": true,
+        "parameters": "0x8",
         "extensions": ["cfg"],
         "size_maximum": "0x4000",
         "address": "0x01000000"

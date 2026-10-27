@@ -18,7 +18,12 @@
 //     apf_datatable.sv len_chk): green = the data table, agreeing with the
 //     host's 0x0082 size; orange = they disagree (the table's was used);
 //     cyan = the table had no entry (the 0x0082 size was used); grey = the
-//     table, with no 0x0082 size to check it against.
+//     table, with no 0x0082 size to check it against. The CFG's second card
+//     shows how the core looked for NAME.cfg beside the cartridge
+//     (apf_cfgfetch's res): green = found, its length from the data table;
+//     cyan = found, its length found by reading; grey = no such file;
+//     orange = the host refused a command; red = the cartridge's path has
+//     no extension; purple = over 16 KiB; black = not looked for.
 //   - The outermost pixel ring of the playfield is white, to check the
 //     crop; the border outside it is blue.
 //
@@ -33,6 +38,7 @@ module test_pattern (
     input  wire logic [11:0] slot_st,   // 2 bits a slot: 0 empty, 1 other size, 2 ok
     input  wire logic [5:0]  slot_req,  // slot is required
     input  wire logic [1:0]  len_st,    // cartridge length source (see above)
+    input  wire logic [2:0]  cfg_res,   // the CFG fetch (see above)
     output logic      [3:0]  colour
 );
 
@@ -70,6 +76,9 @@ module test_pattern (
             colour = (cx[0] ^ cy[0]) ? 4'd7 : 4'd0;                 // card grid
         else if (cx >= 5'd12)
             colour = 4'd0;
+        else if (cx == 5'd3)                                        // the CFG fetch
+            colour = cfg_res == 3'd1 ? 4'd5 : cfg_res == 3'd2 ? 4'd9 : cfg_res == 3'd3 ? 4'd8
+                   : cfg_res == 3'd4 ? 4'd10 : cfg_res == 3'd5 ? 4'd2 : cfg_res == 3'd6 ? 4'd15 : 4'd0;
         else if (cx == 5'd1 && st != 2'd0)                          // cartridge length
             colour = len_st == 2'd1 ? 4'd5 : len_st == 2'd2 ? 4'd10
                    : len_st == 2'd3 ? 4'd9 : 4'd8;

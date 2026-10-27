@@ -51,7 +51,7 @@ import cartfmt as cf      # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
-       'apf_datatable.sv']
+       'apf_datatable.sv', 'apf_cfgfetch.sv']
 OTHER = [os.path.join(CORE, 'core_bridge_cmd.v'),
          os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(ROOT, 'src', 'fpga', 'pocket_utils', 'data_loader.sv'),
@@ -134,13 +134,29 @@ def blockcrc(cart, r):
     return crc32(bytes(buf))
 
 
-def load_model(img, tab):
-    """cartfmt.Loaded for a bench image (its CFG's data table length too)."""
+def fetch_expect(img):
+    """(res, the CFG the loader gets) of apf_cfgfetch for a bench image: the CFG is found by the
+    cartridge's name (build step 9b). res: 0 no cartridge (no fetch), 1 found with the table's
+    size, 2 found with no size in the table (img['nodt']: the length found by reading), 3 none
+    beside the cartridge (none, or another name: img['miss']), 4 the host refused the read (the
+    table's size past the file: img['cfglenadj']), 5 a cartridge path without an extension
+    (img['nodot'])."""
     cfg = img.get('cfg')
-    cfg_len = None
-    if cfg is not None and not img.get('cfgnotable'):
-        cfg_len = len(cfg) + img.get('cfglenadj', 0)
-    return cf.load(img['data'], cfg, tab, tab.pages, cfg_len=cfg_len)
+    if img.get('neg') == 'nocart':
+        return 0, None
+    if img.get('nodot'):
+        return 5, None
+    if cfg is None or img.get('miss') or len(cfg) == 0:
+        return 3, None
+    if img.get('cfglenadj'):
+        return 4, None
+    return (2 if img.get('nodt') else 1), cfg
+
+
+def load_model(img, tab):
+    """cartfmt.Loaded for a bench image, with the CFG the fetch gives the loader."""
+    cfg = fetch_expect(img)[1]
+    return cf.load(img['data'], cfg, tab, tab.pages, cfg_len=len(cfg) if cfg is not None else None)
 
 
 def ecs_auto(ld):
@@ -187,7 +203,9 @@ def expect(img, tab, bios):
     L = []
     L.append('status crc %s words %d layout %d flags %02X hit %d err %d lenst %d' % (
         crc, ld.words, ld.layout, ld.flags, int(ld.hit), err, lenst))
-    cfgslot = (2 << 2) if img.get('cfg') is not None else 0
+    fres, fcfg = fetch_expect(img)
+    L.append('fetch res %d len %d' % (fres, len(fcfg) if fcfg is not None else 0))
+    cfgslot = (2 << 2) if fcfg is not None else 0
     L.append('slots %03X' % (cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
     L.append('ecs auto %d' % ecs_auto(ld))
     L.append('format cfgcrc %08X noss %d ferr %02X' % (ld.cfg_crc, int(ld.noss), max(ld.err, 0)))
@@ -301,10 +319,13 @@ def expect(img, tab, bios):
     for i in range(5, 15):
         L.append('ssh %d %08X' % (i, ssf[i]))
     # the reload: another cartridge (img['reload']) in the same session,
-    # its own 0x0082 size, in the table or not (img['notable2'])
+    # its own 0x0082 size, in the table or not (img['notable2']); its CFG is
+    # fetched by its own name: the first CFG's file under it, unless
+    # img['cfgclear2'] (none beside it)
     if img.get('reload'):
         rimg = dict(img['reload'])
-        rcfg = img.get('cfg') if not img.get('cfgclear2') else None   # a CFG kept in the table
+        rcfg = fcfg if not img.get('cfgclear2') else None
+        rres = fres if rcfg is not None else 3
         rl = cf.load(rimg['data'], rcfg, tab, tab.pages, cfg_len=len(rcfg) if rcfg is not None else None)
         rsram = dict(sram)
         # the session's SRAM: the first image's words stay where the second does not write
@@ -314,6 +335,7 @@ def expect(img, tab, bios):
             rsram[a] = v
         L.append('reload status crc %08X words %d layout %d flags %02X hit %d err 0 lenst %d' % (
             rl.crc, rl.words, rl.layout, rl.flags, int(rl.hit), 3 if img.get('notable2') else 1))
+        L.append('reload fetch res %d len %d' % (rres, len(rcfg) if rcfg is not None else 0))
         L.append('reload slots %03X' % (2 | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
         L.append('reload ecs auto %d' % ecs_auto(rl))
         L.append('reload image %08X' % crc32(struct.pack('>%dH' % rl.words, *[rsram[i] for i in range(rl.words)])))
@@ -357,21 +379,35 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_loader')
 
 
+def pocket_paths(img, data, tag=''):
+    """The cartridge's path on the SD card as the host gives it (0x0190), and the path of the
+    CFG beside it as the host has it (img['cfgname'] another name, img['cartname'] /
+    img['cartdir'] the cartridge's own)."""
+    d = img.get('cartdir', '/Assets/intv/common/')
+    name = img.get('cartname' + tag, img['crc'] + tag + ('.rom' if cf.is_rom(data) else '.bin'))
+    stem = name.rsplit('.', 1)[0] if '.' in name else name
+    return d + name, d + img.get('cfgname', stem + '.cfg')
+
+
 def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cpath=None):
     out = os.path.join(work, 'out_%s.txt' % img['crc'])
     args = [binary, '+out=' + out, '+seed=%d' % (k + 1)]
     if cpath:
         args.append('+cfg=' + cpath)
+    cart_p, cfg_p = pocket_paths(img, img['data'])
+    args += ['+cartpath=' + cart_p, '+cfgpath=' + cfg_p]
+    if img.get('nodt'):
+        args.append('+dtupdate=0')
     if img.get('cfglenadj'):
-        args.append('+cfglenadj=%d' % img['cfglenadj'])
-    if img.get('cfgnotable'):
-        args.append('+cfgnotable=1')
+        args.append('+dtcfgadj=%d' % img['cfglenadj'])      # the table's size past the file
     if path2:
         args.append('+cart2=' + path2)
+        cart2_p, cfg2_p = pocket_paths(img, img['reload']['data'], '_2')
+        args += ['+cart2path=' + cart2_p, '+cfg2path=' + cfg2_p]
+        if not img.get('cfgclear2'):
+            args.append('+cfg2same=1')
     if img.get('notable2'):
         args.append('+notable2=1')
-    if img.get('cfgclear2'):
-        args.append('+cfgclear2=1')
     if img.get('neg') != 'nocart':
         args.append('+cart=' + path)
     if img.get('lenadj'):
@@ -548,12 +584,23 @@ PLANTS = [
      'Auto: no cartridge not on'),
     ('auto_probe_4801', 'intv_media.sv', "(pr_2nd ? 16'h500C : 16'h4800)", "(pr_2nd ? 16'h500C : 16'h4801)",
      'Auto: the probe at $4801'),
+    # build step 9b: the CFG found by the cartridge's name (apf_cfgfetch): the extension not
+    # replaced (the host is asked for NAME.bin), len_valid not held for the fetch, the length
+    # found by reading one too long, "not found" taken as a refusal
+    ('fetch_no_ext', 'apf_cfgfetch.sv', "b_d[31 - 8 * ext_p[1:0] -: 8] <= ext_b;",
+     "b_d[31 - 8 * ext_p[1:0] -: 8] <= b_q[31 - 8 * ext_p[1:0] -: 8];", 'CFG fetch: the extension not replaced'),
+    ('fetch_not_waited', 'apf_datatable.sv', "                    f_start <= 1'b1;\n                    st <= D_FWAIT;",
+     "                    f_start <= 1'b1;\n                    st <= D_SET;", 'CFG fetch: the length given before the CFG came'),
+    ('fetch_fb_len', 'apf_cfgfetch.sv', "                        len <= o;", "                        len <= o + 32'd1;",
+     'CFG fetch: the length found by reading one too long'),
+    ('fetch_notfound_err', 'apf_cfgfetch.sv', "                        if (code == 3'd3) begin\n                            res <= 3'd3;",
+     "                        if (code == 3'd3) begin\n                            res <= 3'd4;", 'CFG fetch: not found taken as a refusal'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
-                'ecsoffcfg', 'ecsoffrom')
+                'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS')
 
 
 def main():
@@ -611,8 +658,8 @@ def main():
         import build_images
         for im in build_images.images():
             imgs.append(dict(im, crc=im['name'], image=im['name'], step8=True))
-        # reloads with a CFG (step 8): the CFG listed with size 0 for the second cartridge (none
-        # applies), or still listed (it applies to the second cartridge too)
+        # reloads with a CFG (step 8): none beside the second cartridge, or the same CFG file
+        # under its name (the fetch finds it again)
         s8 = {i['name']: i for i in imgs if i.get('step8')}
         if 'zoo1' in s8 and 'synthetic:b' in byname:
             imgs.append(dict(s8['zoo1'], name='reload:zoo1 + CFG then synthetic:b, CFG cleared', crc='RELOAD2',
@@ -620,6 +667,29 @@ def main():
         if 'zoo5' in s8 and 'zoo3' in s8:
             imgs.append(dict(s8['zoo5'], name='reload:zoo5 + CFG then zoo3\'s image, CFG kept', crc='RELOAD3',
                              reload=dict(s8['zoo3'], cfg=None), dtfirst=1))
+        # build step 9b: the CFG found by the cartridge's name (apf_cfgfetch): no size in the
+        # table (its length found by reading), an odd length with no final line feed (by
+        # reading: the last read below 4 bytes), the cartridge's name in capitals, a '.' in a
+        # folder, a path without an extension (no CFG), a CFG under another name (not found),
+        # and a .rom with a CFG beside it (fetched, ignored)
+        if 'zoo2' in s8:
+            z = s8['zoo2']
+            odd = z['cfg'].rstrip(b'\r\n')
+            if len(odd) % 2 == 0:
+                odd = b';x\n' + odd
+            imgs.append(dict(z, name='cfg fetch: no size in the table', crc='CFGFB', nodt=True))
+            imgs.append(dict(z, name='cfg fetch: odd length, no final line feed, no size in the table',
+                             crc='CFGODD', cfg=odd, nodt=True))
+            imgs.append(dict(z, name='cfg fetch: odd length, no final line feed', crc='CFGODDT', cfg=odd))
+            imgs.append(dict(z, name='cfg fetch: ZOO2X.BIN, zoo2x.cfg', crc='CFGUPPER',
+                             cartname='ZOO2X.BIN', cfgname='zoo2x.cfg'))
+            imgs.append(dict(z, name='cfg fetch: a dot in a folder', crc='CFGDOTDIR', cartdir='/Assets/intv/v1.0/'))
+            imgs.append(dict(z, name='cfg fetch: no extension', crc='CFGNODOT', cartname='zoo2x', nodot=True))
+            imgs.append(dict(z, name='cfg fetch: the CFG under another name', crc='CFGMISS',
+                             cfgname='other.cfg', miss=True))
+            if 'rombank' in s8:
+                imgs.append(dict(s8['rombank'], name='cfg fetch: a .rom with a CFG beside it', crc='ROMCFG',
+                                 cfg=z['cfg']))
         # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
         # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),
         # the ECS incompatible tags (ecsoffcfg, ecsoffrom: off)

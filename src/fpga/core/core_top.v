@@ -448,6 +448,9 @@ always @(*) begin
     32'h50xxxxxx: begin
         bridge_rd_data <= ss_bridge_rd_data;    // the save-state blob (intv_ss_ctl)
     end
+    32'h60xxxxxx: begin
+        bridge_rd_data <= cfg_st_rd_data;       // the CFG fetch's path struct (apf_cfgfetch)
+    end
     endcase
 end
 
@@ -507,23 +510,28 @@ end
 
 // bridge target commands
 // synchronous to clk_74a
+// The CFG beside the cartridge (apf_cfgfetch, in apf_datatable) is their only
+// user: get filename, open file, data slot read. Its struct RAM (the path,
+// flags and size) is at 0x60000000, for the request and the response alike.
 
-    reg             target_dataslot_read = 1'b0;
-    reg             target_dataslot_write = 1'b0;
-    reg             target_dataslot_getfile = 1'b0;
-    reg             target_dataslot_openfile = 1'b0;
+    wire            target_dataslot_read;
+    wire            target_dataslot_write = 1'b0;
+    wire            target_dataslot_getfile;
+    wire            target_dataslot_openfile;
 
     wire            target_dataslot_ack;
     wire            target_dataslot_done;
     wire    [2:0]   target_dataslot_err;
 
-    reg     [15:0]  target_dataslot_id = 16'd0;
-    reg     [31:0]  target_dataslot_slotoffset = 32'd0;
-    reg     [31:0]  target_dataslot_bridgeaddr = 32'd0;
-    reg     [31:0]  target_dataslot_length = 32'd0;
+    wire    [15:0]  target_dataslot_id;
+    wire    [31:0]  target_dataslot_slotoffset;
+    wire    [31:0]  target_dataslot_bridgeaddr;
+    wire    [31:0]  target_dataslot_length;
 
-    wire    [31:0]  target_buffer_param_struct;
-    wire    [31:0]  target_buffer_resp_struct;
+    wire    [31:0]  target_buffer_param_struct = 32'h6000_0000;
+    wire    [31:0]  target_buffer_resp_struct  = 32'h6000_0000;
+    wire    [31:0]  cfg_st_rd_data;             // the struct RAM, held from its last read
+    wire    [2:0]   cfg_fetch_res;
 
 // bridge data slot access
 // synchronous to clk_74a
@@ -643,7 +651,24 @@ apf_datatable #(
     .len_chk    ( cart_len_chk ),
     .cfg_len    ( cfg_len ),
     .cfg_inlist ( cfg_inlist ),
-    .len_valid  ( cart_len_valid )
+    .len_valid  ( cart_len_valid ),
+    .t_read         ( target_dataslot_read ),
+    .t_getfile      ( target_dataslot_getfile ),
+    .t_openfile     ( target_dataslot_openfile ),
+    .t_id           ( target_dataslot_id ),
+    .t_offset       ( target_dataslot_slotoffset ),
+    .t_bridgeaddr   ( target_dataslot_bridgeaddr ),
+    .t_length       ( target_dataslot_length ),
+    .t_done         ( target_dataslot_done ),
+    .t_err          ( target_dataslot_err ),
+    .bridge_addr    ( bridge_addr ),
+    .bridge_wr      ( bridge_wr ),
+    .bridge_wr_data ( bridge_wr_data ),
+    .bridge_rd      ( bridge_rd ),
+    .st_rd_data     ( cfg_st_rd_data ),
+    .fetch_res      ( cfg_fetch_res ),
+    .fetch_code     ( ),
+    .fetch_len      ( )
 );
 
 
@@ -808,6 +833,14 @@ intv_core machine_side (
     wire    [3:0]   pat_colour, colour;
 
 // Required slots: cartridge, EXEC, GROM (data.json)
+// The CFG fetch's result (clk_74a, set once a load) into clk_sys for the
+// CFG's second card
+    reg     [2:0]   cfg_res_s1 = 3'd0, cfg_res_s2 = 3'd0;
+always @(posedge clk_sys) begin
+    cfg_res_s1 <= cfg_fetch_res;
+    cfg_res_s2 <= cfg_res_s1;
+end
+
 test_pattern pattern (
     .in_pf      ( in_pf ),
     .pf_x       ( pf_x ),
@@ -815,6 +848,7 @@ test_pattern pattern (
     .slot_st    ( slot_st ),
     .slot_req   ( 6'b001101 ),
     .len_st     ( cart_len_st ),
+    .cfg_res    ( cfg_res_s2 ),
     .colour     ( pat_colour )
 );
 

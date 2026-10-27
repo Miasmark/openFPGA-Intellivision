@@ -65,7 +65,7 @@ module tb_timing;
 
     test_pattern pattern (
         .in_pf(in_pf), .pf_x(pf_x), .pf_y(pf_y),
-        .slot_st(SLOT_ST), .slot_req(6'b001101), .len_st(2'd2), .colour(colour)
+        .slot_st(SLOT_ST), .slot_req(6'b001101), .len_st(2'd2), .cfg_res(3'd2), .colour(colour)
     );
 
     logic [23:0] video_rgb;
@@ -487,17 +487,19 @@ module tb_timing;
             ok = 1;
             // indicators: cart ok (green), cfg empty optional (grey), EXEC ok,
             // GROM other size (yellow), ECS empty (grey), IVOICE ok; the
-            // cartridge's second card its length source (len_st 2: orange)
+            // cartridge's second card its length source (len_st 2: orange),
+            // the CFG's second card the CFG fetch (cfg_res 2: cyan)
             begin
                 int want [6] = '{5, 8, 5, 6, 8, 5};
                 for (int s = 0; s < 6; s++) begin
                     ok &= lines_rgb[oy + 184][ox + s * 16 + 3] == pal(want[s]);
-                    if (s > 0) ok &= lines_rgb[oy + 184][ox + s * 16 + 12] == pal(want[s]);
+                    if (s > 1) ok &= lines_rgb[oy + 184][ox + s * 16 + 12] == pal(want[s]);
                 end
+                ok &= lines_rgb[oy + 184][ox + 28] == pal(9);
                 ok &= lines_rgb[oy + 184][ox + 12] == pal(10);
                 ok &= lines_rgb[oy + 184][ox + 120] == pal(0);
             end
-            check(ok, "slot indicators: green+orange / grey / green / yellow / grey / green, then black");
+            check(ok, "slot indicators: green+orange / grey+cyan / green / yellow / grey / green, then black");
         end
 
         $display("TB_TIMING %s", fails == 0 ? "pass" : $sformatf("FAIL (%0d)", fails));

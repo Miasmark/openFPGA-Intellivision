@@ -12,7 +12,8 @@ System ROMs (yours to supply, in /Assets/intv/common/):
   ecs.bin      ECS ROM, 24,576 bytes (optional, for ECS games)
   ivoice.bin   Intellivoice SP0256-012 ROM, 2,048 bytes (optional)
 
-Cartridges: .int / .bin / .rom / .itv, with an optional .cfg.
+Cartridges: .int / .bin / .rom / .itv. A .bin that needs a .cfg takes
+NAME.cfg from beside NAME.bin by itself (nothing to pick).
 
 ECS (menu "ECS", taken at the next Reset or load): Auto attaches it as
 each cartridge needs (ECS games: on, with the ECS title where the game

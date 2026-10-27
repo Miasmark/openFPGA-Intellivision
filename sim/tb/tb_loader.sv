@@ -15,6 +15,22 @@
 // apf_datatable carry it to intv_media on clk_sys, whose SRAM is the
 // AS6C2016 model with its timing checks.
 //
+// The CFG (+cfg=) is not streamed: the CFG slot is a deferload slot and
+// apf_cfgfetch (in apf_datatable) asks for it by name with target commands
+// (+cfgpush=1 streams it as before build step 9b, for no current case). The
+// host serves them while it waits (serve_target, as the Pocket polls
+// 0xF8001000): 0x0190 gives the cartridge's path (+cartpath=; after a
+// reload +cart2path=) in the struct at the given bridge address, big-endian
+// bytes, NUL ended; 0x0192 reads the struct's path and opens the CFG when
+// it names +cfgpath= (+cfg2path= for the reload's cartridge, which has a CFG
+// only with +cfg2same=1, the same file), compared without case as FAT does,
+// else answers 3 (not found); opened, it writes the CFG's size into the data
+// table (+dtupdate=0: not; +dtcfgadj=N: the size plus N); 0x0180 writes the
+// CFG's bytes [offset, offset + length) to the bridge address as 32-bit
+// words (the last padded), or answers 2 when that runs past the file.
+// "fetch res R len N" (apf_cfgfetch's res, the length used) follows the
+// status.
+//
 // Then, through the cartridge bus port (as the CPU will reach it), the
 // auxiliary SRAM port, the system ROM read ports and the state port:
 //   status   CRC, words, layout, flags, hit, err, slot status; format,
@@ -48,15 +64,15 @@
 //   hazard   after all that, the host reads a slot (0x0080) and sends "all
 //            complete" (0x008F) again without a cartridge stream: the
 //            loader must not run its finish again (busy stays low, the page
-//            selects stay): "hazard busy B ready R" and the select words
-//   reload   (+cfgclear2=1: the data table lists the CFG slot with size 0
-//            for the reload, as with no CFG chosen; without it, a CFG of the
-//            first load stays listed and applies to the second cartridge)
-//            with +cart2=, a user reload of another cartridge in the same
+//            selects stay; no CFG is fetched again): "hazard busy B ready R"
+//            and the select words
+//   reload   with +cart2=, a user reload of another cartridge in the same
 //            session (no power-on reset): reset enter, its 0x0082 with its
 //            own size, its bytes, the data table with its length (or no
 //            entry with +notable2=1), all complete, reset exit; the loader
-//            must map it: "reload status", "reload slots", "reload image",
+//            must map it, with the CFG fetched for its own name (+cart2path=;
+//            +cfg2same=1: the first CFG's file under that name, else none):
+//            "reload status", "reload fetch", "reload slots", "reload image",
 //            the state words rss and, after a machine reset, the space R
 //
 // +cart= +exec= +grom= +ecs= +ivoice= (files; a missing one is not loaded),
@@ -126,12 +142,12 @@ module tb_loader;
         .savestate_load(), .savestate_load_ack(1'b0), .savestate_load_busy(1'b0),
         .savestate_load_ok(1'b0), .savestate_load_err(1'b0),
         .osnotify_inmenu(),
-        .target_dataslot_read(1'b0), .target_dataslot_write(1'b0),
-        .target_dataslot_getfile(1'b0), .target_dataslot_openfile(1'b0),
-        .target_dataslot_ack(), .target_dataslot_done(), .target_dataslot_err(),
-        .target_dataslot_id(16'd0), .target_dataslot_slotoffset(32'd0),
-        .target_dataslot_bridgeaddr(32'd0), .target_dataslot_length(32'd0),
-        .target_buffer_param_struct(), .target_buffer_resp_struct(),
+        .target_dataslot_read(t_read), .target_dataslot_write(1'b0),
+        .target_dataslot_getfile(t_getfile), .target_dataslot_openfile(t_openfile),
+        .target_dataslot_ack(), .target_dataslot_done(t_done), .target_dataslot_err(t_err),
+        .target_dataslot_id(t_id), .target_dataslot_slotoffset(t_offset),
+        .target_dataslot_bridgeaddr(t_bridgeaddr), .target_dataslot_length(t_length),
+        .target_buffer_param_struct(32'h6000_0000), .target_buffer_resp_struct(32'h6000_0000),
         .datatable_addr(datatable_addr), .datatable_wren(datatable_wren),
         .datatable_data(datatable_data), .datatable_q(datatable_q)
     );
@@ -153,13 +169,26 @@ module tb_loader;
     wire logic [31:0] cart_len, cfg_len;
     wire logic [1:0]  len_chk;
     wire logic        len_valid, cfg_inlist;
+    wire logic        t_read, t_getfile, t_openfile, t_done;
+    wire logic [2:0]  t_err, fetch_res;
+    wire logic [15:0] t_id;
+    wire logic [31:0] t_offset, t_bridgeaddr, t_length, st_rd_data, fetch_len;
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire logic [2:0]  fetch_code;
+    /* verilator lint_on UNUSEDSIGNAL */
     apf_datatable dtab (
         .clk(clk_74a), .allcomplete(dataslot_allcomplete),
         .wr_req(dataslot_requestwrite), .wr_id(dataslot_requestwrite_id),
         .wr_size(dataslot_requestwrite_size),
         .dt_addr(datatable_addr), .dt_wren(datatable_wren), .dt_data(datatable_data),
         .dt_q(datatable_q), .cart_len(cart_len), .len_chk(len_chk), .cfg_len(cfg_len),
-        .cfg_inlist(cfg_inlist), .len_valid(len_valid)
+        .cfg_inlist(cfg_inlist), .len_valid(len_valid),
+        .t_read(t_read), .t_getfile(t_getfile), .t_openfile(t_openfile), .t_id(t_id),
+        .t_offset(t_offset), .t_bridgeaddr(t_bridgeaddr), .t_length(t_length),
+        .t_done(t_done), .t_err(t_err),
+        .bridge_addr(bridge_addr), .bridge_wr(bridge_wr), .bridge_wr_data(bridge_wr_data),
+        .bridge_rd(bridge_rd), .st_rd_data(st_rd_data),
+        .fetch_res(fetch_res), .fetch_code(fetch_code), .fetch_len(fetch_len)
     );
 
     // ---------------------------------------------------------------- DUT
@@ -244,6 +273,9 @@ module tb_loader;
     // --------------------------------------------------------- host side
     int gap = 75, jitter = 0, seed = 1, dtfirst = 0, lenadj = 0, reqadj = 0, notable = 0;
     int cfglenadj = 0, cfgnotable = 0;
+    int cfgpush = 0, dtupdate = 1, dtcfgadj = 0, cfg2same = 0;
+    string cartpath = "", cfgpath = "", cart2path = "", cfg2path = "";
+    bit    reloaded = 1'b0, cfg_open = 1'b0;
     logic [7:0] pad = 8'hA5;
 
     task automatic bwrite(input logic [31:0] a, input logic [31:0] d);
@@ -259,7 +291,7 @@ module tb_loader;
         @(negedge clk_74a);
         bridge_rd = 1'b0;
         repeat (4) @(negedge clk_74a);
-        d = cmd_bridge_rd_data;
+        d = a[31:24] == 8'h60 ? st_rd_data : cmd_bridge_rd_data;    // core_top's read mux
     endtask
     task automatic host_cmd(input logic [15:0] cmd, input logic [31:0] p20, input logic [31:0] p24);
         logic [31:0] st;
@@ -311,13 +343,88 @@ module tb_loader;
         end
     endtask
     task automatic send_table();
-        // data.json order: 0x100 .. 0x106; size 0 for a slot not loaded
+        // data.json order: 0x100 .. 0x106; size 0 for a slot not loaded (and
+        // for the deferload CFG slot, unless it is streamed: +cfgpush)
         for (int s = 0; s < 7; s++) begin
             bwrite(32'hF800_2000 + 8 * s, ((s == 0 && notable != 0) || (s == 1 && cfgnotable != 0)) ? 32'h1FF
                                                                                                : 32'h100 + s);
-            bwrite(32'hF800_2004 + 8 * s, (s < 6 && floaded[s]) ? fsize[s] + (s == 0 ? lenadj : 0)
-                                                                + (s == 1 ? cfglenadj : 0) : 0);
+            bwrite(32'hF800_2004 + 8 * s, (s < 6 && floaded[s] && (s != 1 || cfgpush != 0))
+                                          ? fsize[s] + (s == 0 ? lenadj : 0) + (s == 1 ? cfglenadj : 0) : 0);
         end
+    endtask
+
+    // ---------------------------------------------- target commands (host)
+    function automatic string lower(input string x);
+        string r;
+        r = x;
+        for (int i = 0; i < r.len(); i++)
+            if (r.getc(i) >= 8'h41 && r.getc(i) <= 8'h5A) r.putc(i, r.getc(i) + 8'd32);
+        return r;
+    endfunction
+    int ntarget = 0;
+    task automatic serve_target();
+        logic [31:0] t0, p20, p24, p28, p2c, w;
+        logic [2:0]  code;
+        string       path, want;
+        bread(32'hF800_1000, t0);
+        if (t0[31:16] != 16'h636D) return;
+        ntarget++;
+        bwrite(32'hF800_1000, {16'h6275, t0[15:0]});               // busy
+        bread(32'hF800_1020, p20);
+        bread(32'hF800_1024, p24);
+        bread(32'hF800_1028, p28);
+        bread(32'hF800_102C, p2c);
+        code = 3'd1;                                               // slot not defined
+        case (t0[15:0])
+            16'h0190: if (p20 == 32'h100) begin
+                path = reloaded ? cart2path : cartpath;
+                for (int i = 0; i < 64; i++) begin
+                    w = 32'd0;
+                    for (int k = 0; k < 4; k++)
+                        w[31 - 8*k -: 8] = (4*i + k < path.len()) ? path.getc(4*i + k) : 8'h00;
+                    bwrite(p24 + 4*i, w);
+                end
+                code = 3'd0;
+            end
+            16'h0192: if (p20 == 32'h101) begin
+                path = "";
+                for (int i = 0; i < 64; i++) begin
+                    bread(p24 + 4*i, w);
+                    for (int k = 0; k < 4; k++)
+                        if (path.len() == 4*i + k && w[31 - 8*k -: 8] != 8'h00)
+                            path = $sformatf("%s%c", path, w[31 - 8*k -: 8]);
+                end
+                bread(p24 + 32'h100, w);
+                check(w == 32'd0, "open: flags 0");
+                want = reloaded ? (cfg2same != 0 ? cfg2path : "") : cfgpath;
+                if (floaded[1] && want != "" && lower(path) == lower(want)) begin
+                    cfg_open = 1'b1;
+                    code = 3'd0;
+                    if (dtupdate != 0) begin
+                        bwrite(32'hF800_2008, 32'h101);
+                        bwrite(32'hF800_200C, fsize[1] + dtcfgadj);
+                    end
+                end else begin
+                    cfg_open = 1'b0;
+                    code = 3'd3;                                   // file not found
+                end
+            end
+            16'h0180: if (p20 == 32'h101 && cfg_open) begin
+                if (p24 + p2c > fsize[1] || p2c == 32'd0)
+                    code = 3'd2;                                   // out of range
+                else begin
+                    for (int i = 0; i < int'(p2c); i += 4) begin
+                        w = 32'd0;
+                        for (int k = 0; k < 4; k++)
+                            w[31 - 8*k -: 8] = (i + k < int'(p2c)) ? fdata[1][int'(p24) + i + k] : pad;
+                        bwrite(p28 + i, w);
+                    end
+                    code = 3'd0;
+                end
+            end
+            default: ;
+        endcase
+        bwrite(32'hF800_1000, {16'h6F6B, 13'd0, code});            // done
     endtask
 
     // ---------------------------------------------------- core-side ports
@@ -388,8 +495,13 @@ module tb_loader;
     task automatic wait_ready();
         int to;
         to = 0;
-        while (!(ready && !busy) && to < 2000000) begin @(negedge clk_sys); to++; end
-        check(to < 2000000, "loader ready");
+        // the host serves the core's target commands while it waits
+        while (!(ready && !busy) && to < 20000) begin
+            serve_target();
+            repeat (100) @(negedge clk_sys);
+            to++;
+        end
+        check(to < 20000, "loader ready");
         repeat (10) @(negedge clk_sys);
     endtask
     task automatic image_crc(input string tag);
@@ -433,6 +545,14 @@ module tb_loader;
         void'($value$plusargs("notable=%d", notable));
         void'($value$plusargs("cfglenadj=%d", cfglenadj));
         void'($value$plusargs("cfgnotable=%d", cfgnotable));
+        void'($value$plusargs("cfgpush=%d", cfgpush));
+        void'($value$plusargs("dtupdate=%d", dtupdate));
+        void'($value$plusargs("dtcfgadj=%d", dtcfgadj));
+        void'($value$plusargs("cfg2same=%d", cfg2same));
+        void'($value$plusargs("cartpath=%s", cartpath));
+        void'($value$plusargs("cfgpath=%s", cfgpath));
+        void'($value$plusargs("cart2path=%s", cart2path));
+        void'($value$plusargs("cfg2path=%s", cfg2path));
         if ($value$plusargs("seed=%d", seed)) void'($urandom(seed));
         outf = $fopen(outn, "w");
         read_file(0, "cart");
@@ -453,7 +573,7 @@ module tb_loader;
         // ---- the host loads the slots
         host_cmd(16'h0010, 32'd0, 32'd0);
         if (dtfirst != 0) send_table();
-        for (int s = 0; s < 6; s++) if (floaded[s]) send_slot(s);
+        for (int s = 0; s < 6; s++) if (floaded[s] && (s != 1 || cfgpush != 0)) send_slot(s);
         if (dtfirst == 0) send_table();
         host_cmd(16'h008F, 32'd0, 32'd0);
         host_cmd(16'h0011, 32'd0, 32'd0);
@@ -464,6 +584,7 @@ module tb_loader;
             for (int s = 0; s < 6; s++) $display("loader cnt %0d = %0d", s, dut.loader.cnt[s]);
         $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                   crc, words, layout, flags, hit, err, len_st);
+        $fdisplay(outf, "fetch res %0d len %0d", fetch_res, fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0);
         $fdisplay(outf, "slots %03X", slot_st);
         $fdisplay(outf, "ecs auto %0d", ecs_auto);
         $fdisplay(outf, "format cfgcrc %08X noss %0d ferr %02X", cfg_crc, noss, fmt_err);
@@ -590,7 +711,7 @@ module tb_loader;
             hz_mon = 1'b1;
             host_cmd(16'h0080, 32'h106, 32'd0);
             host_cmd(16'h008F, 32'd0, 32'd0);
-            repeat (2000) @(negedge clk_sys);
+            for (int i = 0; i < 20; i++) begin serve_target(); repeat (100) @(negedge clk_sys); end
             hz_mon = 1'b0;
             check(len_valid, "len_valid again after the second all complete");
             $fdisplay(outf, "hazard busy %0d ready %0d", busy_seen, ready);
@@ -604,7 +725,7 @@ module tb_loader;
             lenadj = 0;
             notable = 0;
             void'($value$plusargs("notable2=%d", notable));
-            if ($test$plusargs("cfgclear2")) floaded[1] = 1'b0;   // the table lists no CFG now
+            reloaded = 1'b1;                                      // its path and its CFG (+cfg2same)
             host_cmd(16'h0010, 32'd0, 32'd0);
             if (dtfirst != 0) send_table();
             send_slot(0);
@@ -614,6 +735,8 @@ module tb_loader;
             wait_ready();
             $fdisplay(outf, "reload status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                       crc, words, layout, flags, hit, err, len_st);
+            $fdisplay(outf, "reload fetch res %0d len %0d", fetch_res,
+                      fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0);
             $fdisplay(outf, "reload slots %03X", slot_st);
             $fdisplay(outf, "reload ecs auto %0d", ecs_auto);
             image_crc("reload image");

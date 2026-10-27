@@ -394,8 +394,12 @@ def main():
             check(i < len(stub_sizes) and stub_sizes[i] == (size or 0), f"{name}: intv_loader expects {size or 'any size'}")
             check(i < len(req) and req[i] == required, f"{name}: core_top tells the test pattern required = {required}")
     cart, cfg = slots[0], slots[1]
-    check(int(cart["parameters"], 16) == 0x109 and int(cfg["parameters"], 16) == 0x109,
-          "cartridge and config: reloadable, full core reload (0x109)")
+    check(int(cart["parameters"], 16) == 0x109, "cartridge: reloadable, full core reload (0x109)")
+    # build step 9b: the core opens NAME.cfg beside the cartridge itself (apf_cfgfetch, target
+    # commands 0x0190 / 0x0192 / 0x0180), so the CFG slot is a deferload slot the host never
+    # streams and the user never picks: not reloadable, read-only, in the cartridges' folder
+    check(int(cfg["parameters"], 16) == 0x8 and cfg.get("deferload") is True and cfg.get("required") is False,
+          "config: deferload, read-only, not user-reloadable, common folder (0x8): the core finds NAME.cfg")
     check(cart["extensions"] == ["int", "bin", "rom", "itv"] and cfg["extensions"] == ["cfg"],
           "extensions: cartridge int/bin/rom/itv, config cfg (DESIGN.md 5.6)")
     jlp = slots[6]

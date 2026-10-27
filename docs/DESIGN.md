@@ -363,7 +363,7 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 | id | Name | Files | Notes |
 |---|---|---|---|
 | 0x100 | Cartridge | .int .bin .rom .itv | required |
-| 0x101 | Cartridge config | .cfg | optional; **(build step 8)** used with a raw image (ignored with a .rom), its length from the data table (docs/CARTFORMATS.md 1) |
+| 0x101 | Cartridge config | .cfg | optional; **(build step 8)** used with a raw image (ignored with a .rom); **(build step 9b, owner 2026-10-27)** not picked by the user: a deferload slot (0x8) the core fills itself with NAME.cfg beside NAME.bin (apf_cfgfetch, target commands 0x0190 / 0x0192 / 0x0180; docs/CARTFORMATS.md 1) |
 | 0x102 | EXEC | exec.bin (8,192 bytes) | required |
 | 0x103 | GROM | grom.bin (2,048 bytes) | required |
 | 0x104 | ECS ROM | ecs.bin (24,576 bytes) | optional |

@@ -19,6 +19,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) i
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_palette.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) pocket_video.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) test_pattern.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) apf_cfgfetch.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) apf_datatable.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_sram.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_sysrom.sv]

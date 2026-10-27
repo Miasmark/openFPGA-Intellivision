@@ -535,7 +535,12 @@ PLANTS = [
      'Auto: the $4800 hook ignored'),
     ('auto_header_ignored', 'intv_media.sv', ": (code48 && hdr_ok) ? 2'd1", ": code48 ? 2'd1",
      'Auto: code at $4800 turns the ECS on whatever the header (the Imagic titles get its menu)'),
-    ('auto_m4_ignored', 'intv_media.sv', ": c_m4 ? 2'd0 : 2'd2;", ": 2'd2;", 'Auto: $4000-$47FF mapped ignored'),
+    ('auto_m4_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": res_off ? 2'd0 : 2'd2;",
+     'Auto: $4000-$47FF mapped ignored'),
+    # the step-9 review: the ECS_OFF flag (the "ECS incompatible" tag of a .rom or a CFG: ecsoffrom,
+    # ecsoffcfg) ignored, so those cartridges run with the ECS attached
+    ('auto_ecs_off_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": c_m4 ? 2'd0 : 2'd2;",
+     'Auto: the ECS incompatible tag ignored'),
     ('auto_nocart_off', 'intv_media.sv', "res_none <= res_words == 17'd0;", "res_none <= 1'b0;",
      'Auto: no cartridge not on'),
     ('auto_probe_4801', 'intv_media.sv', "(pr_2nd ? 16'h500C : 16'h4800)", "(pr_2nd ? 16'h500C : 16'h4801)",
@@ -544,7 +549,8 @@ PLANTS = [
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
-                'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C')
+                'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
+                'ecsoffcfg', 'ecsoffrom')
 
 
 def main():
@@ -613,7 +619,8 @@ def main():
             imgs.append(dict(s8['zoo5'], name='reload:zoo5 + CFG then zoo3\'s image, CFG kept', crc='RELOAD3',
                              reload=dict(s8['zoo3'], cfg=None), dtfirst=1))
         # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
-        # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000)
+        # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),
+        # the ECS incompatible tags (ecsoffcfg, ecsoffrom: off)
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             'step9_build_images', os.path.join(ROOT, 'sim', 'testroms', 'step9', 'build_images.py'))

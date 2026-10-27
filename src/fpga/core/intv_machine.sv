@@ -88,6 +88,7 @@ module intv_machine #(
     input  wire logic [63:0] ecs_keys,        // the ECS keyboard's pressed switches
     input  wire logic        ecs_synth,       // the synthesizer instead of the keyboard
     output logic             ecs_on,          // to intv_media: the ECS ROMs
+    output logic             ecs_full,        // the ECS fully on (mode on): intv_input's key routing
     output logic [11:0]      ecs_pg,
 
     // cartridge port and system ROMs (intv_media)
@@ -189,14 +190,21 @@ module intv_machine #(
     intv_ecs #(.SS_ID(SS_ECS), .SS_PSG(SS_PSG2), .SS_RAM(SS_ERAM)) ecs (
         .clk, .mreset, .mode(ecs_mode), .ce, .run(!hold),
         .a(addr), .wr, .wdata(dout), .hit(ecs_hit), .q(ecs_q),
-        .on(ecs_on), .pg(ecs_pg), .keys(ecs_keys), .synth(ecs_synth),
+        .on(ecs_on), .full(ecs_full), .pg(ecs_pg), .keys(ecs_keys), .synth(ecs_synth),
         .audio(audio2), .audio_stb(audio2_stb),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_ecs));
 
     // the two PSGs' samples come together (same reset, same steps); PSG #2 is
-    // silent (0) unless the ECS is attached
+    // silent (0) unless the ECS is attached. While the ECS is attached or on
+    // the sum is scaled to 3/4 (floor), so the loudest six-channel music
+    // measured (WSMLB: PSG #1 + PSG #2 up to 43,278) stays under 32,767
+    // (ECS_NOTES 3); the saturation stays for the rest (up to 49,149)
     wire logic [16:0] mix = 17'(audio1) + 17'(audio2);
-    assign audio     = mix[16:15] != 2'd0 ? 16'h7FFF : mix[15:0];
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire logic [18:0] mix3 = 19'(mix) + {1'b0, mix, 1'b0};      // 3 x mix; [1:0] dropped (floor)
+    /* verilator lint_on UNUSEDSIGNAL */
+    wire logic [16:0] mixs = ecs_on ? mix3[18:2] : mix;
+    assign audio     = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];
     assign audio_stb = audio1_stb;
 
     intv_ram #(.AW(8), .DW(8), .WORDS(256), .SS_ID(SS_SCR)) scratch (

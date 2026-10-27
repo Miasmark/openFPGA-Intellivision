@@ -704,7 +704,7 @@ end
 
     wire    [7:0]   pad_r, pad_l;
     wire    [63:0]  ecs_keys;
-    wire            ecs_synth, ecs_attached;
+    wire            ecs_synth, ecs_full;
     wire    [1:0]   ecs_ovr;
 
 intv_input input_map (
@@ -721,7 +721,7 @@ intv_input input_map (
     .swap       ( set_swap ),
     .ecs_ovr_74 ( set_ecs ),
     .synth_74   ( set_synth ),
-    .ecs_on     ( ecs_attached ),
+    .ecs_full   ( ecs_full ),
     .pad_r      ( pad_r ),
     .pad_l      ( pad_l ),
     .ecs_keys   ( ecs_keys ),
@@ -767,7 +767,7 @@ intv_core machine_side (
     .ecs_override       ( ecs_ovr ),
     .ecs_keys           ( ecs_keys ),
     .ecs_synth          ( ecs_synth ),
-    .ecs_attached       ( ecs_attached ),
+    .ecs_full           ( ecs_full ),
     .ce_pix             ( ce_pix ),
     .hcnt               ( hcnt ),
     .vcnt               ( vcnt ),

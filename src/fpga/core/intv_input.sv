@@ -22,13 +22,23 @@
 //   opposite directions cancel;
 // - USB keyboard (cont3 type 4): player 1's keypad (1-9, 0 on the number
 //   row and the numpad, Backspace = Clear, Enter / numpad Enter = Enter).
-// - with the ECS attached (ecs_on, build step 9): the USB keyboard is the
-//   ECS keyboard key by key (ecs_keys: bit 8 row + column of the ECS
-//   matrix; Shift and Ctrl from the HID modifier byte cont3_key[7:0]); only
-//   the numpad stays the keypad (numpad . = Clear). Setting synth: the
-//   music synthesizer on two tracker rows (Z-M = C3-B3, Q-I = C4-C5)
-//   instead. The ECS settings (ecs_ovr_74: Auto / On / Off, synth_74)
-//   cross with the controller words (ecs_ovr, ecs_synth).
+// - with the ECS fully on (ecs_full: mode on, build step 9): the USB
+//   keyboard is the ECS keyboard key by key (ecs_keys: bit 8 row + column
+//   of the ECS matrix; Shift and Ctrl from the HID modifier byte
+//   cont3_key[7:0]); only the numpad stays the keypad (numpad . = Clear).
+//   Setting synth: the music synthesizer on two tracker rows (Z-M = C3-B3,
+//   Q-I = C4-C5) instead. With the ECS attached (ROMs out, Auto's default)
+//   or off the keyboard is the keypad as in 0.0.8 and the matrix reads no
+//   key: no ECS ROM code scans it then, and the games keep the number row,
+//   Enter and Backspace (step 9 review). The ECS settings (ecs_ovr_74:
+//   Auto / On / Off, synth_74) cross with the controller words (ecs_ovr,
+//   ecs_synth).
+// - the six HID codes are decoded one per clk in a round of 8 clk (0-5:
+//   one code each into kb_acc / ek_acc, 6: the outputs registered, 7: the
+//   next word may load), one decoder instead of six (the step-9 review:
+//   twelve 64-bit decoders cost about 640 ALMs). The word is loaded only at
+//   step 7, so every output comes from one whole word (the crossing's
+//   promise below holds). Latency: at most 2 rounds (16 clk) more.
 // Every input pulls its lines low and the lines are wired-OR'd, as on the
 // hardware (DESIGN.md 7.1): codes from the service manual and the wiki,
 // equal to MAME handctrl.cpp:124-135 inverted.
@@ -72,7 +82,7 @@ module intv_input (
     input  wire logic        swap,          // 1: player 1 on the right controller
     input  wire logic [1:0]  ecs_ovr_74,    // setting ECS: 0 Auto, 1 On, 2 Off
     input  wire logic        synth_74,      // setting ECS Keyboard: 1 Synthesizer
-    input  wire logic        ecs_on,        // clk: the ECS is attached now
+    input  wire logic        ecs_full,      // clk: the ECS is fully on (mode on, not attached)
     output logic      [7:0]  pad_r,         // $01FE, PSG port A
     output logic      [7:0]  pad_l,         // $01FF, PSG port B
     output logic      [63:0] ecs_keys,      // clk: the ECS matrix's pressed switches
@@ -275,8 +285,9 @@ module intv_input (
             hid_code_ecs = 8'h00;
     endfunction
 
-    // One HID usage code -> the ECS matrix switch it closes (bit 8 row + column)
-    function automatic logic [63:0] ecs_hid(input logic [7:0] c);
+    // One HID usage code -> the ECS matrix switch it closes (bit 8 row + column;
+    // bit 6 set: none)
+    function automatic logic [6:0] ecs_hid(input logic [7:0] c);
         logic [6:0] p;
         p = 7'h7F;
         unique case (c)
@@ -294,11 +305,12 @@ module intv_input (
             8'h52: p = 7'd42;  8'h51: p = 7'd41;  8'h2C: p = 7'd40;
             default: ;
         endcase
-        ecs_hid = p[6] ? 64'd0 : 64'd1 << p[5:0];
+        ecs_hid = p;
     endfunction
 
-    // One HID usage code -> the synthesizer key (note n = matrix bit n)
-    function automatic logic [63:0] syn_hid(input logic [7:0] c);
+    // One HID usage code -> the synthesizer key (note n = matrix bit n; bit 6
+    // set: none)
+    function automatic logic [6:0] syn_hid(input logic [7:0] c);
         logic [6:0] n;
         n = 7'h7F;
         unique case (c)
@@ -311,7 +323,7 @@ module intv_input (
             8'h0C: n = 7'd36;
             default: ;
         endcase
-        syn_hid = n[6] ? 64'd0 : 64'd1 << n[5:0];
+        syn_hid = n;
     endfunction
 
     // -------------------------------------------------------------------
@@ -346,9 +358,12 @@ module intv_input (
         end
     end
 
+    logic [2:0] ph;             // the decode round (Output below)
+    initial ph = 3'd0;
+
     always_ff @(posedge clk) begin
         req_s <= {req_s[0], req_74};
-        if (req_s[1] != ack) begin
+        if (req_s[1] != ack && ph == 3'd7) begin
             word <= hold_74;
             ack  <= req_s[1];
         end
@@ -369,28 +384,28 @@ module intv_input (
     assign ecs_synth = sy;
     assign ecs_ovr   = eo;
 
-    logic [7:0]  p1, p2, kb;
-    logic [63:0] ek;
+    // The round: step ph < 6 decodes code ph into the accumulators; step 6
+    // registers the outputs from them and the word; step 7 lets a new word in
+    logic [7:0]  hc, kc, kb_acc;
+    logic [6:0]  sp;
+    logic [63:0] ek_acc;
+    wire  logic  kbd = k3[31:28] == 4'd4;
     always_comb begin
-        kb = 8'h00;
-        ek = 64'd0;
-        if (k3[31:28] == 4'd4) begin
-            if (ecs_on) begin
-                kb = hid_code_ecs(j3[7:0]) | hid_code_ecs(j3[15:8]) | hid_code_ecs(j3[23:16])
-                   | hid_code_ecs(j3[31:24]) | hid_code_ecs(t3[7:0]) | hid_code_ecs(t3[15:8]);
-                if (sy)
-                    ek = syn_hid(j3[7:0]) | syn_hid(j3[15:8]) | syn_hid(j3[23:16])
-                       | syn_hid(j3[31:24]) | syn_hid(t3[7:0]) | syn_hid(t3[15:8]);
-                else
-                    ek = ecs_hid(j3[7:0]) | ecs_hid(j3[15:8]) | ecs_hid(j3[23:16])
-                       | ecs_hid(j3[31:24]) | ecs_hid(t3[7:0]) | ecs_hid(t3[15:8])
-                       | ((k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)       // Shift: row 6, column 7
-                       | ((k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);      // Ctrl: row 5, column 6
-            end else
-                kb = hid_code(j3[7:0]) | hid_code(j3[15:8]) | hid_code(j3[23:16])
-                   | hid_code(j3[31:24]) | hid_code(t3[7:0]) | hid_code(t3[15:8]);
-        end
-        p1 = player(k1, j1, md) | kb;
+        unique case (ph)
+            3'd0:    hc = j3[7:0];
+            3'd1:    hc = j3[15:8];
+            3'd2:    hc = j3[23:16];
+            3'd3:    hc = j3[31:24];
+            3'd4:    hc = t3[7:0];
+            default: hc = t3[15:8];
+        endcase
+        kc = !kbd ? 8'h00 : ecs_full ? hid_code_ecs(hc) : hid_code(hc);
+        sp = sy ? syn_hid(hc) : ecs_hid(hc);
+    end
+
+    logic [7:0]  p1, p2;
+    always_comb begin
+        p1 = player(k1, j1, md) | kb_acc;
         p2 = player(k2, j2, md);
     end
 
@@ -398,11 +413,23 @@ module intv_input (
         pad_r = 8'hFF;
         pad_l = 8'hFF;
         ecs_keys = 64'd0;
+        kb_acc = 8'h00;
+        ek_acc = 64'd0;
     end
     always_ff @(posedge clk) begin
-        pad_l <= ~(sw ? p2 : p1);
-        pad_r <= ~(sw ? p1 : p2);
-        ecs_keys <= ek;
+        ph <= ph + 3'd1;
+        if (ph < 3'd6) begin
+            kb_acc <= (ph == 3'd0 ? 8'h00 : kb_acc) | kc;
+            ek_acc <= (ph == 3'd0 ? 64'd0 : ek_acc)
+                    | (kbd && ecs_full && !sp[6] ? 64'd1 << sp[5:0] : 64'd0);
+        end
+        if (ph == 3'd6) begin
+            pad_l <= ~(sw ? p2 : p1);
+            pad_r <= ~(sw ? p1 : p2);
+            ecs_keys <= ek_acc
+                      | (kbd && ecs_full && !sy && (k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)   // Shift: row 6, column 7
+                      | (kbd && ecs_full && !sy && (k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);  // Ctrl: row 5, column 6
+        end
     end
 
 endmodule

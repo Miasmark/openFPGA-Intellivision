@@ -75,6 +75,7 @@ module intv_ecs #(
 
     // to intv_cart: the ROM page latches and whether the ECS is attached
     output logic             on,
+    output logic             full,            // mode on (not attached): intv_input's key routing
     output logic [11:0]      pg,              // {latch $E, latch $7, latch $2}
 
     // keyboard (intv_input)
@@ -91,7 +92,7 @@ module intv_ecs #(
     output logic [31:0]      ss_rdata
 );
 
-    localparam logic [1:0] M_OFF = 2'd0, M_ATT = 2'd2;          // (1: on)
+    localparam logic [1:0] M_OFF = 2'd0, M_ON = 2'd1, M_ATT = 2'd2;
 
     // ------------------------------------------------------------ state
     logic [1:0] mode_q = M_OFF;
@@ -99,6 +100,7 @@ module intv_ecs #(
     logic [7:0] lat_a = 8'd0, lat_b = 8'd0;
 
     assign on = mode_q != M_OFF;
+    assign full = mode_q == M_ON;
     assign pg = {pgE, pg7, pg2};
 
     // -------------------------------------------------------------- decode

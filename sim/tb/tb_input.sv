@@ -8,11 +8,14 @@
 //
 // Part 1, +vec=FILE: each line is class key1 joy1 key2 joy2 key3 joy3 trig3
 // mode swap ecs_ovr synth ecs pad_r pad_l keys_hi keys_lo, in hex (step 9:
-// the ECS settings, ecs = the clk side's ecs_on, and the ECS keyboard's
-// switches ecs_keys; ecs_ovr and ecs_synth must come out as they went in). The bench drives the inputs 1 ns after a
-// clk_74a edge, waits 16 clocks (the crossing's handshake takes at most
-// about 7 clk + 4 clk_74a periods, then the output register) and compares
-// both bytes. It prints the first 20 mismatches and a count per class.
+// the ECS settings, ecs = the ECS mode on the clk side (0 off, 1 on, 2
+// attached; ecs_full = mode 1), and the ECS keyboard's switches ecs_keys;
+// ecs_ovr and ecs_synth must come out as they went in). The bench drives
+// the inputs 1 ns after a clk_74a edge, waits 48 clocks (the crossing's
+// handshake takes at most about 7 clk + 4 clk_74a periods plus up to 8 clk
+// for the decode round's load step, twice when a transfer was in flight,
+// then the round's 7 clk) and compares both bytes. It prints the first 20
+// mismatches and a count per class.
 //
 // Part 2, +tear=FILE (the crossing, DESIGN.md 7): groups of vectors, each
 // a line "n" and then n lines of key1 .. swap pad_r pad_l. For each group
@@ -63,7 +66,7 @@ module tb_input;
     logic        clk_74a = 1'b0;
     logic [W-1:0] bus = '0;          // {key1, joy1, key2, joy2, key3, joy3, trig3, mode, swap, ecs_ovr, synth}
     wire  [7:0]  pad_r, pad_l;
-    logic        ecs_on = 1'b0;      // clk side: the ECS attached (step 9)
+    logic        ecs_full = 1'b0;    // clk side: the ECS fully on, mode 1 (step 9)
     wire  [63:0] ecs_keys;
     wire         ecs_synth;
     wire  [1:0]  ecs_ovr;
@@ -192,7 +195,7 @@ module tb_input;
         .swap       ( bus[3] ),
         .ecs_ovr_74 ( bus[2:1] ),
         .synth_74   ( bus[0] ),
-        .ecs_on     ( ecs_on ),
+        .ecs_full   ( ecs_full ),
         .pad_r      ( pad_r ),
         .pad_l      ( pad_l ),
         .ecs_keys   ( ecs_keys ),
@@ -267,8 +270,8 @@ module tb_input;
                 cls = f[0];
                 @(posedge clk_74a);
                 #1 bus = pack(f);
-                ecs_on = f[12][0];
-                repeat (16) @(posedge clk);
+                ecs_full = f[12][1:0] == 2'd1;
+                repeat (48) @(posedge clk);
                 #1;
                 cnt[cls & 15]++;
                 if (pad_r !== f[13][7:0] || pad_l !== f[14][7:0] || ecs_keys !== {f[15], f[16]}
@@ -277,7 +280,7 @@ module tb_input;
                     if (nbad < 20)
                         $display("  FAIL  class %0d vector %0d: k1 %h j1 %h k2 %h j2 %h k3 %h j3 %h t3 %h mode %0d swap %0d ovr %0d synth %0d ecs %0d: pad_r %h pad_l %h keys %h ovr %0d synth %0d, want %h %h %h%h",
                                  cls, nvec, f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0],
-                                 f[10][1:0], f[11][0], f[12][0],
+                                 f[10][1:0], f[11][0], f[12][1:0],
                                  pad_r, pad_l, ecs_keys, ecs_ovr, ecs_synth, f[13][7:0], f[14][7:0], f[15], f[16]);
                     nbad++;
                 end
@@ -307,7 +310,7 @@ module tb_input;
                     nbad++;
                     break;
                 end
-                ecs_on = 1'b0;
+                ecs_full = 1'b0;
                 for (int i = 0; i < gn; i++) begin
                     f[0] = 0;
                     n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h\n",
@@ -323,7 +326,7 @@ module tb_input;
 `endif
                 @(posedge clk_74a);
                 #1 bus = gv[0];
-                repeat (16) @(posedge clk);
+                repeat (48) @(posedge clk);
                 cur = 0;
                 prev = {pad_r, pad_l};
                 // 64 changes at random clk_74a edges, checked at every clk edge
@@ -359,7 +362,7 @@ module tb_input;
                         end
                     end
                 join
-                repeat (16) @(posedge clk);
+                repeat (48) @(posedge clk);
                 #1;
                 if ({pad_r, pad_l} !== ge[cur]) begin
                     if (ntear < 20)

@@ -43,8 +43,14 @@ Modes (DESIGN 20):
             UART answer
 auto_mode() is DESIGN 20's Auto rule, in its order: the CRC table's ECS
 flag -> ON; a ROM word <= $03FF at $4800 (code there: the EXEC's $4800 hook,
-REPORT 2) -> ON; the cartridge maps $4000-$47FF on page 0 -> OFF (the ECS
-RAM would clash); else ATTACHED. Added here: no cartridge at all (an empty
+REPORT 2) -> ON; the cartridge maps $4000-$47FF on page 0 (the ECS RAM would
+clash), or the loader's ECS_OFF flag is set -> OFF; else ATTACHED. ECS_OFF
+(cartfmt FLAG_ECS_OFF, flags bit 5; tools/mapper/README.md) is a .rom's
+compat tag "ECS incompatible" (11), a CFG's `ecs_compat = 0`, or a hard
+conflict the mapper found (ROM or RAM at $7000-$7FFF or $4000-$47FF: Centipede,
+Dig Dug, Congo Bongo, Defender, both Pac-Man, the IMI and MTE201 test carts;
+DESIGN decision 10 keeps the ECS off for them) (step-9 review: the tag was
+recorded as a rule in the lane notes but not applied). Added here: no cartridge at all (an empty
 image) -> ON, a console with the ECS and no cartridge (ECS BASIC). Refined
 here: code at $4800 turns the ECS on only when the ECS boot would start the
 cartridge straight, i.e. the header word at $500C passes the ECS ROM's test
@@ -119,17 +125,18 @@ def header_direct(w500c):
     return (((w500c >> 8) | (w500c << 8)) & 0xFD) == 1
 
 
-def auto_mode(flags_ecs, w4800, maps4000, nocart=False, w500c=None):
+def auto_mode(flags_ecs, w4800, maps4000, nocart=False, w500c=None, ecs_off=False):
     """DESIGN 20's Auto rule (refined: see the module docstring). flags_ecs:
     the CRC table's (or the CFG's / .rom tag's) ECS flag; w4800: the word a
     ROM read of $4800 gives at reset paging (None: not answered, or RAM);
     maps4000: the cartridge maps $4000-$47FF on page 0; nocart: no cartridge
-    image (0 words); w500c: the word at $500C (None: not answered)."""
+    image (0 words); w500c: the word at $500C (None: not answered); ecs_off:
+    the loader's ECS_OFF flag (the "ECS incompatible" tag or a hard conflict)."""
     if flags_ecs or nocart:
         return ON
     if w4800 is not None and w4800 <= 0x3FF and header_direct(w500c):
         return ON
-    if maps4000:
+    if maps4000 or ecs_off:
         return OFF
     return ATTACHED
 
@@ -139,13 +146,13 @@ def mode_for(override, auto):
 
 
 def cart_inputs(cart):
-    """(flags_ecs, w4800, maps4000, nocart, w500c) of a cartfmt.MapCart as
+    """(flags_ecs, w4800, maps4000, nocart, w500c, ecs_off) of a cartfmt.MapCart as
     the loader and the reset probe see them (intv_cart: the map table's
     page-0 entries of $4000-$47FF; reads of $4800 and $500C, $4800 only from
     a ROM block)."""
     import cartfmt
     if cart is None or cart.ld.words == 0:
-        return False, None, False, True, None
+        return False, None, False, True, None, False
     ld = cart.ld
     maps = any(ld.table[(4 << 8) | b] & (cartfmt.E_R | cartfmt.E_W | cartfmt.E_B) for b in range(8))
     saved = list(cart.sel)
@@ -154,7 +161,7 @@ def cart_inputs(cart):
     w = cart.read(0x4800) if hit and not bits & 2 else None
     h = cart.read(0x500C)
     cart.sel = saved
-    return bool(ld.flags & cartfmt.FLAG_ECS), w, maps, False, h
+    return bool(ld.flags & cartfmt.FLAG_ECS), w, maps, False, h, bool(ld.flags & cartfmt.FLAG_ECS_OFF)
 
 
 def load_rom(path):
@@ -447,7 +454,10 @@ def selftest():
         auto_mode(False, 0x0004, False, w500c=0x00C0) == ATTACHED and
         auto_mode(False, 0x0004, False) == ATTACHED and
         auto_mode(False, 0x0400, True) == OFF and auto_mode(False, None, False) == ATTACHED and
-        auto_mode(False, 0x0400, False) == ATTACHED and auto_mode(False, None, True, True) == ON, "auto_mode")
+        auto_mode(False, 0x0400, False) == ATTACHED and auto_mode(False, None, True, True) == ON and
+        auto_mode(False, None, False, ecs_off=True) == OFF and
+        auto_mode(False, 0x0004, False, w500c=0x03C0, ecs_off=True) == ON and
+        auto_mode(True, None, False, ecs_off=True) == ON, "auto_mode")
     # PSG #2 envelope select: one bit
     p = psgm.Psg("8917")
     p.write(psgm.R_ENABLE, 0x3F)

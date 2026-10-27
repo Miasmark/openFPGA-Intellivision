@@ -158,6 +158,7 @@ module tb_system;
     wire logic        sram_dq_oe, sram_oe_n, sram_we_n, sram_ub_n, sram_lb_n;
     wire logic        mreset = mres_tb || !ready;
     wire logic        ecs_on, ecs_rom_ok;
+    wire logic        efull;            // intv_ecs: mode on (intv_input's key routing, step-9 review)
     wire logic [11:0] ecs_pg;
     wire logic [1:0]  ecs_auto;
     wire logic [1:0]  ecs_mode = ecs_ovr == 2'd1 ? 2'd1 : ecs_ovr == 2'd2 ? 2'd0 : ecs_auto;
@@ -217,7 +218,7 @@ module tb_system;
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en,
         .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
-        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .ecs_on, .ecs_pg,
+        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
@@ -698,6 +699,7 @@ module tb_system;
         // just after the ce that ended cycle ncyc - 1
         wait_cycle(ncyc);
         freeze();
+        $fdisplay(fd, "L ecs full %0d", efull);
         dump_all(2);
         ss_en = 1'b0;
         if (halted) $fdisplay(fd, "R CPU halted");

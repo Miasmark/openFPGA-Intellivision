@@ -29,7 +29,10 @@
 // (0 words) -> 1 (on); a ROM word <= $03FF at $4800 (read, not a RAM
 // cell) with a header at $500C that the ECS boot starts straight (the
 // word byte-swapped, AND $FD, = 1) -> 1; the image maps $4000-$47FF
-// (intv_cart m4) -> 0 (off); else 2 (attached, ROMs paged out).
+// (intv_cart m4) or the loader's flags say ECS_OFF (bit 5: a .rom's "ECS
+// incompatible" tag, a CFG's ecs_compat = 0, or a hard conflict at
+// $7000 / $4000; step-9 review) -> 0 (off); else 2 (attached, ROMs paged
+// out).
 //
 // Three SRAM masters, fixed priority: the loader (only while loading, when
 // the machine is held in reset), the cartridge port, and an auxiliary port
@@ -185,6 +188,7 @@ module intv_media #(
 
     // ---------------------------------------- the Auto rule's $4800 probe
     logic        ld_ready, probing = 1'b0, pr_req = 1'b0, res_ecs = 1'b0, res_none = 1'b0;
+    logic        res_off = 1'b0;                     // flags bit 5: ECS_OFF
     logic        pr_2nd = 1'b0, code48 = 1'b0;      // the $500C read; $4800 holds code
     logic        c_bus_req, c_bus_ack, c_bus_hit, c_m4;
     logic [15:0] c_bus_rdata;
@@ -212,7 +216,7 @@ module intv_media #(
             probing  <= 1'b0;
             ecs_auto <= (res_ecs || res_none) ? 2'd1
                       : (code48 && hdr_ok) ? 2'd1
-                      : c_m4 ? 2'd0 : 2'd2;
+                      : (c_m4 || res_off) ? 2'd0 : 2'd2;
         end
         if (reset) begin
             probing <= 1'b0;
@@ -222,6 +226,7 @@ module intv_media #(
     always_ff @(posedge clk)
         if (res_we) begin
             res_ecs  <= res_flags[0];
+            res_off  <= res_flags[5];
             res_none <= res_words == 17'd0;
         end
 

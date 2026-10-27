@@ -44,15 +44,27 @@ for an ECS ROM access instead of its map table. Without the ECS ROM slot the ROM
 
 | Mode | At machine reset | Used for |
 |---|---|---|
-| off | nothing answers; PSG #2 held in reset | the menu's Off; Auto for a cartridge that maps $4000-$47FF |
+| off | nothing answers; PSG #2 held in reset | the menu's Off; Auto for a cartridge that maps $4000-$47FF or is tagged ECS incompatible |
 | on | latches $2 = 0, $7 = 0, $E = 0: $7000 answers, the EXEC runs the ECS boot | ECS games; no cartridge; the menu's On |
 | attached | latch $7 = $F: every ROM paged out; RAM, PSG #2, keyboard, UART answer | every other cartridge under Auto |
 
 Auto (DESIGN 20, in its order): the ECS flag (CRC table, CFG `[vars] ecs = 1`, .rom tag) -> on;
 a ROM word <= `$03FF` at `$4800` at reset paging (code there: the EXEC's `$4800` hook, REPORT 2) ->
-on; the image maps `$4000-$47FF` on page 0 -> off; else attached. Added here: no cartridge (an empty
-image) -> on, as a console with the ECS and no cartridge (ECS BASIC). A RAM cell at `$4800` is not
-code. The menu item "ECS" (Auto / On / Off) is taken at the next machine reset (Reset or a load).
+on; the image maps `$4000-$47FF` on page 0, or the loader's flags say ECS_OFF -> off; else attached.
+Added here: no cartridge (an empty image) -> on, as a console with the ECS and no cartridge (ECS
+BASIC). A RAM cell at `$4800` is not code. The menu item "ECS" (Auto / On / Off) is taken at the next
+machine reset (Reset or a load).
+
+**ECS_OFF** (flags bit 5; tools/mapper/README.md) is set by a .rom's compat tag "ECS incompatible"
+(`$06`, ECS bits 11), a CFG's `[vars] ecs_compat = 0`, or a hard conflict the mapper or the loader
+finds (ROM or RAM at `$7000-$7FFF` or `$4000-$47FF`; in the library Centipede, Dig Dug, Congo Bongo,
+Defender, both Pac-Man, the IMI and MTE201 test carts). The step-9 lane notes had recorded the tag
+as a rule; the first cut of the code did not apply it (step-9 review). Applying the whole flag keeps
+DESIGN decision 10 ("ECS forced off for titles with ROM at `$7000`"); with the ECS attached those
+eight would have run as well (`$7000` is paged out), so nothing is lost by the rule, and nothing of
+the ECS is in their way. Test images: `sim/testroms/step9` ecsoffcfg (ecsavail with
+`ecs_compat = 0`) and ecsoffrom (a .rom tagged incompatible), both off; tb_loader's plant
+auto_ecs_off_ignored.
 
 **Refined here (a change to DESIGN 20's second row, for the owner to confirm):** code at `$4800`
 turns the ECS on only when the ECS boot would then start the cartridge straight, i.e. its header
@@ -63,8 +75,8 @@ literal rule turned the ECS on for the four Imagic titles that boot through `$48
 & the Beast, Demon Attack, Microsurgeon): their `$500C` fails the test, so they would have shown the
 ECS title and menu first (as on a console with the ECS), which is what the rule is there to avoid;
 and a hook cartridge whose header fails the test would get an ECS title read from ROMs its hook had
-just paged out (REPORT 2). With the refinement: 9 library images on (all by the ECS flag), 179
-attached, none off.
+just paged out (REPORT 2). With the refinement and ECS_OFF: 9 library images on (all by the ECS
+flag), 171 attached, 8 off (the ECS_OFF titles above).
 
 In the RTL, `intv_media` reads `$4800` and `$500C` through the cartridge port after every load,
 before `ready` rises (the machine is still in reset, the selects at 0), and `intv_cart` keeps `m4`: an
@@ -81,8 +93,20 @@ bit (volume bit 4 selects the envelope, bit 5 is stored and read back but does n
 emulates it as an AY-3-8914 (two bits); the difference shows only for a volume with bit 5 set and
 bit 4 clear. Read masks are the 8914's (MAME's; ay8910.cpp notes that the 8916/8917's unused bits
 "mirror one of the i/o ports, needs further testing": not modelled). Register 8 bits 6 and 7 are
-the port directions (A = $00FE, B = $00FF). Both PSGs step together; the sound is their sum,
-at most 32,767.
+the port directions (A = $00FE, B = $00FF). Both PSGs step together.
+
+**The mix.** The sound is PSG #1 + PSG #2; while the ECS is attached or on the sum is scaled to 3/4
+(floor; `intv_machine.sv`), and then held at 32,767 at most. With the ECS off it is PSG #1 alone,
+unscaled, as in 0.0.8. Why (step-9 review): with the plain sum, World Series Major League Baseball
+(the model over its 3,200-frame MAME reference keys) peaks at PSG #1 25,967, PSG #2 25,967, sum
+43,278, and 464 samples went over 32,767 and were hard-clipped (the review counted 477 at the
+ceiling, in 14 frames): a short distortion in loud six-channel
+music. Scaled to 3/4 the peak is 32,458: no sample clips (`tools/ecs_mix_check.py`, run in the step-9
+gates: ECS_MIX pass). Melody Blaster peaked at 32,764 unscaled. The cost is 2.5 dB less volume for
+the games that run with the ECS attached; a soft limiter was the other choice and needs more logic.
+The 3/4 sum can still reach 49,149 in theory (both PSGs at full volume on all channels), so the
+saturation stays. tb_system's E lines hash the mix (the model in `mix_sample`); plants
+ecs_mix_unscaled and ecs_mix_scaled_off.
 
 ## 4 Keyboards
 
@@ -112,9 +136,18 @@ values are at most 34 clk_sys old, less than a CPU cycle (48): latches change at
 two CPU cycles before any read.
 
 **The USB keyboard** (`intv_input.sv`, `tools/intv_input.py`; INPUT_NOTES plan item 2): while the
-ECS is attached it is the ECS keyboard key by key (letters, digits, Enter = RTN, Esc, Space, `;`
-`,` `.`, the arrows, Backspace = left arrow; either Shift = SHIFT, either Ctrl = CTL from the HID
-modifier byte), and only the numpad stays player 1's keypad (numpad `.` = Clear). With the setting
+ECS is fully on (mode on: ECS games under Auto, no cartridge, the menu's On) it is the ECS keyboard
+key by key (letters, digits, Enter = RTN, Esc, Space, `;` `,` `.`, the arrows, Backspace = left
+arrow; either Shift = SHIFT, either Ctrl = CTL from the HID modifier byte), and only the numpad
+stays player 1's keypad (numpad `.` = Clear). With the ECS attached (Auto's mode for most games:
+no ECS ROM code runs to scan the keyboard) or off, the keyboard is player 1's keypad as in 0.0.8
+(number row and numpad, Enter, Backspace = Clear) and the matrix reads no key. The first cut sent
+the keyboard to the matrix whenever the ECS was attached, so under Auto almost every game lost the
+number row, Enter and Backspace (step-9 review); `intv_ecs` now tells `intv_input` the mode on
+(`full`). The six HID codes of a report are decoded one per clk_sys in a round of 8 clocks into two
+accumulating registers (keypad lines, matrix switches), one decoder instead of twelve (about 640
+ALMs; DESIGN 4.5); a new word from the clock crossing is taken only between rounds, so the outputs
+always come from one whole word. With the setting
 "ECS Keyboard" on Music synthesizer, two tracker rows play it: Z S X D C V G B H N J M = C3-B3,
 Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5. ECS hand controllers 3/4 are not provided (no game reads them,
 REPORT 5.6); their port bytes read as the matrix gives.
@@ -147,8 +180,16 @@ load with it off, or with another ECS ROM (docs/SAVESTATE.md).
   `sim/testroms/ecstest.asm`; ecsboot; ecsastro; the step-9 cartridges) with round trips, the
   keyboard scans against ECSKBD_WANT (the rule written out by hand); `--ecs-play` frame by frame
   over the MAME runs' keys.
-- `sim/tb/tb_input.py` classes 10-11 (the key mapping); `sim/tb/tb_loader.py` the Auto rule on
-  every image; `sim/tb/tb_savestate.py` ecsbasic, ecssound, ecsavail and the E runs.
+- `sim/tb/tb_input.py` classes 10-11 (the key mapping, in modes off, on and attached);
+  `sim/tb/tb_loader.py` the Auto rule on every image (ecsoffcfg, ecsoffrom: the incompatible tag);
+  `sim/tb/tb_savestate.py` ecsbasic, ecssound, ecsavail, Atlantis and Super NFL Football under
+  Auto (attached), the E runs (a state with the ECS into a core with it off) and the X runs (into a
+  core whose ECS ROM differs by one byte): refused.
+- `sim/tb/tb_system.py` also: ecsnorom (the ECS on with no ECS ROM slot: `$2000`, `$7000`, `$E000`
+  read `$FFFF`), and library games under Auto with the ECS attached, the hardware default: Super NFL
+  Football (writes the ECS RAM), Atlantis (its `$4800` hook), Body Slam (a Super Pro title: clears
+  `$00E0-$00FF`); every image's `L ecs full` line (the key routing's mode).
+- `tools/ecs_mix_check.py` on WSMLB: no sample of the mix at the ceiling.
 
 **What MAME cannot show and the documents decide:** the `$F` page value (ecssound's ROMS OUT line;
 REPORT 2), the masking and the ghost (DESIGN 7.3), the 8917's single envelope bit, the UART.

@@ -13,6 +13,9 @@ committed themselves:
   ecsnohook  ecshook with $1234 (not an opcode) at $4800: -> attached
   ecsavail   ecsavail.bas: no ECS feature, no hook: Auto -> attached, ROMs paged out
   cart4000   cart4000.bas: maps $4000 and $47FF itself: Auto -> off
+  ecsoffcfg  ecsavail with [vars] ecs_compat = 0 added to its CFG (ECS incompatible): -> off
+  ecsoffrom  an Intellicart .rom (data only, $5000-$50FF) whose compat tag ($06) says 11,
+             ECS incompatible: -> off (both: the step-9 review; cartfmt FLAG_ECS_OFF)
 
 images(work) returns [dict(name, data, cfg, auto)], auto the mode tools/ecs.py must give.
 Run as a script it lists them with the model's Auto mode.
@@ -72,16 +75,24 @@ def images(work=None):
     out.append(dict(name='ecsnohook', data=b'\x12\x34' + d[2:], cfg=nov, auto=ecsm.ATTACHED))
     d, c = intybasic('ecsavail.bas', work)
     out.append(dict(name='ecsavail', data=d, cfg=c, auto=ecsm.ATTACHED))
+    out.append(dict(name='ecsoffcfg', data=d, cfg=c + b'[vars]\necs_compat = 0\n', auto=ecsm.OFF))
+    acc, fine = [0] * 16, [0x07] * 32
+    acc[5] = 0x11                       # $5000-$5FFF read (as step 8's romfine)
+    rom = b8.rom_file([(0x50, 0x50, [(0x5000 + i) ^ 0x2C3D for i in range(256)])], acc, fine,
+                      b8.tag(0x06, [0xC0, 0, 0]) + b'\x00')
+    out.append(dict(name='ecsoffrom', data=rom, cfg=None, auto=ecsm.OFF))
     d, c = intybasic('cart4000.bas', work)
     out.append(dict(name='cart4000', data=d, cfg=c, auto=ecsm.OFF))
     return out
 
 
 def write(work, img):
-    """Write img's .bin and .cfg into work; (bin path, cfg path)."""
-    b = os.path.join(work, img['name'] + '.bin')
-    c = os.path.join(work, img['name'] + '.cfg')
+    """Write img's .bin (or .rom) and .cfg into work; (image path, cfg path or None)."""
+    b = os.path.join(work, img['name'] + ('.bin' if img['cfg'] is not None else '.rom'))
     open(b, 'wb').write(img['data'])
+    if img['cfg'] is None:
+        return b, None
+    c = os.path.join(work, img['name'] + '.cfg')
     open(c, 'wb').write(img['cfg'])
     return b, c
 
@@ -97,7 +108,7 @@ def main():
         ok = mode == img['auto']
         bad += not ok
         print('%-9s %5d bytes  CFG %s  Auto %s%s' % (img['name'], len(img['data']),
-                                                    img['cfg'].decode().replace('\n', ' | ').strip(),
+                                                    (img['cfg'] or b'(none: .rom)').decode().replace('\n', ' | ').strip(),
                                                     ecsm.MODE_NAMES[mode], '' if ok else ' FAIL'))
     print('STEP9_IMAGES %s' % ('pass' if not bad else 'FAIL'))
     return 1 if bad else 0

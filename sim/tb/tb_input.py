@@ -462,7 +462,9 @@ def generate(path):
     # 10 the ECS keyboard (step 9), written out by hand: each key of the ECS keyboard by its HID
     # usage code (ECS_SPEC) gives its switch of the matrix (MAME ecs_ctrl.cpp ROW.n, the wiki's table:
     # tools/ecs.py KEYPOS); Shift and Ctrl from either side of the modifier byte; the synthesizer's two
-    # tracker rows give their notes; nothing without the ECS; the keypad keeps only the numpad with it
+    # tracker rows give their notes; nothing without the ECS; the keypad keeps only the numpad with it.
+    # ecs is the ECS mode (tools/ecs.py: 0 off, 1 on, 2 attached): only mode on (1) takes the keyboard
+    # (step 9 review); attached is the 0.0.8 keypad with no matrix key, like off
     import ecs as ecsm
     kb = 4 << 28
     for name, code in ECS_SPEC.items():
@@ -471,13 +473,16 @@ def generate(path):
             j3, t3 = (code << (8 * pos), 0) if pos < 4 else (0, code << (8 * (pos - 4)))
             add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=1, ovr=pos % 3), (0xFF, 0xFF), 1 << (8 * r_ + c_))
             add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=0, swap=pos & 1), None, 0)
+            add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=2, swap=pos & 1, synth=pos & 1), None, 0)
     for mod, name in ((0x02, 'SHIFT'), (0x20, 'SHIFT'), (0x01, 'CTL'), (0x10, 'CTL')):
         r_, c_ = ecsm.KEYPOS[name]
         add(10, vec(key3=kb | mod, ecs=1), (0xFF, 0xFF), 1 << (8 * r_ + c_))
         add(10, vec(key3=kb | mod, ecs=1, synth=1), (0xFF, 0xFF), 0)
+        add(10, vec(key3=kb | mod, ecs=2), (0xFF, 0xFF), 0)
     for code, note in SYNTH_SPEC:
         add(10, vec(key3=kb, joy3=code, ecs=1, synth=1), (0xFF, 0xFF), 1 << note)
         add(10, vec(key3=kb, trig3=code << 8, ecs=1, synth=1, ovr=2), (0xFF, 0xFF), 1 << note)
+        add(10, vec(key3=kb, joy3=code, ecs=2, synth=1), None, 0)
     # with the ECS the numpad stays the keypad (numpad . = Clear) and the number row, Enter and
     # Backspace do not; written out with MAME's keypad names
     for code, key in ((0x59, '1'), (0x61, '9'), (0x62, '0'), (0x58, 'Enter'), (0x63, 'Clear')):
@@ -486,13 +491,23 @@ def generate(path):
         add(10, vec(key3=kb, joy3=code, ecs=1, swap=1), (w, 0xFF), 0)
     for code in (0x1E, 0x27, 0x28, 0x2A):
         add(10, vec(key3=kb, joy3=code, ecs=1), (0xFF, 0xFF), None)
+    # with the ECS attached (Auto's mode for most games) the number row, Enter and Backspace are the
+    # keypad as in 0.0.8 (and with the ECS off), written out with MAME's keypad names; no matrix key
+    for code, key in ((0x1E, '1'), (0x26, '9'), (0x27, '0'), (0x28, 'Enter'), (0x2A, 'Clear'), (0x59, '1'),
+                      (0x58, 'Enter')):
+        w = mame_read_ctrl([key])
+        for e in (0, 2):
+            add(10, vec(key3=kb, joy3=code, ecs=e), (0xFF, w), 0)
+            add(10, vec(key3=kb, trig3=code << 8, ecs=e, swap=1, synth=1), (w, 0xFF), 0)
+    add(10, vec(key3=kb, joy3=0x63, ecs=2), (0xFF, 0xFF), 0)      # numpad . is Clear only with the ECS on
     # 11 every usage code in each report byte, with and without the ECS and the synthesizer; random
     # reports of up to six keys with modifiers (expected: the model)
     for c in range(256):
         for pos in range(6):
             j3, t3 = (c << (8 * pos), 0) if pos < 4 else (0, c << (8 * (pos - 4)))
-            add(11, vec(key3=kb | rng.getrandbits(8), joy3=j3, trig3=t3, ecs=1, synth=(c + pos) & 1,
-                        swap=c & 1, ovr=pos % 3))
+            for e in (1, 2):
+                add(11, vec(key3=kb | rng.getrandbits(8), joy3=j3, trig3=t3, ecs=e, synth=(c + pos) & 1,
+                            swap=c & 1, ovr=pos % 3))
     for i in range(20000):
         n = rng.randint(1, 6)
         cs = [rng.choice(list(m.ECS_HID) + list(m.SYNTH_HID) + list(m.HID_ECS)) if rng.random() < 0.8
@@ -500,7 +515,7 @@ def generate(path):
         rng.shuffle(cs)
         add(11, vec(key1=rkey() if i % 2 else 0, joy1=rng.getrandbits(32), key3=kb | rng.getrandbits(16),
                     joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24, trig3=cs[4] | cs[5] << 8,
-                    mode=i % 4, swap=(i >> 2) & 1, ecs=(i >> 3) & 1, synth=(i >> 4) & 1, ovr=i % 3))
+                    mode=i % 4, swap=(i >> 2) & 1, ecs=(i >> 3) % 3, synth=(i >> 4) & 1, ovr=i % 3))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
@@ -650,7 +665,7 @@ PLANTS = [
     ('face_lr_swapped', 'intv_input.sv', 'ring_code(bx, bb, by, ba)', 'ring_code(bx, bb, ba, by)'),
     ('backspace', 'intv_input.sv', "c == 8'h2A", "c == 8'h2B"),
     ('kbd_any_type', 'intv_input.sv', "k3[31:28] == 4'd4", "k3[31:28] != 4'd0"),
-    ('kbd_5_bytes', 'intv_input.sv', ' | hid_code(t3[15:8]);', ';'),
+    ('kbd_5_bytes', 'intv_input.sv', "default: hc = t3[15:8];", "default: hc = 8'h00;"),
     ('type_any', 'intv_input.sv', "(t == 4'd1 || t == 4'd2 || t == 4'd3) ? p", "(t != 4'd0) ? p"),
     ('no_r3', 'intv_input.sv', "| (r3 ? key_code(4'd5) : 8'h00)", "| (1'b0 ? key_code(4'd5) : 8'h00)"),
     ('rstick_any_mode', 'intv_input.sv', "if (mode == 2'd2 && an)", 'if (an)'),
@@ -678,16 +693,22 @@ PLANTS = [
     # without the ECS; the ECS setting's bits swapped
     ('ecs_shift_pos', 'intv_input.sv', "? 64'd1 << 55 : 64'd0)", "? 64'd1 << 54 : 64'd0)"),
     ('ecs_bs_none', 'intv_input.sv', "8'h50: p = 7'd0;   8'h2A: p = 7'd0;", "8'h50: p = 7'd0;"),
-    ('ecs_numrow_keypad', 'intv_input.sv', "kb = hid_code_ecs(j3[7:0]) | hid_code_ecs(j3[15:8])",
-     "kb = hid_code(j3[7:0]) | hid_code_ecs(j3[15:8])"),
+    ('ecs_numrow_keypad', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)",
+     "ecs_full ? (ph == 3'd0 ? hid_code(hc) : hid_code_ecs(hc)) : hid_code(hc)"),
     ('synth_octave', 'intv_input.sv', "8'h1D: n = 7'd12;", "8'h1D: n = 7'd24;"),
-    ('ecs_rctrl', 'intv_input.sv', "((k3[0] | k3[4]) ?", "((k3[0]) ?"),
-    ('ecs_always', 'intv_input.sv', "            if (ecs_on) begin\n", "            if (1'b1) begin\n"),
+    ('ecs_rctrl', 'intv_input.sv', "&& (k3[0] | k3[4]) ?", "&& (k3[0]) ?"),
+    ('ecs_always', 'intv_input.sv', "(kbd && ecs_full && !sp[6]", "(kbd && !sp[6]"),
+    # the step-9 review: with the ECS attached (or off) the keyboard is the 0.0.8 keypad; a core that
+    # gives it the ECS's numpad-only mapping there loses the number row, Enter and Backspace
+    ('attached_numpad_only', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)", "hid_code_ecs(hc)"),
+    ('ecs_mods_always', 'intv_input.sv', "(kbd && ecs_full && !sy && (k3[1] | k3[5])", "(kbd && !sy && (k3[1] | k3[5])"),
+    # the decode round: a word loaded at any step (the outputs mix two words: the tear check)
+    ('round_any_load', 'intv_input.sv', "if (req_s[1] != ack && ph == 3'd7) begin", "if (req_s[1] != ack) begin"),
     ('ovr_swapped', 'intv_input.sv', "    assign ecs_ovr   = eo;", "    assign ecs_ovr   = {eo[0], eo[1]};"),
     # the crossing as it was before 0.0.5: every bit through two clk flip-flops on its own
     ('bitwise_sync', 'intv_input.sv',
      [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),
-      ("        if (req_s[1] != ack) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
+      ("        if (req_s[1] != ack && ph == 3'd7) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
        "        w_s  <= in_74;\n        word <= w_s;\n        ack  <= req_s[1];\n")], None),
     # handshake faults the input skew alone cannot show (the step-6 review of 0.0.5): the copy retaken at
     # every clk_74a edge, so it can change while clk loads it; a registered copy crossed bit by bit
@@ -698,7 +719,7 @@ PLANTS = [
      [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),
       ("        if (ack_74[1] == req_74) begin\n            hold_74 <= in_74;\n            req_74  <= !req_74;\n        end\n",
        "        hold_74 <= in_74;\n"),
-      ("        if (req_s[1] != ack) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
+      ("        if (req_s[1] != ack && ph == 3'd7) begin\n            word <= hold_74;\n            ack  <= req_s[1];\n        end\n",
        "        w_s  <= hold_74;\n        word <= w_s;\n")], None),
 ]
 

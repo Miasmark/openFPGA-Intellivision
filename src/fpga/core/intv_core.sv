@@ -53,7 +53,7 @@ module intv_core #(
     input  wire logic [1:0]  ecs_override,
     input  wire logic [63:0] ecs_keys,
     input  wire logic        ecs_synth,
-    output logic             ecs_attached,    // the ECS answers (for intv_input's key routing)
+    output logic             ecs_full,        // the ECS fully on, mode on (intv_input's key routing)
 
     // raster and picture
     output logic             ce_pix,
@@ -113,7 +113,6 @@ module intv_core #(
     logic [1:0]  ecs_auto, ecs_mode;
     // the mode intv_ecs takes at machine reset: the menu's override or the Auto rule
     assign ecs_mode = ecs_override == 2'd1 ? 2'd1 : ecs_override == 2'd2 ? 2'd0 : ecs_auto;
-    assign ecs_attached = ecs_on;
     logic [16:0] cart_words;
     logic [7:0]  cart_layout, cart_flags;
     logic        cbus_ack, cbus_hit, cbus_paged, cbus_req, cbus_we;
@@ -204,7 +203,7 @@ module intv_core #(
         .hcnt(hcnt), .vcnt(vcnt),
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1),
         .pad_r(pad_r), .pad_l(pad_l),
-        .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_on(ecs_on), .ecs_pg(ecs_pg),
+        .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),

@@ -146,7 +146,16 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('ecshook', ('step9', 'ecshook'), None, 30, (0xFF, 0xFF), 'stic'),
           ('ecsavail', ('step9', 'ecsavail'), None, 30, (0xFF, 0xFF), 'stic'),
           ('cart4000', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic'),
-          ('cart4000_on', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic')]
+          ('cart4000_on', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic'),
+          # the step-9 review: ecstest with the ECS on and no ECS ROM slot ($2000, $7000, $E000
+          # read $FFFF on every page); library games under Auto with the ECS attached, the
+          # hardware's default (Super NFL Football writes the ECS RAM from frame 14; Atlantis
+          # boots through its $4800 hook; Body Slam, a Super Pro title, clears $00E0-$00FF, the
+          # UART stub and PSG #2, in frame 4)
+          ('ecsnorom', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
+          ('nfl_auto', 'Super NFL Footbal (USA) (Proto).zip', None, 24, (0xFF, 0xFF), 'stic'),
+          ('atlantis_auto', 'Atlantis (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
+          ('bodyslam_auto', 'Body Slam! - Super Pro Wrestling (USA).zip', None, 10, (0xFF, 0xFF), 'stic')]
 # a cartridge file's CFG (step 8): the model and the bench load it with the image
 CFG_OF = {}
 # step 9: the ECS of an image: the menu override ('auto', 'on', 'off'), the synthesizer,
@@ -168,6 +177,10 @@ ECS_OF = {
     'ecsavail': dict(ovr='auto', auto=2, passes=(2, 3, 4)),
     'cart4000': dict(ovr='auto', auto=0, passes=(2, 3)),
     'cart4000_on': dict(ovr='on', auto=0),      # forced on: the ECS RAM, not the cartridge, at $4000
+    'ecsnorom': dict(ovr='on', auto=1, norom=True),     # no ECS ROM slot: the ROMs never answer
+    'nfl_auto': dict(ovr='auto', auto=2),
+    'atlantis_auto': dict(ovr='auto', auto=2),
+    'bodyslam_auto': dict(ovr='auto', auto=2),
 }
 ECS_OVR = {'auto': 0, 'on': 1, 'off': 2}
 # ecstest's ISR scans, written out from DESIGN 7.3's rule (not from tools/ecs.py): per key
@@ -249,6 +262,13 @@ def ecs_selfcheck(name, e):
     if dev is None or dev.mode != mode or ecsm.auto_mode(*ecsm.cart_inputs(e.bus.cart)) != want['auto']:
         probs.append('mode %s (Auto %s), want %s' % (dev and ecsm.MODE_NAMES[dev.mode], ecsm.MODE_NAMES[want['auto']],
                                                      ecsm.MODE_NAMES[mode]))
+    if want.get('norom'):
+        # no ECS ROM slot: every read of $2000, $7000 and $E000 (ecstest reads each on several
+        # pages) gives $FFFF, nothing answers there (step-9 review)
+        for a in (0x2000, 0x7000, 0xE000):
+            vals = [d for c, ph, ad, d in e.blog if ph == PHASE['DTB'] and ad == a]
+            if not vals or any(v != 0xFFFF for v in vals):
+                probs.append('no ECS ROM: $%04X read %s, want $FFFF' % (a, ' '.join('$%04X' % v for v in vals) or 'never'))
     ram = e.snaps[e.ncyc]['sysram']
     if want.get('presses'):
         presses = isys.parse_presses(want['presses'])
@@ -459,7 +479,7 @@ def ecs_device(cart, ecs):
     """The model's ECS for an ECS_OF entry (None: no ECS, the RTL's override Off)."""
     if not ecs:
         return None
-    dev = isys.make_ecs(cart[0] if cart else None, (ecs['ovr'], None))
+    dev = isys.make_ecs(cart[0] if cart else None, (ecs['ovr'], '' if ecs.get('norom') else None))
     dev.synth = bool(ecs.get('synth'))
     return dev
 
@@ -581,8 +601,9 @@ class psg2_hooks:
     """PSG #2's per-frame fingerprint and the mixed sound, as the bench's E
     lines give them: {k: [ha, na, hq, nq, hm]}: PSG #2's steps' levels and
     48 kHz samples as psg_hooks has PSG #1's (it steps only while the ECS is
-    attached), and hm over every sample of the machine's sound, min(32767,
-    PSG #1 + PSG #2), a step at cycle c counting in frame (c + 1) // FRAME
+    attached), and hm over every sample of the machine's sound, mix_sample():
+    min(32767, PSG #1 + PSG #2), the sum scaled to 3/4 (floor) while the ECS
+    is attached or on, a step at cycle c counting in frame (c + 1) // FRAME
     (intv_machine gives the sample the clk after the step's ce). Both PSGs
     step at the same cycles (tools/psg.py); done() collects them once the
     run has advanced both."""
@@ -596,7 +617,7 @@ class psg2_hooks:
         def s1(v):
             if prev1:
                 prev1(v)
-            self.s1.append((bus.snd.ticks, v))
+            self.s1.append((bus.snd.ticks, v, bus.ecs is not None and bus.ecs.on))
         bus.snd.on_sample = s1
         if bus.ecs is not None:
             p2 = bus.ecs.psg
@@ -623,13 +644,22 @@ class psg2_hooks:
 
     def done(self):
         out = {}
-        for t, v1 in self.s1:
+        for t, v1, on in self.s1:
             k = (4 * (t - 1) + 1) // FRAME
             e = out.setdefault(k, list(self.a2.get(k, [FNV0, 0, FNV0, 0])) + [FNV0])
-            e[4] = fnv(e[4], min(32767, v1 + self.s2.get(t, 0)))
+            e[4] = fnv(e[4], mix_sample(v1, self.s2.get(t, 0), on))
         for k, a in self.a2.items():
             out.setdefault(k, list(a) + [FNV0])
         return out
+
+
+def mix_sample(v1, v2, ecs_on):
+    """The machine's sound sample (intv_machine.sv): PSG #1 + PSG #2, scaled to 3/4 (floor)
+    while the ECS is attached or on (ECS_NOTES 3), at most 32,767."""
+    m = v1 + v2
+    if ecs_on:
+        m = (3 * m) >> 2
+    return min(32767, m)
 
 
 def fnv(h, *xs):
@@ -998,11 +1028,17 @@ def compare(name, run, got, exp):
     probs += compare_stic(got, exp, range(exp.ncyc // FRAME - 1))
     probs += compare_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
     probs += compare_ecs_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
+    mode = 0
     if exp.ecs:
-        want = 'L ecs auto %d rom 1 mode %d' % (exp.ecs['auto'], exp.ecs['auto'] if exp.ecs['ovr'] == 'auto'
-                                                 else {'on': 1, 'off': 0}[exp.ecs['ovr']])
+        mode = exp.ecs['auto'] if exp.ecs['ovr'] == 'auto' else {'on': 1, 'off': 0}[exp.ecs['ovr']]
+        want = 'L ecs auto %d rom %d mode %d' % (exp.ecs['auto'], 0 if exp.ecs.get('norom') else 1, mode)
         if want not in got[3]:
             probs.append('RTL ECS: %s, want "%s"' % ([x for x in got[3] if x.startswith('L ecs')], want))
+    # the key routing's mode (step-9 review): intv_input gets the keyboard into the matrix only
+    # with the ECS fully on (mode 1), never attached
+    want = 'L ecs full %d' % (mode == 1)
+    if want not in got[3]:
+        probs.append('RTL ECS: %s, want "%s"' % ([x for x in got[3] if x.startswith('L ecs full')], want))
     return probs
 
 
@@ -1052,7 +1088,7 @@ def ecs_args(work, tag, ecs, nframes):
     if not ecs:
         return ['+ecs=2']
     args = ['+ecs=%d' % ECS_OVR[ecs['ovr']]]
-    rom = ecs_bios()
+    rom = None if ecs.get('norom') else ecs_bios()
     if rom:
         args.append('+ecsrom=' + rom)
     if ecs.get('synth'):
@@ -1717,10 +1753,20 @@ PLANTS = [
     ('ecs_env2', 'intv_ecs.sv', [(".ENV2(1'b0)", ".ENV2(1'b1)")], 'ecstest', None),
     ('ecs_uart_0', 'intv_ecs.sv', [("a[1:0] == 2'd0 ? 16'h0002 : 16'h0000", "16'h0000")], 'ecstest', None),
     ('ecs_ram_not_owned', 'intv_cart.sv', [("ba[15:11] == 5'b01000));", "1'b0));")], 'cart4000_on', None),
-    ('ecs_mix_wraps', 'intv_machine.sv', [("assign audio     = mix[16:15] != 2'd0 ? 16'h7FFF : mix[15:0];",
-                                          "assign audio     = mix[15:0];")], 'ecstest', None),
+    ('ecs_mix_wraps', 'intv_machine.sv', [("assign audio     = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];",
+                                          "assign audio     = mixs[15:0];")], 'ecstest', None),
+    # the step-9 review: the sum not scaled to 3/4 with the ECS attached (ecsastro: Auto, attached)
+    # or on (ecstest), or scaled with the ECS off too (psgtest: PSG #1 alone at full volume)
+    ('ecs_mix_unscaled', 'intv_machine.sv', [("ecs_on ? mix3[18:2] : mix;", "mix;")], 'ecstest', None),
+    ('ecs_mix_scaled_off', 'intv_machine.sv', [("ecs_on ? mix3[18:2] : mix;", "mix3[18:2];")], 'psgtest', None),
     ('ecs_latch_when_off', 'intv_ecs.sv', [("        end else if (on) begin\n", "        end else begin\n")],
      'ecstest_off', None),
+    # the step-9 review: the ECS ROMs answering with no ECS ROM slot (uninitialised SRAM at
+    # $10000-$12FFF); intv_ecs reporting attached as fully on (the keyboard would leave the keypad)
+    ('ecs_rom_ok_ignored', 'intv_cart.sv', [("wire logic e_rom = ecs_on && ecs_rom_ok &&", "wire logic e_rom = ecs_on &&")],
+     'ecsnorom', None),
+    ('ecs_full_attached', 'intv_ecs.sv', [("assign full = mode_q == M_ON;", "assign full = mode_q != M_OFF;")],
+     'ecsastro', None),
     ('ecs_answers_when_off', 'intv_ecs.sv', [("assign hit = on && (sel_uart", "assign hit = (sel_uart")],
      'ecstest_off', None),
 ]

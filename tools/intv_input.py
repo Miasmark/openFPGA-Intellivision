@@ -38,11 +38,15 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   and cont3_trig[15:0]) is player 1's keypad: 1-9 and 0 on the number row
   and on the numpad, Backspace = Clear, Enter and numpad Enter = Enter.
   Everything ORs into player 1's controller, like a second set of fingers.
-- With the ECS attached (build step 9; v["ecs"]) the USB keyboard is the
+- With the ECS fully on (build step 9; v["ecs"] is the ECS mode, tools/ecs.py
+  OFF 0, ON 1, ATTACHED 2; only ON counts here) the USB keyboard is the
   ECS keyboard key by key (ECS_HID; ecs_keys()), and only the numpad stays
   player 1's keypad (1-9, 0, numpad Enter, numpad . = Clear). With the
   "ECS Keyboard" setting on Synthesizer (v["synth"]) the two tracker rows
-  play the music synthesizer (SYNTH_HID) instead.
+  play the music synthesizer (SYNTH_HID) instead. With the ECS attached
+  (ROMs out: Auto's mode for most games) or off the keyboard is the keypad
+  as above (0.0.8) and the ECS matrix reads no key (step 9 review: no ECS
+  ROM code scans it then, and the games keep the number row).
 - Keypad mode Layer (0, default): D-pad = disc (8 directions); A = lower
   right, B = lower left, X = top side action. R held: D-pad = the keypad
   ring by position (up-left/up/up-right = 1/2/3, left/right = 4/6,
@@ -114,7 +118,7 @@ HID = {0x1E: 1, 0x1F: 2, 0x20: 3, 0x21: 4, 0x22: 5, 0x23: 6, 0x24: 7, 0x25: 8, 0
        0x28: "E", 0x2A: "C", 0x58: "E",
        0x59: 1, 0x5A: 2, 0x5B: 3, 0x5C: 4, 0x5D: 5, 0x5E: 6, 0x5F: 7, 0x60: 8, 0x61: 9, 0x62: 0}
 
-# With the ECS attached (build step 9) the keypad keeps only the numpad: 1-9, 0, numpad Enter, and
+# With the ECS fully on (mode ON, build step 9) the keypad keeps only the numpad: 1-9, 0, numpad Enter, and
 # numpad . (Del) as Clear; the number row, Enter and Backspace belong to the ECS keyboard.
 HID_ECS = {0x58: "E", 0x63: "C",
            0x59: 1, 0x5A: 2, 0x5B: 3, 0x5C: 4, 0x5D: 5, 0x5E: 6, 0x5F: 7, 0x60: 8, 0x61: 9, 0x62: 0}
@@ -253,12 +257,15 @@ def hid_codes(joy3, trig3):
     return [(joy3 >> s) & 0xFF for s in (0, 8, 16, 24)] + [trig3 & 0xFF, trig3 >> 8 & 0xFF]
 
 
-def keyboard(key3, joy3, trig3, hand, ecs=False):
-    """The USB keyboard (cont3 type 4) into `hand`; ecs: the ECS is attached (only the numpad
-    is the keypad then)."""
+ECS_ON = 1                                  # tools/ecs.py ON: the mode that takes the keyboard
+
+
+def keyboard(key3, joy3, trig3, hand, ecs=0):
+    """The USB keyboard (cont3 type 4) into `hand`; ecs: the ECS mode (only the numpad is the
+    keypad with the ECS fully on, ECS_ON)."""
     if key3 >> 28 != 4:
         return hand
-    table = HID_ECS if ecs else HID
+    table = HID_ECS if ecs == ECS_ON else HID
     for code in hid_codes(joy3, trig3):
         if code in table:
             hand.key(table[code])
@@ -267,8 +274,9 @@ def keyboard(key3, joy3, trig3, hand, ecs=False):
 
 def ecs_keys(v):
     """The ECS keyboard's pressed switches (bit 8 row + column) from the USB keyboard, while
-    the ECS is attached (v["ecs"]); v["synth"]: the synthesizer instead (tracker rows)."""
-    if not v.get("ecs") or v["key3"] >> 28 != 4:
+    the ECS is fully on (v["ecs"] == ECS_ON; attached or off: none); v["synth"]: the
+    synthesizer instead (tracker rows)."""
+    if v.get("ecs") != ECS_ON or v["key3"] >> 28 != 4:
         return 0
     bits = 0
     codes = hid_codes(v["joy3"], v["trig3"])
@@ -394,7 +402,10 @@ def self_check():
     ok(ecs_keys(dict(base, key3=(4 << 28) | 0x02, ecs=1)) == 1 << 55 and
        ecs_keys(dict(base, key3=(4 << 28) | 0x10, ecs=1)) == 1 << 46,
        "ECS keyboard: Shift -> row 6 column 7, Ctrl -> row 5 column 6")
-    ok(ecs_keys(dict(base, key3=4 << 28, joy3=0x1A, ecs=0)) == 0, "ECS keyboard: nothing without the ECS")
+    ok(ecs_keys(dict(base, key3=4 << 28, joy3=0x1A, ecs=0)) == 0 and
+       ecs_keys(dict(base, key3=4 << 28, joy3=0x1A, ecs=2)) == 0, "ECS keyboard: nothing with the ECS off or attached")
+    ok(ports(dict(base, key3=4 << 28, joy3=0x1E, ecs=2)) == ports(dict(base, key3=4 << 28, joy3=0x1E, ecs=0)) != (0xFF, 0xFF),
+       "ECS attached: the number row is the keypad, as with the ECS off")
     ok(sorted(SYNTH_HID.values()) == list(range(12, 37)), "synthesizer: 25 notes C3-C5")
     return fails
 

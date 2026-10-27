@@ -21,6 +21,8 @@ in play with keys, B-17 Bomber in flight, Atlantis, Buzz Bombers, our sticmob an
      R, untouched;
   E  (build step 9, SS_ECS images) the image's own blob into a core whose ECS is off (the
      menu's override): err, no state set (the header's ECS flag);
+  X  (step-9 review, SS_ECS images with the ECS attached or on) the image's own blob into a
+     core whose ECS ROM file differs by one byte: err, no state set (the header's ECS CRC);
   C  corrupt and wrong blobs (a payload byte flipped, the header CRC changed, a reserved
      byte set, the version changed, the unused module area set) each give err with the
      run untouched, then the good blob loads.
@@ -83,6 +85,7 @@ SS_IMAGES = [
     ('b17bomber', 'B-17 Bomber (USA, Europe).zip', None, (0xFF, 0xFF), 1000,
      '200-206:1,500-506:Enter,600-630:Right,700-730:Down,800-806:0,900-960:Left',
      [(860, 'sound'), (890, 'busrq'), (910, 'rowfetch'), (930, 'midinst')], (945, 30), 965),
+    # Atlantis under Auto (step-9 review): the ECS attached, its $4800 hook run (SS_ECS)
     ('atlantis', 'Atlantis (USA, Europe).zip', None, (0xFF, 0xFF), 360,
      '150-156:1,220-230:Up,280-320:Left',
      [(200, 'busrq'), (250, 'rowfetch'), (290, 'midinst'), (300, 'any')], (310, 20), 330),
@@ -113,6 +116,10 @@ SS_IMAGES = [
      [(40, 'sound'), (55, 'midinst'), (70, 'sound'), (78, 'any')], (82, 6), 86),
     ('ecsavail', ('step9', 'ecsavail'), None, (0xFF, 0xFF), 60, None,
      [(25, 'midinst'), (32, 'any'), (40, 'busrq'), (44, 'any')], (48, 6), 52),
+    # the step-9 review: a library game under Auto (attached) that uses the ECS RAM (Super NFL
+    # Football writes about 135 cells from frame 14)
+    ('nfl', 'Super NFL Footbal (USA) (Proto).zip', None, (0xFF, 0xFF), 110, None,
+     [(30, 'midinst'), (50, 'any'), (65, 'busrq'), (80, 'any')], (88, 8), 98),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
@@ -123,6 +130,8 @@ SS_ECS = {
                                          '432-438:ecs:R,444-450:ecs:U,456-462:ecs:N,468-474:ecs:RTN'),
     'ecssound': dict(ovr=0, mode=1),
     'ecsavail': dict(ovr=0, mode=2),
+    'atlantis': dict(ovr=0, mode=2),       # Auto: attached (the hardware's default for it)
+    'nfl': dict(ovr=0, mode=2),
 }
 FRAMES_AFTER = 24          # an L run goes on this many frames after the restore
 LOAD_AT = FRAME            # fresh cores load from machine cycle 1 frame on
@@ -345,6 +354,19 @@ class Bench:
             run.fails.append('FAIL exit code %d' % r.returncode)
         print('  ran %s: %.0fs' % (tag, time.time() - t0), flush=True)
         return run
+
+    def ecs_alt(self):
+        """ECS.bin with one byte changed (its last: $EFFF's low byte), in the work directory:
+        the X runs' ECS ROM slot."""
+        p = os.path.join(self.work, 'ecs_alt.bin')
+        if not os.path.exists(p):
+            rom = [os.path.join(self.bdir, n) for n in ('ECS.bin', 'ecs.bin')
+                   if os.path.exists(os.path.join(self.bdir, n))][0]
+            b = bytearray(open(rom, 'rb').read())
+            b[-1] ^= 0x01
+            with open(p, 'wb') as f:
+                f.write(bytes(b))
+        return p
 
     def blob_path(self, name, i, tag='s'):
         return os.path.join(self.work, '%s_%s%d.blob' % (name, tag, i))
@@ -618,6 +640,12 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             end = 20 * FRAME
             lf.append((img, 'E', None, end, None, sub('E', end, ['load %d %s err -1' % (LOAD_AT, p0)],
                                                          ['+ecs=2'])))
+        # X (step-9 review): the image's own state into a core whose ECS ROM file differs from the
+        # saving core's by one byte: refused (header word 13, the ECS ROM's CRC), the run untouched
+        if SS_ECS.get(name, {}).get('mode'):
+            end = 20 * FRAME
+            lf.append((img, 'X', None, end, None, sub('X', end, ['load %d %s err -1' % (LOAD_AT, p0)],
+                                                         ['+ecsrom=' + bench.ecs_alt()])))
         # corrupt ones, then the good one
         bads = corrupt_blobs(bench.work, tagp + name, p0)
         sc = ['load %d %s err -1' % (LOAD_AT, b) for b in bads] + ['load 0 %s ok %d' % (p0, zc0)]
@@ -667,7 +695,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             elif zc is None:                   # F: untouched all the way
                 if run.set_cycle is not None or applied:
                     q.append('state set by a refused load')
-                if tag != 'E':                 # E runs with the ECS off: not R's run
+                if tag not in ('E', 'X'):      # E: the ECS off, X: another ECS ROM: not R's run
                     q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
             else:
                 if run.set_cycle != zc:
@@ -683,7 +711,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             if tag == 'C':
                 if [x.split()[1] for x in loads] != ['err'] * 6 + ['ok']:
                     q.append('loads %s' % loads)
-            if tag in ('F', 'E') and loads != ['LOAD err EXPECT err']:
+            if tag in ('F', 'E', 'X') and loads != ['LOAD err EXPECT err']:
                 q.append('loads %s' % loads)
         print('%s %s: %s' % (name, tag, 'pass' if not q else 'FAIL ' + '; '.join(q[:3])), flush=True)
         probs += ['%s %s: %s' % (name, tag, x) for x in q]
@@ -764,6 +792,12 @@ PLANTS = [
     ('ss_ecs_unchecked', 'intv_ss_ctl.sv',
      [("4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = 32'd0;")],
      'ecsavail', 'psgtest', r' E: (FAIL load|loads |state set)'),
+    # the step-9 review: the header's ECS ROM CRC not checked (an ECS state loads into a core with
+    # another ECS ROM: the X run)
+    ('ss_ecs_crc_unchecked', 'intv_ss_ctl.sv',
+     [(CHK, "else if (w != 14'(SS_H_ECS_CRC)\n"
+            "                             && m_q != hdr_exp(4'(w), 32'd0, cart_crc, cart_words, exec_crc, grom_crc))")],
+     'ecsavail', 'psgtest', r' X: (FAIL load|loads |state set)'),
     ('ss_ecsram_lost', 'intv_ecs.sv',
      [("rwe  = ss_en ? ss_we && ss_rhit : wr && sel_ram && on;", "rwe  = ss_en ? 1'b0 : wr && sel_ram && on;")],
      'ecsbasic', 'psgtest', AFTER),

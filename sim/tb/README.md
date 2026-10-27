@@ -227,7 +227,8 @@ the mapping written out (`l_oracle`), not from the model. Both Swap
 settings throughout.
 The bench runs `clk` (clk_sys) and `clk_74a` (period drawn each cycle
 between 12.5 and 14.5 ns) and drives the inputs as clk_74a signals; each
-vector is checked 16 clocks after it is driven.
+vector is checked 48 clocks after it is driven (16 before step 9's review:
+the keyboard's decode round adds up to two rounds of 8 clocks).
 For all but the spec rows and the grid the expected bytes are the model's,
 and the model must equal MAME's `read_ctrl()` on every vector. `--all`
 then builds 25 planted faults (Swap ignored, a disc code, the dead zone's
@@ -323,3 +324,19 @@ the ECS keyboard and the synthesizer. `tb_loader.py`: the Auto rule's
 mode on every image (`ecs auto` lines) and six Auto plants.
 `tb_savestate.py`: ecsbasic, ecssound, ecsavail (SS_ECS) and the E runs
 (the own state into a core with the ECS off: refused).
+
+After the step-9 review: `tb_system.py` images ecsnorom (ecstest with the
+ECS on and no ECS ROM slot: every read of $2000, $7000, $E000 is $FFFF in
+the model, RTL = model), nfl_auto, atlantis_auto and bodyslam_auto
+(library games under Auto, the ECS attached: the hardware default), the
+mix scaled to 3/4 with the ECS attached or on (`mix_sample`), and an `L ecs
+full` line on every image (intv_ecs's mode-on output, the key routing);
+plants ecs_rom_ok_ignored, ecs_full_attached, ecs_mix_unscaled,
+ecs_mix_scaled_off. `tb_input.py`: the vectors' ECS field is the mode (0
+off, 1 on, 2 attached); attached keeps the 0.0.8 keypad and no matrix key;
+plants ecs_always, attached_numpad_only, ecs_mods_always, round_any_load
+(the decode round taking a word mid-round: torn outputs). `tb_loader.py`:
+the images ecsoffcfg and ecsoffrom (ECS incompatible: Auto off), plant
+auto_ecs_off_ignored. `tb_savestate.py`: Atlantis under Auto and Super NFL
+Football (SS_ECS, attached), and the X runs (the own state into a core whose
+ECS ROM file differs by one byte: refused; plant ss_ecs_crc_unchecked).

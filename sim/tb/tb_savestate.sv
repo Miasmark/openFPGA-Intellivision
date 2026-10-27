@@ -169,7 +169,7 @@ module tb_savestate;
     logic [1:0]  ecs_ovr = 2'd2;          // +ecs (step 9): the menu's ECS override; Off by default
     logic        synth = 1'b0;
     /* verilator lint_off UNUSEDSIGNAL */
-    wire logic        ecs_attached;
+    wire logic        ecs_full;
     wire logic [11:0] slot_st;
     wire logic [1:0]  len_st;
     wire logic        ce_pix;
@@ -213,7 +213,7 @@ module tb_savestate;
         .cart_len(cart_len), .len_chk(2'd0), .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
         .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
-        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .ecs_attached(ecs_attached),
+        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .ecs_full(ecs_full),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),

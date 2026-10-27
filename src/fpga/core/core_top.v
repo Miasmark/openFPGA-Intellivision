@@ -410,6 +410,8 @@ localparam [31:0] SS_SIZE = 32'd153600;
     reg     [1:0]   set_kp_mode = 2'd0;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick
     reg             set_swap = 1'b0;        // Swap Controllers: 1 = player 1 on the right controller
     reg             set_pause = 1'b1;       // Pause in Menu: 1 = the machine freezes while the menu is open
+    reg     [1:0]   set_ecs = 2'd0;         // ECS: 0 Auto, 1 On, 2 Off (taken at the next reset or load; step 9)
+    reg             set_synth = 1'b0;       // ECS Keyboard: 0 computer keyboard, 1 music synthesizer
     reg     [7:0]   menu_reset_cnt = 8'd0;
 
 always @(posedge clk_74a) begin
@@ -423,6 +425,8 @@ always @(posedge clk_74a) begin
             12'h208: set_kp_mode    <= bridge_wr_data[1:0];
             12'h20C: set_swap       <= bridge_wr_data[0];
             12'h210: set_pause      <= bridge_wr_data[0];
+            12'h214: set_ecs        <= bridge_wr_data[1:0];
+            12'h218: set_synth      <= bridge_wr_data[0];
             default: ;
         endcase
     end
@@ -699,6 +703,9 @@ end
 ////////////////////////////////////////////////////////////////////////////////
 
     wire    [7:0]   pad_r, pad_l;
+    wire    [63:0]  ecs_keys;
+    wire            ecs_synth, ecs_full;
+    wire    [1:0]   ecs_ovr;
 
 intv_input input_map (
     .clk_74a    ( clk_74a ),
@@ -712,8 +719,14 @@ intv_input input_map (
     .cont3_trig ( cont3_trig ),
     .kp_mode    ( set_kp_mode ),
     .swap       ( set_swap ),
+    .ecs_ovr_74 ( set_ecs ),
+    .synth_74   ( set_synth ),
+    .ecs_full   ( ecs_full ),
     .pad_r      ( pad_r ),
-    .pad_l      ( pad_l )
+    .pad_l      ( pad_l ),
+    .ecs_keys   ( ecs_keys ),
+    .ecs_synth  ( ecs_synth ),
+    .ecs_ovr    ( ecs_ovr )
 );
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -751,6 +764,10 @@ intv_core machine_side (
     .machine_reset      ( machine_reset ),
     .pad_r              ( pad_r ),
     .pad_l              ( pad_l ),
+    .ecs_override       ( ecs_ovr ),
+    .ecs_keys           ( ecs_keys ),
+    .ecs_synth          ( ecs_synth ),
+    .ecs_full           ( ecs_full ),
     .ce_pix             ( ce_pix ),
     .hcnt               ( hcnt ),
     .vcnt               ( vcnt ),
@@ -830,7 +847,7 @@ assign video_rgb_clock_90 = clk_vid_90;
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Audio: the PSG's 48 kHz sound (intv_psg: box filter from its 223.7 kHz
+// Audio: the PSGs' 48 kHz sound (intv_psg: box filter from its 223.7 kHz
 // steps, 0..32766, silence 0) on both channels. agg23's sound_i2s (MIT)
 // takes it across to clk_74a and drives the Pocket's I2S DAC at 48 kHz.
 ////////////////////////////////////////////////////////////////////////////////

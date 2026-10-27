@@ -16,6 +16,13 @@
 //                       lines "k RRLL", both bytes from frame k on (model
 //                       cycle k x FRAME) until the next line; +pads before
 //                       the first
+//   +ecs=N              the ECS (build step 9): the menu's override, 0 Auto
+//                       (intv_media's rule), 1 On, 2 Off (the default: the
+//                       benches of steps 3-8 run without the ECS)
+//   +ecsrom=F           ECS.bin, loaded as the ECS ROM slot (4)
+//   +ekeys=F            scripted ECS keyboard: lines "k K", the pressed
+//                       switches K (hex, bit 8 row + column) from frame k on
+//   +synth=1            the music synthesizer instead of the keyboard
 //   +log=F              the output (below)
 //   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
 //   +pic=F              write every picture to F (binary, see below)
@@ -62,6 +69,11 @@
 //                       samples (nq, hash hq); a rewind (+rt=2) restores
 //                       the sums of the mark, and the last line of a frame
 //                       counts
+//   E k ha nb hq nq hm  the end of frame k: PSG #2 (the ECS) as the A line
+//                       has PSG #1, and hm: FNV-1a over every 48 kHz sample
+//                       of the machine's mixed sound (PSG #1 + #2, at most
+//                       32,767; intv_machine audio at audio_stb), a step
+//                       at cycle c counting in frame (c + 1) / FRAME
 //   H k hb nb hs ns     +bushash: frame k's B lines (hb, count nb) and S
 //                       lines (hs, ns), FNV-1a over 32-bit words: B c ph a
 //                       d, S c r0 .. r7 f; S lines of cycle 0 are left out
@@ -106,6 +118,8 @@ module tb_system;
     logic        cfg_inlist = 1'b0;
     logic        ss_en = 1'b0;
     logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
+    logic [1:0]  ecs_ovr = 2'd2;
+    logic        synth = 1'b0;
     logic        aux_req = 1'b0, aux_we = 1'b0;
     logic [16:0] aux_addr = 17'd0;
     logic [15:0] aux_wdata = 16'd0;
@@ -143,6 +157,11 @@ module tb_system;
     wire logic [15:0] sram_dq_out, sram_dq_in;
     wire logic        sram_dq_oe, sram_oe_n, sram_we_n, sram_ub_n, sram_lb_n;
     wire logic        mreset = mres_tb || !ready;
+    wire logic        ecs_on, ecs_rom_ok;
+    wire logic        efull;            // intv_ecs: mode on (intv_input's key routing, step-9 review)
+    wire logic [11:0] ecs_pg;
+    wire logic [1:0]  ecs_auto;
+    wire logic [1:0]  ecs_mode = ecs_ovr == 2'd1 ? 2'd1 : ecs_ovr == 2'd2 ? 2'd0 : ecs_auto;
 
     intv_media #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) media (
         .clk, .reset, .mreset,
@@ -150,6 +169,7 @@ module tb_system;
         .bus_req(c_req), .bus_we(c_we), .bus_addr(c_addr), .bus_wdata(c_wdata),
         .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_attr(c_attr),
         .bus_paged(c_paged), .pg_rst(64'd0), .pg_sel,
+        .ecs_on, .ecs_pg, .ecs_auto, .ecs_rom_ok,
         .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q,
@@ -183,10 +203,22 @@ module tb_system;
             if (cyc >= key_c[i]) kpads = key_v[i];
     end
 
+    // +ekeys: the ECS keyboard's switches by model cycle
+    int          nek = 0;
+    longint      ek_c[512];
+    logic [63:0] ek_v[512];
+    logic [63:0] ekeys;
+    always_comb begin
+        ekeys = 64'd0;
+        for (int i = 0; i < nek; i++)
+            if (cyc >= ek_c[i]) ekeys = ek_v[i];
+    end
+
     intv_machine dut (
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en,
         .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
+        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
@@ -217,6 +249,8 @@ module tb_system;
     int     nb = 0, ns = 0;
     logic [31:0] ha = 32'h811C9DC5, hq = 32'h811C9DC5, ha_s, hq_s;
     int     na = 0, nq = 0, na_s, nq_s;
+    logic [31:0] ha2 = 32'h811C9DC5, hq2 = 32'h811C9DC5, hm = 32'h811C9DC5, ha2_s, hq2_s, hm_s;
+    int     na2 = 0, nq2 = 0, na2_s, nq2_s;
     localparam longint FRAME = 14934;
 
     function automatic logic [31:0] fnv(input logic [31:0] h, input logic [31:0] x);
@@ -270,13 +304,31 @@ module tb_system;
                     nq++;
                 end
             end
+            // PSG #2 (it steps only while the ECS is attached) and the mixed sound
+            if (cyc >= 0 && dut.ecs.psg.tick) begin
+                ha2 = fnv(ha2, {20'd0, dut.ecs.psg.lv[2], dut.ecs.psg.lv[1], dut.ecs.psg.lv[0]});
+                na2++;
+                if (dut.ecs.psg.srph_n >= 23'd3579545) begin
+                    hq2 = fnv(hq2, 32'(dut.ecs.psg.prod[31:16]));
+                    nq2++;
+                end
+            end
             if (cyc >= 0 && (cyc + 1) % FRAME == 0) begin
                 $fdisplay(fd, "A %0d %08x %0d %08x %0d", cyc / FRAME, ha, na, hq, nq);
                 ha = 32'h811C9DC5; hq = 32'h811C9DC5; na = 0; nq = 0;
+                $fdisplay(fd, "E %0d %08x %0d %08x %0d %08x", cyc / FRAME, ha2, na2, hq2, nq2, hm);
+                ha2 = 32'h811C9DC5; hq2 = 32'h811C9DC5; hm = 32'h811C9DC5; na2 = 0; nq2 = 0;
             end
             cyc <= cyc + 1;
         end
     end
+
+    // the machine's mixed sound: every sample as intv_machine gives it (audio
+    // at audio_stb, the clk after the step's ce: a step that ends a frame's
+    // last cycle counts in the next frame's E line)
+    always @(posedge clk)
+        if (dut.audio_stb && cyc > 0 && !ss_en)
+            hm = fnv(hm, 32'(dut.audio));
 
     // ------------------------------------------------- the STIC's side
     // row fetches (decided the clk after the fetch cycle's ce) and the card
@@ -357,9 +409,9 @@ module tb_system;
 
     // --------------------------------------------------------- state port
     // module id, word count (the order is the write order)
-    localparam int NMOD = 13;
-    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64};
+    localparam int NMOD = 17;
+    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256};
     logic [31:0] saved [NMOD][256];
     logic [3:0]  pbuf_saved [2][45360];
 
@@ -426,6 +478,7 @@ module tb_system;
         for (int b = 0; b < 2; b++)               // the bench's own picture capture (rewind)
             for (int i = 0; i < 45360; i++) pbuf_saved[b][i] = pbuf[b][i];
         ha_s = ha; hq_s = hq; na_s = na; nq_s = nq;   // and its PSG sums
+        ha2_s = ha2; hq2_s = hq2; hm_s = hm; na2_s = na2; nq2_s = nq2;
         for (int m = 0; m < NMOD; m++)
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
@@ -544,6 +597,25 @@ module tb_system;
                 if (kf != 0) $fclose(kf);
                 $fdisplay(fd, "L keys %0d", nkeys);
             end
+            if ($value$plusargs("ekeys=%s", keys_f)) begin
+                int     kf;
+                longint k;
+                logic [63:0] v;
+                kf = $fopen(keys_f, "r");
+                if (kf == 0) fail($sformatf("cannot open %s", keys_f));
+                while (kf != 0 && nek < 512 && $fscanf(kf, "%d %h", k, v) == 2) begin
+                    ek_c[nek] = k * FRAME;
+                    ek_v[nek] = v;
+                    nek++;
+                end
+                if (kf != 0) $fclose(kf);
+                $fdisplay(fd, "L ekeys %0d", nek);
+            end
+        end
+        begin
+            int e;
+            if ($value$plusargs("ecs=%d", e)) ecs_ovr = 2'(e);
+            if ($value$plusargs("synth=%d", e)) synth = e != 0;
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -555,6 +627,13 @@ module tb_system;
         $fdisplay(fd, "L exec %0d", n);
         load_file(grom_f, 4'd3, n);
         $fdisplay(fd, "L grom %0d", n);
+        begin
+            string ecs_f;
+            if ($value$plusargs("ecsrom=%s", ecs_f)) begin
+                load_file(ecs_f, 4'd4, n);
+                $fdisplay(fd, "L ecsrom %0d", n);
+            end
+        end
         n = 0;
         if ($value$plusargs("cart=%s", cart_f)) begin
             load_file(cart_f, 4'd0, n);
@@ -574,6 +653,7 @@ module tb_system;
         if (to >= 4000000) fail("loader not ready");
         $fdisplay(fd, "L ready err %0d crc %08x words %0d layout %0d flags %02x hit %0d",
                   err, crc, words, layout, flags, hit);
+        $fdisplay(fd, "L ecs auto %0d rom %0d mode %0d", ecs_auto, ecs_rom_ok, ecs_mode);
         repeat (10) @(negedge clk);
         mres_tb = 1'b0;
 
@@ -603,6 +683,7 @@ module tb_system;
                     for (int b = 0; b < 2; b++)
                         for (int i = 0; i < 45360; i++) pbuf[b][i] = pbuf_saved[b][i];
                     ha = ha_s; hq = hq_s; na = na_s; nq = nq_s;
+                    ha2 = ha2_s; hq2 = hq2_s; hm = hm_s; na2 = na2_s; nq2 = nq2_s;
                     $fdisplay(fd, "R rewind %0d", rtcyc);
                 end
                 resume();
@@ -618,6 +699,7 @@ module tb_system;
         // just after the ce that ended cycle ncyc - 1
         wait_cycle(ncyc);
         freeze();
+        $fdisplay(fd, "L ecs full %0d", efull);
         dump_all(2);
         ss_en = 1'b0;
         if (halted) $fdisplay(fd, "R CPU halted");

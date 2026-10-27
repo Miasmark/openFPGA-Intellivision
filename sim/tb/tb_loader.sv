@@ -187,6 +187,10 @@ module tb_loader;
     wire  logic [31:0] crc;
     wire  logic [16:0] words;
     wire  logic [7:0]  layout, flags;
+    wire  logic [1:0]  ecs_auto;              // step 9: the Auto rule's mode
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire  logic        ecs_rom_ok;
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [15:0] ss_addr = 16'd0;
     logic        ss_we = 1'b0;
     logic [31:0] ss_wdata = 32'd0;
@@ -205,6 +209,7 @@ module tb_loader;
         .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
         .bus_attr(bus_attr), .bus_paged(bus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
+        .ecs_on(1'b0), .ecs_pg(12'd0), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok),
         .aux_req(aux_req), .aux_we(1'b0), .aux_addr(aux_addr), .aux_wdata(16'd0), .aux_be(2'b11),
         .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -460,6 +465,7 @@ module tb_loader;
         $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                   crc, words, layout, flags, hit, err, len_st);
         $fdisplay(outf, "slots %03X", slot_st);
+        $fdisplay(outf, "ecs auto %0d", ecs_auto);
         $fdisplay(outf, "format cfgcrc %08X noss %0d ferr %02X", cfg_crc, noss, fmt_err);
         image_crc("image");
         if (floaded[4]) begin
@@ -609,6 +615,7 @@ module tb_loader;
             $fdisplay(outf, "reload status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                       crc, words, layout, flags, hit, err, len_st);
             $fdisplay(outf, "reload slots %03X", slot_st);
+            $fdisplay(outf, "reload ecs auto %0d", ecs_auto);
             image_crc("reload image");
             for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "rss %0d %08X", i, ssq); end
             machine_reset();

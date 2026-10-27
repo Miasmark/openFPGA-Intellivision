@@ -227,7 +227,8 @@ the mapping written out (`l_oracle`), not from the model. Both Swap
 settings throughout.
 The bench runs `clk` (clk_sys) and `clk_74a` (period drawn each cycle
 between 12.5 and 14.5 ns) and drives the inputs as clk_74a signals; each
-vector is checked 16 clocks after it is driven.
+vector is checked 48 clocks after it is driven (16 before step 9's review:
+the keyboard's decode round adds up to two rounds of 8 clocks).
 For all but the spec rows and the grid the expected bytes are the model's,
 and the model must equal MAME's `read_ctrl()` on every vector. `--all`
 then builds 25 planted faults (Swap ignored, a disc code, the dead zone's
@@ -303,3 +304,39 @@ Frames are machine frames (H, A, P lines: bus and CPU steps, PSG, picture);
 after a load the PSG's 48 kHz sample values are left out (its output filter
 is not machine state; docs/SAVESTATE.md 5). Last line
 `TB_SAVESTATE_ALL pass`.
+
+Step 9 (the ECS, docs/ECS_NOTES.md). `tb_system.py`: images ecstest and
+ecssynth (`sim/testroms/ecstest.asm` with the keyboard and with the
+synthesizer, keys from `+ekeys`), ecsboot (the ECS's boot with no
+cartridge), ecsastro (Astrosmash under the Auto rule: attached), the
+step-9 cartridges ecssound, ecshook, ecsavail, cart4000 and cart4000_on
+(the ECS forced on over a cartridge at $4000); the dumps add the ECS's
+words, PSG #2 and the ECS RAM, the E lines PSG #2 and the mixed sound;
+ecstest's keyboard scans are checked against ECSKBD_WANT (the matrix rule
+written out by hand) and the cartridges' PASS lines in the model. ECS
+plants: page decode, RAM width, byte writes, masking off, the 8914's
+envelope bits, the UART's status, the RAM not owned, the mix not
+saturated, the latches written while off. `--ecs-play` (TB_ECS_PLAY_ALL):
+RTL = model frame by frame over the keys of the MAME references (ECS
+BASIC typing, Mind Strike, WSMLB, Melody Blaster, Mr. BASIC, Astrosmash
+under Auto, ecssound). `tb_input.py` classes 10-11: the USB keyboard as
+the ECS keyboard and the synthesizer. `tb_loader.py`: the Auto rule's
+mode on every image (`ecs auto` lines) and six Auto plants.
+`tb_savestate.py`: ecsbasic, ecssound, ecsavail (SS_ECS) and the E runs
+(the own state into a core with the ECS off: refused).
+
+After the step-9 review: `tb_system.py` images ecsnorom (ecstest with the
+ECS on and no ECS ROM slot: every read of $2000, $7000, $E000 is $FFFF in
+the model, RTL = model), nfl_auto, atlantis_auto and bodyslam_auto
+(library games under Auto, the ECS attached: the hardware default), the
+mix scaled to 3/4 with the ECS attached or on (`mix_sample`), and an `L ecs
+full` line on every image (intv_ecs's mode-on output, the key routing);
+plants ecs_rom_ok_ignored, ecs_full_attached, ecs_mix_unscaled,
+ecs_mix_scaled_off. `tb_input.py`: the vectors' ECS field is the mode (0
+off, 1 on, 2 attached); attached keeps the 0.0.8 keypad and no matrix key;
+plants ecs_always, attached_numpad_only, ecs_mods_always, round_any_load
+(the decode round taking a word mid-round: torn outputs). `tb_loader.py`:
+the images ecsoffcfg and ecsoffrom (ECS incompatible: Auto off), plant
+auto_ecs_off_ignored. `tb_savestate.py`: Atlantis under Auto and Super NFL
+Football (SS_ECS, attached), and the X runs (the own state into a core whose
+ECS ROM file differs by one byte: refused; plant ss_ecs_crc_unchecked).

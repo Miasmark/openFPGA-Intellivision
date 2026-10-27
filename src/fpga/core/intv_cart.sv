@@ -38,6 +38,18 @@
 // values over a machine reset (the Intellicart does not see the console's
 // reset).
 //
+// The ECS (build step 9; intv_ecs.sv, tools/ecs.py): while it is attached
+// (ecs_on) it owns $00E0-$00E3, $00F0-$00FF and $4000-$47FF, and each ROM
+// range while its page latch (ecs_pg) selects it: $2000 on page 1, $7000
+// on page 0, $E000 on page 1, with the ECS ROM slot loaded (ecs_rom_ok).
+// There the cartridge neither answers nor stores (MAME ecs.cpp read_rome0:
+// the ECS ROM or the cartridge, never both); a write still loads the page
+// selects and bank registers. An ECS ROM read is answered from the SRAM at
+// ECS_BASE ($2000: + $0000, $7000: + $1000, $E000: + $2000; ECS.bin as the
+// loader stored it). m4 tells the ECS Auto rule (intv_media) that the image
+// maps $4000-$47FF on page 0: an entry {4, 0, b < 8} with R, W or B, as
+// the loader last wrote it.
+//
 // Bus port: a request (one clk) is answered by ack (one clk) with the data,
 // hit (a read answered), the window's attributes {B, N, W, R} and the
 // range's paged bit. The table is read on the request's clock (the bus's
@@ -66,7 +78,8 @@
 `default_nettype none
 
 module intv_cart #(
-    parameter logic [7:0] SS_ID = 8'h0B
+    parameter logic [7:0]  SS_ID    = 8'h0B,
+    parameter logic [16:0] ECS_BASE = 17'h10000
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,          // machine reset: page selects to pg_rst
@@ -99,6 +112,12 @@ module intv_cart #(
     // page selects (for the ECS, build step 9)
     input  wire logic [63:0] pg_rst,
     output logic [63:0]      pg_sel,
+
+    // the ECS (build step 9)
+    input  wire logic        ecs_on,
+    input  wire logic [11:0] ecs_pg,          // {latch $E, latch $7, latch $2}
+    input  wire logic        ecs_rom_ok,
+    output logic             m4,              // the image maps $4000-$47FF (page 0)
 
     // CPU bus port
     input  wire logic        bus_req,
@@ -138,6 +157,8 @@ module intv_cart #(
     end
 
     logic [15:0] paged = 16'd0;
+    logic [7:0]  m4b = 8'd0;
+    assign m4 = |m4b;
     logic [16:0] limit = 17'd0;
     logic [7:0]  bank [32];
 
@@ -169,6 +190,19 @@ module intv_cart #(
     logic [15:0] qwd = 16'd0;
     logic [21:0] qe = 22'd0;                   // the window's entry (B_T2; its trim is not used)
     logic [7:0]  qlo = 8'd0;                   // the word in the Intellicart block (B_T2)
+    logic        qown = 1'b0;                  // the ECS owns the access
+    logic        qrom = 1'b0;                  // ... and it is an ECS ROM read
+
+    // the ECS's ranges for the address on the bus
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire logic [15:0] ba = bus_addr;
+    /* verilator lint_on UNUSEDSIGNAL */
+    wire logic e_rom = ecs_on && ecs_rom_ok &&
+                       ((ba[15:12] == 4'h2 && ecs_pg[3:0] == 4'd1) ||
+                        (ba[15:12] == 4'h7 && ecs_pg[7:4] == 4'd0) ||
+                        (ba[15:12] == 4'hE && ecs_pg[11:8] == 4'd1));
+    wire logic e_own = e_rom || (ecs_on && (ba[15:2] == 14'h0038 || ba[15:4] == 12'h00F ||
+                                            ba[15:11] == 5'b01000));
 
     wire logic [3:0]  r_bus = bus_addr[15:12];
     wire logic [3:0]  y_bus = paged[r_bus] ? pg_sel[4*r_bus +: 4] : 4'd0;
@@ -200,10 +234,25 @@ module intv_cart #(
                 qa  <= bus_addr;
                 qwe <= bus_we;
                 qwd <= bus_wdata;
+                qown <= e_own;
+                qrom <= e_rom && !bus_we;
                 bus_paged <= paged[r_bus];
                 bst <= B_T1;
             end
-            B_T1, B_T2: begin
+            B_T1, B_T2: if (bst == B_T1 && qown) begin              // the ECS's
+                bus_attr  <= {3'd0, qrom};
+                bus_rdata <= 16'hFFFF;
+                bus_hit   <= 1'b0;
+                qe        <= 22'd0;
+                m_we      <= 1'b0;
+                m_be      <= 2'b11;
+                m_addr    <= ECS_BASE + {3'd0, qa[15] ? 2'd2 : {1'b0, qa[14]}, qa[11:0]};
+                if (qrom) begin
+                    m_req <= 1'b1;
+                    bst   <= B_MEM;
+                end else
+                    bst   <= B_DONE;
+            end else begin                                      // the cartridge's
                 if (bst == B_T1) begin                          // tab_q: the window's entry
                     qe  <= tab_q[21:0];
                     qlo <= ia[7:0];
@@ -245,6 +294,8 @@ module intv_cart #(
 
         // load results, state restore (never during a bus access: the
         // machine is in reset or frozen then)
+        if (ld_tab_we && ld_tab_idx[11:3] == 9'b0100_0000_0)       // {4, 0, b < 8}
+            m4b[ld_tab_idx[2:0]] <= ld_tab_d[20] | ld_tab_d[19] | ld_tab_d[17];
         if (ld_res_we) begin
             crc <= ld_crc; words <= ld_words; layout <= ld_layout; flags <= ld_flags; hit <= ld_hit;
             cfg_crc <= ld_cfg_crc; fmt <= ld_fmt; noss <= ld_noss; paged <= ld_paged; limit <= ld_limit;

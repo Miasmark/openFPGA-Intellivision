@@ -22,6 +22,23 @@
 //   opposite directions cancel;
 // - USB keyboard (cont3 type 4): player 1's keypad (1-9, 0 on the number
 //   row and the numpad, Backspace = Clear, Enter / numpad Enter = Enter).
+// - with the ECS fully on (ecs_full: mode on, build step 9): the USB
+//   keyboard is the ECS keyboard key by key (ecs_keys: bit 8 row + column
+//   of the ECS matrix; Shift and Ctrl from the HID modifier byte
+//   cont3_key[7:0]); only the numpad stays the keypad (numpad . = Clear).
+//   Setting synth: the music synthesizer on two tracker rows (Z-M = C3-B3,
+//   Q-I = C4-C5) instead. With the ECS attached (ROMs out, Auto's default)
+//   or off the keyboard is the keypad as in 0.0.8 and the matrix reads no
+//   key: no ECS ROM code scans it then, and the games keep the number row,
+//   Enter and Backspace (step 9 review). The ECS settings (ecs_ovr_74:
+//   Auto / On / Off, synth_74) cross with the controller words (ecs_ovr,
+//   ecs_synth).
+// - the six HID codes are decoded one per clk in a round of 8 clk (0-5:
+//   one code each into kb_acc / ek_acc, 6: the outputs registered, 7: the
+//   next word may load), one decoder instead of six (the step-9 review:
+//   twelve 64-bit decoders cost about 640 ALMs). The word is loaded only at
+//   step 7, so every output comes from one whole word (the crossing's
+//   promise below holds). Latency: at most 2 rounds (16 clk) more.
 // Every input pulls its lines low and the lines are wired-OR'd, as on the
 // hardware (DESIGN.md 7.1): codes from the service manual and the wiki,
 // equal to MAME handctrl.cpp:124-135 inverted.
@@ -63,8 +80,14 @@ module intv_input (
     input  wire logic [15:0] cont3_trig,
     input  wire logic [1:0]  kp_mode,       // 0 Layer, 1 Face-button ring, 2 Right stick
     input  wire logic        swap,          // 1: player 1 on the right controller
+    input  wire logic [1:0]  ecs_ovr_74,    // setting ECS: 0 Auto, 1 On, 2 Off
+    input  wire logic        synth_74,      // setting ECS Keyboard: 1 Synthesizer
+    input  wire logic        ecs_full,      // clk: the ECS is fully on (mode on, not attached)
     output logic      [7:0]  pad_r,         // $01FE, PSG port A
-    output logic      [7:0]  pad_l          // $01FF, PSG port B
+    output logic      [7:0]  pad_l,         // $01FF, PSG port B
+    output logic      [63:0] ecs_keys,      // clk: the ECS matrix's pressed switches
+    output logic             ecs_synth,
+    output logic      [1:0]  ecs_ovr
 );
 
     // -------------------------------------------------------------------
@@ -248,12 +271,67 @@ module intv_input (
             hid_code = 8'h00;
     endfunction
 
+    // With the ECS: the numpad only (numpad . = Clear)
+    function automatic logic [7:0] hid_code_ecs(input logic [7:0] c);
+        if (c >= 8'h59 && c <= 8'h61)           // numpad 1-9
+            hid_code_ecs = key_code(4'(c - 8'h58));
+        else if (c == 8'h62)                    // numpad 0
+            hid_code_ecs = key_code(4'd0);
+        else if (c == 8'h58)                    // numpad Enter
+            hid_code_ecs = K_ENTER;
+        else if (c == 8'h63)                    // numpad . (Del)
+            hid_code_ecs = K_CLEAR;
+        else
+            hid_code_ecs = 8'h00;
+    endfunction
+
+    // One HID usage code -> the ECS matrix switch it closes (bit 8 row + column;
+    // bit 6 set: none)
+    function automatic logic [6:0] ecs_hid(input logic [7:0] c);
+        logic [6:0] p;
+        p = 7'h7F;
+        unique case (c)
+            8'h28: p = 7'd6;   8'h27: p = 7'd5;   8'h29: p = 7'd4;   8'h13: p = 7'd3;
+            8'h33: p = 7'd2;   8'h37: p = 7'd1;   8'h50: p = 7'd0;   8'h2A: p = 7'd0;
+            8'h0F: p = 7'd15;  8'h12: p = 7'd14;  8'h25: p = 7'd13;  8'h26: p = 7'd12;
+            8'h0C: p = 7'd11;  8'h0E: p = 7'd10;  8'h10: p = 7'd9;   8'h36: p = 7'd8;
+            8'h0D: p = 7'd23;  8'h18: p = 7'd22;  8'h23: p = 7'd21;  8'h24: p = 7'd20;
+            8'h1C: p = 7'd19;  8'h0B: p = 7'd18;  8'h05: p = 7'd17;  8'h11: p = 7'd16;
+            8'h0A: p = 7'd31;  8'h17: p = 7'd30;  8'h21: p = 7'd29;  8'h22: p = 7'd28;
+            8'h15: p = 7'd27;  8'h09: p = 7'd26;  8'h06: p = 7'd25;  8'h19: p = 7'd24;
+            8'h07: p = 7'd39;  8'h08: p = 7'd38;  8'h1F: p = 7'd37;  8'h20: p = 7'd36;
+            8'h1A: p = 7'd35;  8'h16: p = 7'd34;  8'h1D: p = 7'd33;  8'h1B: p = 7'd32;
+            8'h04: p = 7'd47;  8'h4F: p = 7'd45;  8'h1E: p = 7'd44;  8'h14: p = 7'd43;
+            8'h52: p = 7'd42;  8'h51: p = 7'd41;  8'h2C: p = 7'd40;
+            default: ;
+        endcase
+        ecs_hid = p;
+    endfunction
+
+    // One HID usage code -> the synthesizer key (note n = matrix bit n; bit 6
+    // set: none)
+    function automatic logic [6:0] syn_hid(input logic [7:0] c);
+        logic [6:0] n;
+        n = 7'h7F;
+        unique case (c)
+            8'h1D: n = 7'd12;  8'h16: n = 7'd13;  8'h1B: n = 7'd14;  8'h07: n = 7'd15;
+            8'h06: n = 7'd16;  8'h19: n = 7'd17;  8'h0A: n = 7'd18;  8'h05: n = 7'd19;
+            8'h0B: n = 7'd20;  8'h11: n = 7'd21;  8'h0D: n = 7'd22;  8'h10: n = 7'd23;
+            8'h14: n = 7'd24;  8'h1F: n = 7'd25;  8'h1A: n = 7'd26;  8'h20: n = 7'd27;
+            8'h08: n = 7'd28;  8'h15: n = 7'd29;  8'h22: n = 7'd30;  8'h17: n = 7'd31;
+            8'h23: n = 7'd32;  8'h1C: n = 7'd33;  8'h24: n = 7'd34;  8'h18: n = 7'd35;
+            8'h0C: n = 7'd36;
+            default: ;
+        endcase
+        syn_hid = n;
+    endfunction
+
     // -------------------------------------------------------------------
     // Crossing: clk_74a -> clk as one word (toggle handshake)
     // -------------------------------------------------------------------
-    localparam int W = 6 * 32 + 16 + 2 + 1;
+    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;
     wire logic [W-1:0] in_74 = {cont1_key, cont1_joy, cont2_key, cont2_joy, cont3_key, cont3_joy,
-                                cont3_trig, kp_mode, swap};
+                                cont3_trig, kp_mode, swap, ecs_ovr_74, synth_74};
 
     // clk_74a side: the held copy, the request flag, the acknowledge's
     // synchroniser. The copy is taken only when the acknowledge equals the
@@ -280,9 +358,12 @@ module intv_input (
         end
     end
 
+    logic [2:0] ph;             // the decode round (Output below)
+    initial ph = 3'd0;
+
     always_ff @(posedge clk) begin
         req_s <= {req_s[0], req_74};
-        if (req_s[1] != ack) begin
+        if (req_s[1] != ack && ph == 3'd7) begin
             word <= hold_74;
             ack  <= req_s[1];
         end
@@ -297,25 +378,58 @@ module intv_input (
     logic [15:0] t3;
     logic [1:0]  md;
     logic        sw;
-    assign {k1, j1, k2, j2, k3, j3, t3, md, sw} = word;
+    logic [1:0]  eo;
+    logic        sy;
+    assign {k1, j1, k2, j2, k3, j3, t3, md, sw, eo, sy} = word;
+    assign ecs_synth = sy;
+    assign ecs_ovr   = eo;
 
-    logic [7:0] p1, p2, kb;
+    // The round: step ph < 6 decodes code ph into the accumulators; step 6
+    // registers the outputs from them and the word; step 7 lets a new word in
+    logic [7:0]  hc, kc, kb_acc;
+    logic [6:0]  sp;
+    logic [63:0] ek_acc;
+    wire  logic  kbd = k3[31:28] == 4'd4;
     always_comb begin
-        kb = 8'h00;
-        if (k3[31:28] == 4'd4)
-            kb = hid_code(j3[7:0]) | hid_code(j3[15:8]) | hid_code(j3[23:16])
-               | hid_code(j3[31:24]) | hid_code(t3[7:0]) | hid_code(t3[15:8]);
-        p1 = player(k1, j1, md) | kb;
+        unique case (ph)
+            3'd0:    hc = j3[7:0];
+            3'd1:    hc = j3[15:8];
+            3'd2:    hc = j3[23:16];
+            3'd3:    hc = j3[31:24];
+            3'd4:    hc = t3[7:0];
+            default: hc = t3[15:8];
+        endcase
+        kc = !kbd ? 8'h00 : ecs_full ? hid_code_ecs(hc) : hid_code(hc);
+        sp = sy ? syn_hid(hc) : ecs_hid(hc);
+    end
+
+    logic [7:0]  p1, p2;
+    always_comb begin
+        p1 = player(k1, j1, md) | kb_acc;
         p2 = player(k2, j2, md);
     end
 
     initial begin
         pad_r = 8'hFF;
         pad_l = 8'hFF;
+        ecs_keys = 64'd0;
+        kb_acc = 8'h00;
+        ek_acc = 64'd0;
     end
     always_ff @(posedge clk) begin
-        pad_l <= ~(sw ? p2 : p1);
-        pad_r <= ~(sw ? p1 : p2);
+        ph <= ph + 3'd1;
+        if (ph < 3'd6) begin
+            kb_acc <= (ph == 3'd0 ? 8'h00 : kb_acc) | kc;
+            ek_acc <= (ph == 3'd0 ? 64'd0 : ek_acc)
+                    | (kbd && ecs_full && !sp[6] ? 64'd1 << sp[5:0] : 64'd0);
+        end
+        if (ph == 3'd6) begin
+            pad_l <= ~(sw ? p2 : p1);
+            pad_r <= ~(sw ? p1 : p2);
+            ecs_keys <= ek_acc
+                      | (kbd && ecs_full && !sy && (k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)   // Shift: row 6, column 7
+                      | (kbd && ecs_full && !sy && (k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);  // Ctrl: row 5, column 6
+        end
     end
 
 endmodule

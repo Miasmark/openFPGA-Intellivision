@@ -277,6 +277,8 @@ The rule of thumb for later steps: state kept in block RAM or SRAM costs almost 
 
 Budget for steps 9-11, updated from these figures [estimated]: ECS (step 9) state taps about 150 ALMs (PSG #2 as PSG #1, 87; page selects and ports about 40; ECS RAM in block RAM through `ss_en`, about 10); Intellivoice (step 10) about 300-450 if the SP0256's filter coefficients and delay line stay in flip-flops (about 30 words), about 60 if they are kept in a block RAM (the plan); JLP (step 11) about 150 for its registers (its RAM is in SRAM, which `ss_ctl` reads directly). With the modules themselves (section 3: ECS 200-400 plus PSG #2 about 420, Intellivoice 500-1,000, JLP 300-600) the core would end at about 8,300-10,100 ALMs (45-55 %), inside section 3's 7,000-11,500. **(build step 8)** From 0.0.8's 7,913 the same additions give about 9,450-10,650 (51-58 %), still inside it. If it ever runs short, moving `intv_cart`'s page table into a block RAM saves about 450 ALMs, at the cost of a clock on every cartridge access and a re-run of the bus and screen gates; it was considered in step 7 and not done, because it is not needed and is not a small change to the cartridge port's timing. **(build step 8)** Done in step 8 (above), as a 4,096-entry map table for the new formats.
 
+**(build step 9) Measured** (seed 1, 0.0.8 against 0.0.9 with the step-9 review fixes): 7,913 -> 8,750 ALMs (+837; 47 % of the device), 50 -> 54 RAM blocks, 20 -> 21 DSP, inside the 770-970 estimated above for the step. `intv_ecs` 598 (its own logic 199: page and port latches, the keyboard matrix engine, the RAM port and state taps; PSG #2 about 400, as PSG #1's 422), `intv_machine`'s own logic +26 (the 3/4 mix), `intv_core` +69 (the ECS ROM's CRC32 for the save-state header, the mode), `intv_cart` +31 and `intv_media` +13 (the ECS ROM read path, ownership, the Auto probe), `intv_input` 351 -> 373. The first cut of step 9 measured 9,357 (+1,444) with `intv_input` at 988: twelve 8-bit -> 64-bit case decoders over the six HID codes, all combinational. The review's fix decodes one code per clk_sys in a round of 8 clocks into accumulating registers (one decoder), which saved 616 ALMs; DESIGN 3 module 10's 300-500 holds again. Timing as before: `clk_sys` worst setup +0.757 ns, worst hold +0.036 ns.
+
 ---
 
 ## 5 Cartridges and loading
@@ -530,7 +532,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | 6 | PSG #1 and input module | register logs match MAME; games playable on the Pocket |
 | 7 | `ss_ctl` hooked to 0x00A0/0x00A4/0x00B0, sleep | Pocket save, load and sleep work on the regression set **(build step 7: in simulation, `sim/tb/tb_savestate.py`; on the Pocket, the owner's test sheet)** |
 | 8 | Cartridge formats: CFG, Intellicart .rom, cart RAM, paging | Python and RTL agree for each format; WSMLB pages; a `carttest`-style program (`sim/testroms/carttest.asm`, step 3) writes and reads back the Intellicart bank registers at $0040-$005F and the RAM they map (step 3 only pins that nothing answers there yet) **(build step 8: tb_loader over the step-2 set and the step-8 images built from our sources, tb_system `cartbank`/`cartcfg` with `sim/testroms/cart8test.asm`, tb_savestate `cartbank`/`cartcfg`/`cartnoss`, MAME as the .rom reference; docs/CARTFORMATS.md 7)** |
-| 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test |
+| 9 | ECS: ROM paging, RAM, PSG #2, keyboards, ports 3/4 | ECS BASIC and Mind Strike run; keyboard ghosting test **(built: docs/ECS_NOTES.md; 0.0.9)** |
 | 10 | Intellivoice | resident phrases and B-17 speech sound right; per-opcode tests pass |
 | 11 | JLP and flash slot | a JLP homebrew runs and keeps its flash |
 | 12 | PAL | depends on PAL timing data (section 10) |
@@ -671,7 +673,9 @@ Gaps the documents leave, which the owner's ECS can close:
 4. ECS BASIC with no tape: what CSAV/CLOD do (error message, hang, or wait). Decides the UART model ($00E0-$00E3).
 5. Keyboard behaviour in ECS BASIC: hold Shift with L, J, G, D, A (the documented scan bug); press three keys at the
    corners of a matrix rectangle and note any ghost character: W, Q and 1 together should ghost a 3 (rows 4/5,
-   columns 3/4 of the wiki matrix table);
+   columns 3/4 of the wiki matrix table) **(build step 9: under 7.3's rule the ECS ROM's scan drives every row, so
+   no ghost can appear: W, Q and 1 mask each other and all vanish; the 0.0.9 test sheet asks which the console
+   shows; docs/ECS_NOTES.md 4)**;
    key repeat delay and rate.
 6. Conflicting cartridges: does Centipede or Dig Dug (ROM at $7000/$E000) run with the ECS attached? Sets the
    "ECS must stay off" rule.

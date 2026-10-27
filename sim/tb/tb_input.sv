@@ -7,10 +7,15 @@
 // the next one.
 //
 // Part 1, +vec=FILE: each line is class key1 joy1 key2 joy2 key3 joy3 trig3
-// mode swap pad_r pad_l, in hex. The bench drives the inputs 1 ns after a
-// clk_74a edge, waits 16 clocks (the crossing's handshake takes at most
-// about 7 clk + 4 clk_74a periods, then the output register) and compares
-// both bytes. It prints the first 20 mismatches and a count per class.
+// mode swap ecs_ovr synth ecs pad_r pad_l keys_hi keys_lo, in hex (step 9:
+// the ECS settings, ecs = the ECS mode on the clk side (0 off, 1 on, 2
+// attached; ecs_full = mode 1), and the ECS keyboard's switches ecs_keys;
+// ecs_ovr and ecs_synth must come out as they went in). The bench drives
+// the inputs 1 ns after a clk_74a edge, waits 48 clocks (the crossing's
+// handshake takes at most about 7 clk + 4 clk_74a periods plus up to 8 clk
+// for the decode round's load step, twice when a transfer was in flight,
+// then the round's 7 clk) and compares both bytes. It prints the first 20
+// mismatches and a count per class.
 //
 // Part 2, +tear=FILE (the crossing, DESIGN.md 7): groups of vectors, each
 // a line "n" and then n lines of key1 .. swap pad_r pad_l. For each group
@@ -55,12 +60,16 @@
 
 module tb_input;
 
-    localparam int W = 6 * 32 + 16 + 2 + 1;
+    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;
 
     logic        clk = 1'b0;
     logic        clk_74a = 1'b0;
-    logic [W-1:0] bus = '0;          // {key1, joy1, key2, joy2, key3, joy3, trig3, mode, swap}
+    logic [W-1:0] bus = '0;          // {key1, joy1, key2, joy2, key3, joy3, trig3, mode, swap, ecs_ovr, synth}
     wire  [7:0]  pad_r, pad_l;
+    logic        ecs_full = 1'b0;    // clk side: the ECS fully on, mode 1 (step 9)
+    wire  [63:0] ecs_keys;
+    wire         ecs_synth;
+    wire  [1:0]  ecs_ovr;
 
     always #11.64 clk = ~clk;
 
@@ -175,21 +184,27 @@ module tb_input;
     intv_input dut (
         .clk_74a    ( clk_74a ),
         .clk        ( clk ),
-        .cont1_key  ( bus[210:179] ),
-        .cont1_joy  ( bus[178:147] ),
-        .cont2_key  ( bus[146:115] ),
-        .cont2_joy  ( bus[114:83] ),
-        .cont3_key  ( bus[82:51] ),
-        .cont3_joy  ( bus[50:19] ),
-        .cont3_trig ( bus[18:3] ),
-        .kp_mode    ( bus[2:1] ),
-        .swap       ( bus[0] ),
+        .cont1_key  ( bus[213:182] ),
+        .cont1_joy  ( bus[181:150] ),
+        .cont2_key  ( bus[149:118] ),
+        .cont2_joy  ( bus[117:86] ),
+        .cont3_key  ( bus[85:54] ),
+        .cont3_joy  ( bus[53:22] ),
+        .cont3_trig ( bus[21:6] ),
+        .kp_mode    ( bus[5:4] ),
+        .swap       ( bus[3] ),
+        .ecs_ovr_74 ( bus[2:1] ),
+        .synth_74   ( bus[0] ),
+        .ecs_full   ( ecs_full ),
         .pad_r      ( pad_r ),
-        .pad_l      ( pad_l )
+        .pad_l      ( pad_l ),
+        .ecs_keys   ( ecs_keys ),
+        .ecs_synth  ( ecs_synth ),
+        .ecs_ovr    ( ecs_ovr )
     );
 
-    function automatic logic [W-1:0] pack(input logic [31:0] f [12]);
-        pack = {f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0]};
+    function automatic logic [W-1:0] pack(input logic [31:0] f [17]);
+        pack = {f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0], f[10][1:0], f[11][0]};
     endfunction
 
     // W random bits
@@ -214,7 +229,7 @@ module tb_input;
 
     int fd, n, cls, nvec, nbad, ngrp, nchk, nchg, ntear;
     int cnt [16], bad [16];
-    logic [31:0] f [12];
+    logic [31:0] f [17];
     logic [W-1:0] gv [16];
     logic [15:0]  ge [16];
     logic [15:0]  prev;
@@ -242,9 +257,10 @@ module tb_input;
                 $finish;
             end
             while (!$feof(fd)) begin
-                n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h %h\n",
-                            f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]);
-                if (n != 12) begin
+                n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h\n",
+                            f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11],
+                            f[12], f[13], f[14], f[15], f[16]);
+                if (n != 17) begin
                     if (n > 0) begin
                         $display("  FAIL  vector %0d: %0d fields", nvec, n);
                         nbad++;
@@ -254,15 +270,18 @@ module tb_input;
                 cls = f[0];
                 @(posedge clk_74a);
                 #1 bus = pack(f);
-                repeat (16) @(posedge clk);
+                ecs_full = f[12][1:0] == 2'd1;
+                repeat (48) @(posedge clk);
                 #1;
                 cnt[cls & 15]++;
-                if (pad_r !== f[10][7:0] || pad_l !== f[11][7:0]) begin
+                if (pad_r !== f[13][7:0] || pad_l !== f[14][7:0] || ecs_keys !== {f[15], f[16]}
+                    || ecs_ovr !== f[10][1:0] || ecs_synth !== f[11][0]) begin
                     bad[cls & 15]++;
                     if (nbad < 20)
-                        $display("  FAIL  class %0d vector %0d: k1 %h j1 %h k2 %h j2 %h k3 %h j3 %h t3 %h mode %0d swap %0d: pad_r %h pad_l %h, want %h %h",
+                        $display("  FAIL  class %0d vector %0d: k1 %h j1 %h k2 %h j2 %h k3 %h j3 %h t3 %h mode %0d swap %0d ovr %0d synth %0d ecs %0d: pad_r %h pad_l %h keys %h ovr %0d synth %0d, want %h %h %h%h",
                                  cls, nvec, f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0],
-                                 pad_r, pad_l, f[10][7:0], f[11][7:0]);
+                                 f[10][1:0], f[11][0], f[12][1:0],
+                                 pad_r, pad_l, ecs_keys, ecs_ovr, ecs_synth, f[13][7:0], f[14][7:0], f[15], f[16]);
                     nbad++;
                 end
                 nvec++;
@@ -291,12 +310,15 @@ module tb_input;
                     nbad++;
                     break;
                 end
+                ecs_full = 1'b0;
                 for (int i = 0; i < gn; i++) begin
                     f[0] = 0;
                     n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h\n",
-                                f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]);
+                                f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[13], f[14]);
+                    f[10] = $urandom % 3;               // the ECS settings: they change nothing on the pads
+                    f[11] = $urandom % 2;
                     gv[i] = pack(f);
-                    ge[i] = {f[10][7:0], f[11][7:0]};
+                    ge[i] = {f[13][7:0], f[14][7:0]};
                 end
                 // settle on the first vector
 `ifdef TB_SKEW
@@ -304,7 +326,7 @@ module tb_input;
 `endif
                 @(posedge clk_74a);
                 #1 bus = gv[0];
-                repeat (16) @(posedge clk);
+                repeat (48) @(posedge clk);
                 cur = 0;
                 prev = {pad_r, pad_l};
                 // 64 changes at random clk_74a edges, checked at every clk edge
@@ -340,7 +362,7 @@ module tb_input;
                         end
                     end
                 join
-                repeat (16) @(posedge clk);
+                repeat (48) @(posedge clk);
                 #1;
                 if ({pad_r, pad_l} !== ge[cur]) begin
                     if (ntear < 20)

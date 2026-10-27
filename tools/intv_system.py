@@ -29,6 +29,11 @@ the RTL:
                at $7800, $B800, $F800 (DESIGN 2.6)
   cartridge    tools/mapper's CartModel (the loader's page table); it sees
                every write, as the RTL's cartridge port does
+  ECS          tools/ecs.py (build step 9), when attached: UART stub
+               $00E0-$00E3, PSG #2 $00F0-$00FF, ECS RAM $4000-$47FF, ECS
+               ROMs at $2000 / $7000 / $E000 on their pages. Where the ECS
+               answers, the cartridge does not (its page selects and bank
+               registers still see the write).
   anything else reads $FFFF (pull-ups, DESIGN 2.5). Devices that answer
   together give the AND of their words (the pulled-up bus).
 
@@ -87,6 +92,7 @@ from cp1610 import CP1610  # noqa: E402
 import stic as sticm  # noqa: E402
 import psg as psgm  # noqa: E402
 import intv_input as inm  # noqa: E402
+import ecs as ecsm  # noqa: E402
 from stic import FRAME, VBLANK, STIC_DEF, STIC_REGS, STIC_DER, STIC_GMR  # noqa: E402,F401
 
 VEC_RESET, VEC_INTR = 0x1000, 0x1004
@@ -105,6 +111,11 @@ PSG_MASK = psgm.MASK
 def _bank0():
     import cartfmt
     return list(cartfmt.BANK0)
+
+
+# intv_psg's state words 14-20 in reset (PSG #2 while the ECS is off): counts 0, LFSR 1,
+# envelope step 15, tick phase 3
+PSG_RESET_WORDS = (0, 0, 0, 0, 1, 0, 0xCF)
 
 
 def load_words(path):
@@ -141,11 +152,27 @@ def parse_presses(text):
     or "pocket:B1+B2..." (Pocket buttons, POCKET_BTN), which gives
     (F1, F2, ("pocket", button bits)): press_pads combines the Pocket buttons
     held in a frame and maps them through the input model (tools/intv_input.py,
-    Layer mode, player 1 on the Pocket), as intv_input.sv does on the core."""
+    Layer mode, player 1 on the Pocket), as intv_input.sv does on the core.
+    "ecs:K1+K2..." holds ECS keyboard keys (tools/ecs.py KEYPOS names) and
+    "synth:N1+N2..." synthesizer keys (0 = C2 ... 48 = C6; bit 8 row +
+    column of the matrix, MAME ecs_ctrl.cpp SYNTH.n): (F1, F2, ("ecs",
+    matrix bits)), read by press_keys."""
     out = []
     for p in filter(None, (text or "").split(",")):
         fr, key = p.split(":", 1)
         f1, f2 = (int(x) for x in fr.split("-"))
+        if key.startswith("ecs:") or key.startswith("synth:"):
+            bits = 0
+            for k in key.split(":", 1)[1].split("+"):
+                if key.startswith("synth:"):
+                    n = int(k)
+                    bits |= 1 << (63 if n == 48 else n)     # C6: row 6, column 7 (MAME SYNTH.6 bit 7)
+                else:
+                    if k not in ecsm.KEYPOS:
+                        raise SystemExit("unknown ECS key %r" % k)
+                    bits |= ecsm.keybits(k)
+            out.append((f1, f2, ("ecs", bits)))
+            continue
         if key.startswith("pocket:"):
             bits = 0
             for b in key[7:].split("+"):
@@ -179,11 +206,22 @@ def press_pads(presses, k):
     for f1, f2, code in presses:
         if f1 <= k < f2:
             if isinstance(code, tuple):
-                pocket |= code[1]
+                if code[0] == "pocket":
+                    pocket |= code[1]
             else:
                 v &= ~code & 0xFF
     if pocket:
         v &= ~pocket_lines(pocket) & 0xFF
+    return v
+
+
+def press_keys(presses, k):
+    """The ECS keyboard's pressed switches after frame notifier k (as
+    press_pads)."""
+    v = 0
+    for f1, f2, code in presses or ():
+        if f1 <= k < f2 and isinstance(code, tuple) and code[0] == "ecs":
+            v |= code[1]
     return v
 
 
@@ -285,7 +323,7 @@ class MameTiming(ListTiming):
 class SystemBus:
     """The step-3 system around the CPU model (see the module docstring)."""
 
-    def __init__(self, exec_words, grom_bytes, cart=None, timing=None, stic_mode="none"):
+    def __init__(self, exec_words, grom_bytes, cart=None, timing=None, stic_mode="none", ecs=None):
         if len(exec_words) != 4096 or len(grom_bytes) != 2048:
             raise ValueError("EXEC must be 4096 words, GROM 2048 bytes")
         self.exec = [w & 0x3FF for w in exec_words]
@@ -302,6 +340,8 @@ class SystemBus:
         self.presses = None             # scripted keys (press_pads): override self.pad
         self.zero = ()                  # MAME mode: unmapped ranges MAME reads as 0
         self.mame_map = False           # MAME's memory map (MAME_MAP_ZERO, no aliases)
+        self.ecs = ecs                  # tools/ecs.py Ecs, or None (no ECS at all)
+        self.replay = None              # MAME check: {addr: value} reads taken from the trace
         self.bank0 = _bank0()           # no cartridge: intv_cart's bank registers (kept over resets)
         self.reset()
 
@@ -314,6 +354,9 @@ class SystemBus:
         self.iab_reset = True
         if self.cart is not None:
             self.cart.reset()
+        self.sel0 = [0] * 16            # no cartridge: intv_cart's page selects still take writes
+        if self.ecs is not None:
+            self.ecs.reset()
 
     # -- the PSG's registers ----------------------------------------------
     @property
@@ -398,10 +441,16 @@ class SystemBus:
             v &= 0xFF00 | self.grom[a - 0x3000]
         elif 0x3800 <= a <= (0x3BFF if self.mame_map else 0x3FFF):
             v &= self.gram[a & 0x1FF] if self.stic_open(cycle) else a & 0x1FF
+        if self.ecs is not None and self.ecs.owns(a):
+            if self.ecs.keys_at is None and self.presses is not None:
+                self.ecs.keys_at = lambda f: press_keys(self.presses, f - 1)
+            return v & self.ecs.read(a, self._t(cycle), self.timing.frame(self._t(cycle)))
         if self.cart is not None:
             c = self.cart.read(a)
             if c is not None:
                 v &= c
+        if self.replay is not None and a in self.replay:
+            return self.replay[a]
         for lo, hi in self.zero + (MAME_MAP_ZERO if self.mame_map else ()):
             if lo <= a <= hi:
                 v = 0
@@ -425,10 +474,19 @@ class SystemBus:
         if a & 0x3800 == 0x3800 and (0x3800 <= a <= 0x3BFF or not self.mame_map):
             if self.stic_open(cycle):  # $3800, $7800, $B800, $F800 (+ $7FF)
                 self.gram[a & 0x1FF] = value & 0xFF
+        own = self.ecs is not None and self.ecs.owns(a)
+        if self.ecs is not None:
+            self.ecs.write(a, value, self._t(cycle))
         if self.cart is not None:
-            self.cart.write(a, value)
-        elif 0x40 <= a <= 0x5F:
-            self.bank0[a & 0x1F] = value & 0xFF     # intv_cart takes them with no cartridge too
+            if own:
+                self.cart.write(a, value, store=False)
+            else:
+                self.cart.write(a, value)
+        else:
+            if a & 0xFFF == 0xFFF and (value & 0xFFF0) == ((a & 0xF000) | 0x0A50):
+                self.sel0[a >> 12] = value & 0xF
+            if 0x40 <= a <= 0x5F:
+                self.bank0[a & 0x1F] = value & 0xFF
 
     def _stic_write(self, n, value, cycle):
         t = self._t(cycle)
@@ -443,11 +501,21 @@ class SystemBus:
                 "gram": list(self.gram), "stic": list(self.stic),
                 "psg": list(self.psg), "handshake": int(self.handshake(cycle)),
                 "csmode": self.csmode,
-                "sel": list(self.cart.sel) if self.cart is not None else [0] * 16,
+                "sel": list(self.cart.sel) if self.cart is not None else list(self.sel0),
                 # no cartridge: the loader still finishes and sets the bank registers to their
                 # start (identity, intv_cart.sv; step 8's review); the model's cart is None then
                 "bank": list(getattr(self.cart, "bank", [0] * 32)) if self.cart is not None else list(self.bank0),
-                "fifo": list(self.vid.fifo), "counter": self.vid.counter}
+                "fifo": list(self.vid.fifo), "counter": self.vid.counter,
+                "ecs": self.ecs.state() if self.ecs is not None else [0],
+                "psg2": list(self.ecs.psg.regs) if self.ecs is not None else [0] * 14,
+                "psg2x": self._psg2x(cycle),
+                "ecsram": self.ecs.ram_words() if self.ecs is not None else [0] * 512}
+
+    def _psg2x(self, cycle):
+        if self.ecs is None or not self.ecs.on:
+            return list(PSG_RESET_WORDS)        # intv_ecs holds PSG #2 in reset
+        self.ecs.psg.advance(self._t(cycle) - 1)
+        return self.ecs.psg.state(self._t(cycle) % 4)[14:]
 
 
 # ----------------------------------------------------------------- loading
@@ -473,11 +541,37 @@ def load_cart(path, cfg_path=None):
     return cartfmt.MapCart(ld), ld.crc, ld.layout, ld.flags, ld.hit
 
 
-def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none", cfg_path=None):
+ECS_OVERRIDES = {"auto": ecsm.OVERRIDE_AUTO, "on": ecsm.OVERRIDE_ON, "off": ecsm.OVERRIDE_OFF}
+
+
+def make_ecs(cart, ecs, bios_dir=None, mame=False):
+    """The ECS for a system (build step 9): ecs None (no ECS device: the
+    systems of steps 3-8) or (override, ECS ROM path or None) with override
+    "auto" / "on" / "off" (the menu's ECS item; Auto = DESIGN 20's rule from
+    the cartridge, tools/ecs.py auto_mode). The ROM path defaults to
+    ECS.bin (or ecs.bin) in the BIOS directory; a missing file means no ECS
+    ROM slot."""
+    if ecs is None:
+        return None
+    override, rom_path = ecs
+    if rom_path is None:
+        d = bios_dir or os.environ.get("INTV_BIOS_DIR") or ""
+        for n in ("ECS.bin", "ecs.bin"):
+            if os.path.exists(os.path.join(d, n)):
+                rom_path = os.path.join(d, n)
+                break
+    rom = ecsm.load_rom(rom_path) if rom_path and os.path.exists(rom_path) else None
+    auto = ecsm.auto_mode(*ecsm.cart_inputs(cart))
+    return ecsm.Ecs(rom, ecsm.mode_for(ECS_OVERRIDES[override], auto), mame=mame)
+
+
+def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none", cfg_path=None,
+                ecs=None, mame_ecs=False):
     ex, gr = bios_paths(bios_dir)
     cart = load_cart(cart_path, cfg_path)
+    dev = make_ecs(cart[0] if cart else None, ecs, bios_dir, mame_ecs)
     bus = SystemBus(load_words(ex), open(gr, "rb").read(),
-                    cart[0] if cart else None, timing, stic_mode)
+                    cart[0] if cart else None, timing, stic_mode, ecs=dev)
     cpu = CP1610(bus=bus, buslog=buslog)
     return bus, cpu
 
@@ -546,17 +640,24 @@ def iter_trace(path):
 
 def mame_compare(trace_path, bios_dir=None, cart_path=None, context=6,
                  out=sys.stdout, voice_zero=False, timing="trace", stic_mode="mame",
-                 on_bus=None):
+                 on_bus=None, ecs=None, presses=None, voice_replay=False, cfg_path=None):
     """Run the model against a MAME trace (see the module docstring).
     timing "trace" takes the frame starts from the trace's frame numbers;
     "computed" uses MameTiming and checks every record's frame number
     against it. stic_mode is the STIC model's mode (tools/stic.py); with
     "stic" the CPU sees BUSRQ, which MAME never shows, so the comparison
     is expected to fail at the first stolen cycle. on_bus(bus) is called
-    once the system exists (to set up frame capture)."""
+    once the system exists (to set up frame capture). ecs: as make_system
+    (MAME's intvecs: ("on", None); the ECS then runs as MAME's, tools/ecs.py
+    MAME mode). presses: parse_presses text, the keys the trace's run
+    pressed. voice_replay: the Intellivoice ($0080-$0081, build step 10)
+    reads are taken from the trace."""
     tm = ListTiming([]) if timing == "trace" else MameTiming()
-    bus, cpu = make_system(bios_dir, cart_path, tm, buslog=False, stic_mode=stic_mode)
+    bus, cpu = make_system(bios_dir, cart_path, tm, buslog=False, stic_mode=stic_mode, ecs=ecs,
+                           mame_ecs=True, cfg_path=cfg_path)
     bus.mame_map = True
+    if presses:
+        bus.presses = parse_presses(presses)
     if voice_zero:
         bus.zero = MAME_VOICE_ZERO
     if on_bus is not None:
@@ -603,6 +704,8 @@ def mame_compare(trace_path, bios_dir=None, cart_path=None, context=6,
             return _mame_fail(out, hist, rec, "cycle: model (MAME clock) %d, MAME %d"
                               % (bus._t(cpu.cycle), rec.cycle), stats)
         acc.clear()
+        if voice_replay:
+            bus.replay = {a: d for k, a, d in rec.acc if k == "R" and 0x80 <= a <= 0x81}
         ev = step()
         if ev.kind == "busak":
             return _mame_fail(out, hist, rec, "model takes a bus request (%s) before $%04X, "
@@ -688,11 +791,13 @@ def run_pictures(bus, cpu, last, mame_clock=False, max_cycles=None):
     return events
 
 
-def system_for(mode, bios_dir=None, cart_path=None, buslog=False):
+def system_for(mode, bios_dir=None, cart_path=None, buslog=False, ecs=None, cfg_path=None):
     """(bus, cpu, mame_clock) for a STIC mode: "mame" runs on MAME's frame
-    timing, clock and memory map, "stic" and "none" on the RTL's."""
+    timing, clock and memory map, "stic" and "none" on the RTL's. ecs: as
+    make_system (in "mame" mode the ECS is MAME's)."""
     tm = MameTiming() if mode == "mame" else FrameTiming()
-    bus, cpu = make_system(bios_dir, cart_path, tm, buslog=buslog, stic_mode=mode)
+    bus, cpu = make_system(bios_dir, cart_path, tm, buslog=buslog, stic_mode=mode, ecs=ecs,
+                           mame_ecs=mode == "mame", cfg_path=cfg_path)
     bus.mame_map = mode == "mame"
     return bus, cpu, mode == "mame"
 
@@ -707,6 +812,10 @@ def main():
     r.add_argument("--bios-dir")
     r.add_argument("--stic-mode", choices=sticm.MODES, default="stic",
                    help="STIC timing (tools/stic.py); default stic (BUSRQ on)")
+    r.add_argument("--ecs", choices=sorted(ECS_OVERRIDES), help="attach the ECS (menu override)")
+    r.add_argument("--ecs-rom", help="ECS.bin (default: the BIOS directory's)")
+    r.add_argument("--presses", help="parse_presses text")
+    r.add_argument("--cfg", help="the cartridge's CFG (BIN + CFG)")
     mm = sub.add_parser("mame")
     mm.add_argument("trace")
     mm.add_argument("--cart")
@@ -717,9 +826,18 @@ def main():
                     help="frame starts from the trace, or computed from MAME's "
                          "59.92 Hz and checked against the trace")
     mm.add_argument("--stic-mode", choices=sticm.MODES, default="mame")
+    mm.add_argument("--cfg", help="the cartridge's CFG (BIN + CFG)")
+    mm.add_argument("--ecs", choices=sorted(ECS_OVERRIDES), help="MAME's intvecs: on")
+    mm.add_argument("--ecs-rom")
+    mm.add_argument("--presses", help="parse_presses text: what the MAME run pressed")
+    mm.add_argument("--voice-replay", action="store_true",
+                    help="Intellivoice reads ($0080-$0081) from the trace (intvecs)")
     a = ap.parse_args()
+    ecs = (a.ecs, a.ecs_rom) if a.ecs else None
     if a.cmd == "run":
-        bus, cpu, mclk = system_for(a.stic_mode, a.bios_dir, a.cart)
+        bus, cpu, mclk = system_for(a.stic_mode, a.bios_dir, a.cart, ecs=ecs, cfg_path=a.cfg)
+        if a.presses:
+            bus.presses = parse_presses(a.presses)
         done = [0]
 
         def show(n, pic, info):
@@ -732,7 +850,8 @@ def main():
         run_pictures(bus, cpu, a.frames, mclk)
         return 0
     return 0 if mame_compare(a.trace, a.bios_dir, a.cart, voice_zero=a.mame_voice_zero,
-                             timing=a.timing, stic_mode=a.stic_mode) else 1
+                             timing=a.timing, stic_mode=a.stic_mode, ecs=ecs, presses=a.presses,
+                             voice_replay=a.voice_replay, cfg_path=a.cfg) else 1
 
 
 if __name__ == "__main__":

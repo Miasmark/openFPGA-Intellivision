@@ -143,6 +143,14 @@ def load_model(img, tab):
     return cf.load(img['data'], cfg, tab, tab.pages, cfg_len=cfg_len)
 
 
+def ecs_auto(ld):
+    """Build step 9: the Auto rule's mode for a loaded image (tools/ecs.py auto_mode, from
+    what intv_cart and the reset probe see: the ECS flag, the ROM word at $4800, the map of
+    $4000-$47FF; no cartridge (0 words): on)."""
+    import ecs as ecsm
+    return ecsm.auto_mode(*ecsm.cart_inputs(cf.MapCart(ld)))
+
+
 def expect(img, tab, bios):
     """Every line the bench prints for this image, and the model's summary.
 
@@ -181,6 +189,7 @@ def expect(img, tab, bios):
         crc, ld.words, ld.layout, ld.flags, int(ld.hit), err, lenst))
     cfgslot = (2 << 2) if img.get('cfg') is not None else 0
     L.append('slots %03X' % (cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+    L.append('ecs auto %d' % ecs_auto(ld))
     L.append('format cfgcrc %08X noss %d ferr %02X' % (ld.cfg_crc, int(ld.noss), max(ld.err, 0)))
     sram = bench_sram(ld)
     if cf.is_rom(data) and ld.err:
@@ -306,6 +315,7 @@ def expect(img, tab, bios):
         L.append('reload status crc %08X words %d layout %d flags %02X hit %d err 0 lenst %d' % (
             rl.crc, rl.words, rl.layout, rl.flags, int(rl.hit), 3 if img.get('notable2') else 1))
         L.append('reload slots %03X' % (2 | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+        L.append('reload ecs auto %d' % ecs_auto(rl))
         L.append('reload image %08X' % crc32(struct.pack('>%dH' % rl.words, *[rsram[i] for i in range(rl.words)])))
         rm = cf.MapCart(rl)
         rm.sram = rsram
@@ -513,10 +523,34 @@ PLANTS = [
      "if (q_ov && q_data && !apass) begin", 'a line without PAGE over the page\'s own words'),
     ('ram_per_page', 'intv_loader.sv', "if (y != 4'd0 && (!paged[r] || h_mode == H_RAM)) begin",
      "if (y != 4'd0 && !paged[r]) begin", 'cart RAM in a paged range not shared by its pages'),
+    # build step 9: the ECS Auto rule (intv_media's probe, intv_cart's m4): the ECS flag ignored
+    # (Game Factory), the $4800 word not checked against $03FF (ecsnohook: $1234 there), the hook
+    # ignored (ecshook), the $500C header ignored (Atlantis), the $4000 map ignored (cart4000), no
+    # cartridge not on (NEGNOCART), the probe at $4801
+    ('auto_flag', 'intv_media.sv', "ecs_auto <= (res_ecs || res_none) ? 2'd1", "ecs_auto <= (res_none) ? 2'd1",
+     'Auto: the ECS flag ignored'),
+    ('auto_4800_any', 'intv_media.sv', "code48 <= c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0;",
+     "code48 <= c_bus_hit && !c_bus_attr[1];", 'Auto: any word at $4800 taken as code'),
+    ('auto_hook_ignored', 'intv_media.sv', ": (code48 && hdr_ok) ? 2'd1", ": 1'b0 ? 2'd1",
+     'Auto: the $4800 hook ignored'),
+    ('auto_header_ignored', 'intv_media.sv', ": (code48 && hdr_ok) ? 2'd1", ": code48 ? 2'd1",
+     'Auto: code at $4800 turns the ECS on whatever the header (the Imagic titles get its menu)'),
+    ('auto_m4_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": res_off ? 2'd0 : 2'd2;",
+     'Auto: $4000-$47FF mapped ignored'),
+    # the step-9 review: the ECS_OFF flag (the "ECS incompatible" tag of a .rom or a CFG: ecsoffrom,
+    # ecsoffcfg) ignored, so those cartridges run with the ECS attached
+    ('auto_ecs_off_ignored', 'intv_media.sv', ": (c_m4 || res_off) ? 2'd0 : 2'd2;", ": c_m4 ? 2'd0 : 2'd2;",
+     'Auto: the ECS incompatible tag ignored'),
+    ('auto_nocart_off', 'intv_media.sv', "res_none <= res_words == 17'd0;", "res_none <= 1'b0;",
+     'Auto: no cartridge not on'),
+    ('auto_probe_4801', 'intv_media.sv', "(pr_2nd ? 16'h500C : 16'h4800)", "(pr_2nd ? 16'h500C : 16'h4801)",
+     'Auto: the probe at $4801'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
-                'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8')
+                'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
+                'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
+                'ecsoffcfg', 'ecsoffrom')
 
 
 def main():
@@ -525,8 +559,8 @@ def main():
     ap.add_argument('--only', help='comma-separated CRCs or synthetic names')
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--plants-only', action='store_true')
+    ap.add_argument('--plant', help='comma-separated plant names (with --all or --plants-only)')
     ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
-    ap.add_argument('--plant', help='comma-separated plant names: only these (with --plants-only)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_loader'))
@@ -583,6 +617,17 @@ def main():
         if 'zoo5' in s8 and 'zoo3' in s8:
             imgs.append(dict(s8['zoo5'], name='reload:zoo5 + CFG then zoo3\'s image, CFG kept', crc='RELOAD3',
                              reload=dict(s8['zoo3'], cfg=None), dtfirst=1))
+        # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
+        # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),
+        # the ECS incompatible tags (ecsoffcfg, ecsoffrom: off)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'step9_build_images', os.path.join(ROOT, 'sim', 'testroms', 'step9', 'build_images.py'))
+        b9 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(b9)
+        for im in b9.images(os.path.join(work, 'step9_build')):
+            imgs.append(dict(name=im['name'], data=im['data'], cfg=im['cfg'], want_err=0, crc=im['name'],
+                             image=im['name'], step8=True))
     if a.only:
         keep = set(a.only.split(','))
         imgs = [i for i in imgs if i['crc'] in keep or i['name'] in keep]
@@ -636,7 +681,7 @@ def main():
             rc_fail += failed
         if a.all or a.plants_only:
             pimgs = [i for i in imgs if (i['crc'] in PLANT_IMAGES or i['name'] in PLANT_IMAGES)
-                     and not i.get('neg')]
+                     and (not i.get('neg') or i['crc'] == 'NEGNOCART')]   # no cartridge: the Auto plant
             for name, fn, frm, to, what in PLANTS:
                 if a.plant and name not in a.plant.split(','):
                     continue

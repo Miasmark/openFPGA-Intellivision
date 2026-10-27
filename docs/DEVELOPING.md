@@ -186,6 +186,14 @@ now), 7,740 registers, 50 RAM blocks (306,028 bits; the map table 4,096 x
 +3.001 ns; worst hold +0.038 ns (`clk_sys`, fast 0 C); no negative slack,
 no critical warnings. The four `set_net_delay` bounds are met with
 6.851 ns to spare (slow model); FIT_CROSSING pass.
+0.0.9 (step 9: the ECS, with the step-9 review's fixes; seed 1): 8,750 ALMs
+(`intv_ecs` 598 with PSG #2; `intv_input` 373: the HID decode round;
+`intv_loader` 1,996), 8,387 registers, 54 RAM blocks (322,412 bits; the
+ECS RAM 512 x 32), 21 DSP; worst setup `clk_sys` +0.757 ns (slow 85 C),
+`clk_74a` +2.734 ns; worst hold +0.036 ns (`clk_sys`, fast 0 C); no
+negative slack, no critical warnings. The four `set_net_delay` bounds are
+met with 6.927 ns to spare (slow model); FIT_CROSSING pass. (The first cut
+of step 9 measured 9,357 ALMs, `intv_input` 988.)
 
 ## Simulation
 

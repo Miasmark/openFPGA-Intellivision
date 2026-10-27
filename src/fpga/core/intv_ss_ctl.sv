@@ -49,7 +49,8 @@
 //          (unless the menu holds the freeze). About 5 ms.
 //   load   freeze; check the header (magic, version, size, length, the
 //          cartridge's CRC and length, the CFG's CRC (version 2, step 8),
-//          the EXEC's and GROM's CRCs, flags,
+//          the EXEC's and GROM's CRCs, flags (bit 0: the ECS attached;
+//          version 3, step 9), the ECS ROM's CRC,
 //          word counts, reserved words 0) and the payload (CRC32, the
 //          unused module area 0, nothing written beyond the live part): a
 //          foreign or corrupt blob ends with err and the machine resumes
@@ -125,6 +126,8 @@ module intv_ss_ctl #(
     input  wire logic        cart_noss,          // the image's state cannot be saved (step 8)
     input  wire logic [31:0] exec_crc,           // the system ROM slots' CRC32s (intv_core)
     input  wire logic [31:0] grom_crc,
+    input  wire logic        ecs_flag,           // the ECS attached (step 9: header flags bit 0)
+    input  wire logic [31:0] ecs_crc,            // its ROM slot's CRC32 (0 when not attached)
 
     output logic             run,
     output logic             frozen,
@@ -381,13 +384,14 @@ module intv_ss_ctl #(
             4'(SS_H_LENGTH):     hdr_exp = 32'(SS_PAYLOAD);
             4'(SS_H_CART_CRC):   hdr_exp = ccrc;
             4'(SS_H_CART_WORDS): hdr_exp = {15'd0, cwords};
-            4'(SS_H_FLAGS):      hdr_exp = 32'd0;
+            4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};
             4'(SS_H_CRC):        hdr_exp = c;
             4'(SS_H_MOD_WORDS):  hdr_exp = 32'(SS_MOD_WORDS);
             4'(SS_H_CRAM_CELLS): hdr_exp = 32'(SS_CRAM_CELLS);
             4'(SS_H_EXEC_CRC):   hdr_exp = ecrc;
             4'(SS_H_GROM_CRC):   hdr_exp = gcrc;
             4'(SS_H_CFG_CRC):    hdr_exp = cfg_crc;
+            4'(SS_H_ECS_CRC):    hdr_exp = ecs_crc;
             default:             hdr_exp = 32'd0;
         endcase
     endfunction

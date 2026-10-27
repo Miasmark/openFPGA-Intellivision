@@ -19,6 +19,7 @@ recorded in sim/regress/mapper_library.csv.
                                               faults
                                               (each must fail)
   python3 -I sim/tb/tb_loader.py [--only CRC,...] [--no-build]
+  python3 -I sim/tb/tb_loader.py --plants-only --plant NAME,... [--only ...]
 
 Environment: VERILATOR (default verilator), WORK (default sim/work/tb_loader),
 INTV_LIBRARY (default ~/ROMLibrary/Intellivision), INTV_BIOS_DIR (default
@@ -231,6 +232,22 @@ def expect(img, tab, bios):
             mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50 + y)
             L.append('B %d %d %08X' % (r, y, blockcrc(mi, r)))
         mi.write((r << 12) + 0xFFF, (r << 12) + 0xA50)
+    # K: the bank sweep (all bank registers at v; every 2K window whose first word is a
+    # bank window, attr B, read), then the registers back at their start
+    for v in range(0, 256, 8):
+        for i in range(32):
+            mi.write(0x40 + i, v)
+        buf = bytearray()
+        for w in range(32):
+            if mi.attr(w << 11)[1] & 8:
+                for a in range(w << 11, (w + 1) << 11):
+                    hit, attr, paged = mi.attr(a)
+                    x = mi.read(a)
+                    x = 0xFFFF if x is None else x
+                    buf += bytes((int(hit) | attr << 1 | paged << 5, x >> 8, x & 0xFF))
+        L.append('K %d %08X' % (v, crc32(bytes(buf))))
+    for i in range(32):
+        mi.write(0x40 + i, cf.BANK0[i])
     # C, D
     for a in range(0x10000):
         mi.write(a, (a * 0x9E37 + 0x1234) & 0xFFFF)
@@ -509,6 +526,7 @@ def main():
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
+    ap.add_argument('--plant', help='comma-separated plant names: only these (with --plants-only)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_loader'))
@@ -620,6 +638,8 @@ def main():
             pimgs = [i for i in imgs if (i['crc'] in PLANT_IMAGES or i['name'] in PLANT_IMAGES)
                      and not i.get('neg')]
             for name, fn, frm, to, what in PLANTS:
+                if a.plant and name not in a.plant.split(','):
+                    continue
                 d = os.path.join(work, 'plant_' + name)
                 shutil.rmtree(d, ignore_errors=True)
                 os.makedirs(os.path.join(d, 'rtl'))

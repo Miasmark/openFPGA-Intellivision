@@ -811,10 +811,12 @@ PLANTS = [
      [("                if (cart_noss && cart_ready)", "                if (1'b0 && cart_noss && cart_ready)")],
      'cartnoss', 'psgtest', r'NOSS: '),
     # build step 9: the header's ECS flag not set or checked (a state with the ECS loads into a core
-    # with it off: the E run); the ECS RAM not restored (ECS BASIC's typed line lost)
+    # with it off: the E run; since the step-9 review the S run's blob check sees the flag missing
+    # first and the image stops there, so either counts); the ECS RAM not restored (ECS BASIC's
+    # typed line lost)
     ('ss_ecs_unchecked', 'intv_ss_ctl.sv',
      [("4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = 32'd0;")],
-     'ecsavail', 'psgtest', r' E: (FAIL load|loads |state set)'),
+     'ecsavail', 'psgtest', r' (E: (FAIL load|loads |state set)|S: blob \S+: \[.header flags = \$00000000, want \$00000001)'),
     # the step-9 review: the header's ECS ROM CRC not checked (an ECS state loads into a core with
     # another ECS ROM: the X run)
     ('ss_ecs_crc_unchecked', 'intv_ss_ctl.sv',

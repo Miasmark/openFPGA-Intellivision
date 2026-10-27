@@ -117,9 +117,10 @@ SS_IMAGES = [
     ('ecsavail', ('step9', 'ecsavail'), None, (0xFF, 0xFF), 60, None,
      [(25, 'midinst'), (32, 'any'), (40, 'busrq'), (44, 'any')], (48, 6), 52),
     # the step-9 review: a library game under Auto (attached) that uses the ECS RAM (Super NFL
-    # Football writes about 135 cells from frame 14)
+    # Football writes about 135 cells from frame 14; its display stays off this early, so no
+    # BUSRQ or row-fetch save points)
     ('nfl', 'Super NFL Footbal (USA) (Proto).zip', None, (0xFF, 0xFF), 110, None,
-     [(30, 'midinst'), (50, 'any'), (65, 'busrq'), (80, 'any')], (88, 8), 98),
+     [(30, 'midinst'), (50, 'any'), (65, 'midinst'), (80, 'any')], (88, 8), 98),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)

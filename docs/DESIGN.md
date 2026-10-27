@@ -362,8 +362,8 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 
 | id | Name | Files | Notes |
 |---|---|---|---|
-| 0x100 | Cartridge | .int .bin .rom .itv | required |
-| 0x101 | Cartridge config | .cfg | optional; **(build step 8)** used with a raw image (ignored with a .rom), its length from the data table (docs/CARTFORMATS.md 1) |
+| 0x100 | Cartridge | .int .bin .rom .json | required; core-specific (`/Assets/intv/Miasmark.Intellivision/`) and the instance JSON slot (0x11B): a `.json` from `tools/make_instances.py` loads a `.bin` and its `.cfg` in one pick (openFPGA allows instance JSON only in the first, core-specific slot; four extensions at most, so `.itv` gave way: rename those to `.bin`) |
+| 0x101 | Cartridge config | .cfg | optional, core-specific (0x10B, beside the cartridges); **(build step 8)** used with a raw image (ignored with a .rom), its length from the data table (docs/CARTFORMATS.md 1) |
 | 0x102 | EXEC | exec.bin (8,192 bytes) | required |
 | 0x103 | GROM | grom.bin (2,048 bytes) | required |
 | 0x104 | ECS ROM | ecs.bin (24,576 bytes) | optional |

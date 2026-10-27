@@ -7,8 +7,8 @@
       "description": "Mattel Intellivision, a clean-room core with save states (WIP).",
       "author": "Miasmark",
       "url": "",
-      "version": "0.0.9",
-      "date_release": "2026-10-26"
+      "version": "0.0.10",
+      "date_release": "2026-10-27"
     },
     "framework": {
       "target_product": "Analogue Pocket",

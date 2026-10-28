@@ -625,7 +625,9 @@ def skew_view(src):
 def build(work, rtl_dir, verilator, strict=True, defines=()):
     obj = os.path.join(work, 'obj')
     os.makedirs(work, exist_ok=True)
-    cmd = [verilator, '--binary', '--timing', '-j', '2', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD',
+    # --verilate-jobs 1: Verilator 5.040's multithreaded verilation (what -j N turns on besides --build-jobs)
+    # crashed about one build in 16 with "internal fault" (2026-10-28: 5 of 80 with -j 2, 0 of 210 with one)
+    cmd = [verilator, '--binary', '--timing', '--verilate-jobs', '1', '--build-jobs', '2', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD',
            '-Wno-PROCASSINIT', '--top-module', 'tb_input', '-Mdir', obj, '-o', 'tb_input']
     cmd += ['-D' + d for d in defines]
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + [TB]

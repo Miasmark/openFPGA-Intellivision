@@ -358,7 +358,9 @@ def build(work, rtl_dir, verilator, strict=True):
     obj = os.path.join(work, 'obj')
     os.makedirs(work, exist_ok=True)
     tables = os.path.join(CORE, 'tables')
-    cmd = [verilator, '--binary', '--timing', '-j', '4', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD', '-Wno-PROCASSINIT',
+    # --verilate-jobs 1: Verilator 5.040's multithreaded verilation (what -j N turns on besides --build-jobs)
+    # crashed about one build in 16 with "internal fault" (2026-10-28: 5 of 80 with -j 2, 0 of 210 with one)
+    cmd = [verilator, '--binary', '--timing', '--verilate-jobs', '1', '--build-jobs', '4', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD', '-Wno-PROCASSINIT',
            '--top-module', 'tb_loader', '-Mdir', obj, '-o', 'tb_loader',
            '-DCRC_HEX="%s"' % os.path.join(tables, 'cart_crc.hex'),
            '-DLAYOUT_HEX="%s"' % os.path.join(tables, 'cart_layouts.hex')]

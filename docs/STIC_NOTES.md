@@ -105,7 +105,7 @@ documented; the log lists each card's 8 bytes once (D15).
 
 | # | Topic | Sources | Model |
 |---|---|---|---|
-| T1 | BUSRQ cycles per card row | MAME 110 (stic.h:48); WIKI 114 (DESIGN 2.4, L-WIKI); WIKI STIC_Bus_Request: requested one scanline ahead, released when the row is loaded (= 2 x 57) | request held 114 cycles; the CPU loses 114 minus its latency to the next interruptible boundary (MAME's 110 looks like 114 minus an average latency of 4) |
+| T1 | BUSRQ cycles per card row | MAME 110 (stic.h:48); WIKI 114 (DESIGN 2.4, L-WIKI); WIKI STIC_Bus_Request: requested one scanline ahead, released when the row is loaded (= 2 x 57) | request held 114 cycles; the CPU loses 114 minus its latency to the next interruptible boundary (MAME's 110 looks like 114 minus an average latency of 4), plus, since build step 9b, the 2 NACT cycles after each wait (S1 p.36, G82 Fig. 16; docs/CPU_NOTES.md) |
 | T2 | Does the CPU lose the BUSRQ cycles at all in MAME? | MAME subtracts 12 x 110 + 42 (+ 110 when VDR = 0) with `adjust_icount` in the vblank interrupt (intv_m.cpp:668, 680), but `adjust_icount` acts only while the CPU is executing (diexec.h:159) and the vblank callback runs from a timer between time slices; MAME's traces show every instruction at its own cycle count and about 14,934.7 CPU cycles between vblanks (docs/CPU_NOTES.md "MAME lockstep"; step-4 traces: Beamrider 200 frames, no gap anywhere) | mode `mame` steals nothing (to follow MAME's traces); mode `stic` steals as the hardware should; jzIntv, run as a black box, steals them and mostly follows mode `stic` where it parts from MAME (section 7) |
 | T3 | Extra row fetch with VDR = 0 | MAME +110 cycles (intv_m.cpp:678-681); S9 14,934 - 13,518 = 1,416, i.e. +54 over VDR > 0 (interrupts.txt:126-128); GI80 p.5-10: SR2 "thirteen or fourteen times per picture frame depending on picture offset" | a 13th request when it fits before the frame end (VDR = 0 only): about +110, as MAME |
 | T4 | Frame BUSRQ | MAME 42 cycles "just after end of vblank and before first row fetch (approximate)" (stic.h:49); no other source gives a figure; GI80's 13/14 SR2 per frame fits 12/13 row fetches plus one | 42-cycle request at 3,790 when the display is enabled |
@@ -256,6 +256,14 @@ Stolen cycles per frame in mode `stic`, 300 frames each:
 
 The first enabled frame of each game has no requests: its $20 write came
 after cycle 3,790 (D8).
+
+These were measured before build step 9b, and `stolen` counts the STIC's
+side (from the CPU's acknowledge to the end of the request). Since 9b the
+CPU spends 2 more cycles after every wait it serves (the two NACT cycles of
+S1 p.36 / G82 Fig. 16), so it loses 28 more a frame with 14 requests and 26
+with 13; the games then run slightly later against the frame, so the means
+above are not simply shifted by that amount. The figures are kept as
+measured.
 
 **Sensitivity.** Each of 18 planted faults in a copy of `stic.py` must
 make one of the comparisons above fail; 17 do: delays and border
@@ -876,7 +884,8 @@ J / JSR / JSRD 13 cycles (12), PULR (MVI@ R6) 12 (11), MVII to R6 or R7
 Astrosmash, Sewer Sam and Dracula logs costs the same. These add 11-198
 cycles a frame on average in 15 of the screens and 506 in Diner (up to
 1,837), about 135 over the 16. So the CPU's budget a frame is about
-14,934 - 1,317 - 135 = 13,482 cycles in jzIntv, 13,502 in mode `stic` and
+14,934 - 1,317 - 135 = 13,482 cycles in jzIntv, 13,502 in mode `stic` (about
+13,474 since build step 9b's two cycles after each bus request) and
 14,935 in MAME: jzIntv sits with mode `stic`, which is why it
 plays the timing-sensitive games as mode `stic` does.
 

@@ -50,6 +50,7 @@ __all__ = ["CP1610", "Event", "UndefinedBehaviour", "disassemble",
 
 S_FLAG, Z_FLAG, O_FLAG, C_FLAG = 8, 4, 2, 1     # SZOC, as GSWD's nibble
 INTERRUPT_CYCLES = 9    # S1 p.35: INTAK NACT DW DWS NACT IAB NACT NACT NACT
+BUSRQ_EXIT = 2          # NACT cycles after BUSRQ* is seen high (S1 p.36, G82 p.29)
 
 BRANCH_NAMES = ["B", "BC", "BOV", "BPL", "BEQ", "BLT", "BLE", "BUSC",
                 "NOPP", "BNC", "BNOV", "BMI", "BNEQ", "BGE", "BGT", "BESC"]
@@ -179,7 +180,8 @@ class CP1610:
                   Undocumented_SDBD_Behavior, MVI@); 'mame': decrements twice,
                   reads both, 13 cycles (MAME cp1610.cpp sdbd_*_d)
       hlt         'manual' (default): HLT stops the CPU after the next
-                  instruction (S1 p.56); 'immediate': stops at once (wiki HLT)
+                  interruptible instruction (G82 p.33); 'immediate':
+                  stops at once (wiki HLT)
       buslog      record every bus phase in self.buslog as
                   (cycle, phase, addr, data)
     """
@@ -425,10 +427,15 @@ class CP1610:
                 n += 1
                 if n > 1 << 24:
                     raise RuntimeError("BUSRQ held forever")
-            self._t = n
-            ev.cycles = n
+            # S1 p.36, G82 Fig. 16 (p.29), O81 p.2-13: the cycle whose TS1
+            # samples BUSRQ* high and one more stay NACT, BUSAK* still low;
+            # BAR (or INTAK) and BUSAK* high come in the cycle after them.
+            for k in range(BUSRQ_EXIT):
+                self._log(n + k, "NACT")
+            self._t = n + BUSRQ_EXIT
+            ev.cycles = n + BUSRQ_EXIT
             ev.text = "BUSAK %d" % n
-            self.cycle += n
+            self.cycle += n + BUSRQ_EXIT
             self._sample_irq()
             self._fill(ev)
             # The boundary stays open: the next step() checks BUSRQ again,
@@ -480,7 +487,6 @@ class CP1610:
     def _execute(self):
         pc0 = self.r[7]
         ev = Event("insn", self.cycle, pc0)
-        halt_now = self.halt_pending    # set by an earlier HLT
         self._t = 0
         self._und = None
         self._words = words = []
@@ -562,10 +568,12 @@ class CP1610:
         ev.undefined = self._und
         ev.interruptible = intr_ok
         self.cycle += self._t
-        # S1 p.56 "HaLT after next instruction is executed": the halt takes
-        # effect after the instruction that follows HLT, whatever it is (a
-        # second HLT included); docs/CPU_NOTES.md row 7.
-        if halt_now:
+        # G82 p.33 "Halt after next interruptable instruction is executed"
+        # (S1 p.56: "after next instruction"): an earlier HLT stops the CPU
+        # at the end of the first interruptible instruction after it, as
+        # STPST* does (G82 p.11); HLT itself is not interruptible, so a
+        # second HLT runs on. docs/CPU_NOTES.md row 7.
+        if self.halt_pending and intr_ok:
             self.halt_pending = False
             self.halted = True
         # Sample the request lines at every boundary, act only after an

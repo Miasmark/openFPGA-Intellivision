@@ -86,6 +86,11 @@ module tb_cpu;
     wire logic        pcit  = act ? pcit_b : pcit_a;
     wire logic        hlt   = act ? hlt_b : hlt_a;
     wire logic        fch   = act ? fetch_b : fetch_a;
+    // a bus-request wait cycle (not one of the 2 NACT after it): a wait that
+    // follows those 2 at once keeps busak high, so the step boundary is seen
+    // here, not on busak's edge
+    wire logic        waiting = act ? (cpu_b.st == cpu_b.S_BUSAK && cpu_b.cnt == 2'd0)
+                                    : (cpu_a.st == cpu_a.S_BUSAK && cpu_a.cnt == 2'd0);
 
     // registers of the running CPU, from its state port words 0-3 and 6
     function automatic logic [15:0] reg_of(input int k);
@@ -252,7 +257,7 @@ module tb_cpu;
     // ---- run one case
     task automatic run_case();
         int ei, ti, pi, si;
-        logic prev_busak;
+        logic prev_wait;
         case_fails = 0;
         nswaps = 0;
         act = 1'b0;
@@ -273,7 +278,7 @@ module tb_cpu;
         cpu_cycle();
         if (has_init) load_init();
         ei = 0; ti = 0; pi = 0; si = 0;
-        prev_busak = 1'b0;
+        prev_wait = 1'b0;
         for (int c = 0; c <= ncyc; c++) begin
             logic step_start;
             if (do_saves && si < saves.size() && saves[si] == c) begin
@@ -283,7 +288,7 @@ module tb_cpu;
             intrm = line_at(0, c + 1); intr = line_at(1, c + 1); busrq = line_at(2, c + 1);
             #1;
             // a step starts here?
-            step_start = fch || ph == PH_INTAK || (busak && !prev_busak) || hlt;
+            step_start = fch || ph == PH_INTAK || (waiting && !prev_wait) || hlt;
             if (c > 0 && step_start) begin
                 if (ei >= evs.size() || evs[ei].c != c)
                     fail($sformatf("cycle %0d: a step starts, model's next step end is %0d",
@@ -328,7 +333,7 @@ module tb_cpu;
                 if (pi < sins.size() && sins[pi] + 2 == c) pi++;
                 else fail($sformatf("cycle %0d: SIN pulse not in the model", c));
             end
-            prev_busak = busak;
+            prev_wait = waiting;
             cpu_cycle();
         end
         if (ei != evs.size()) fail($sformatf("%0d model steps not seen", evs.size() - ei));

@@ -95,7 +95,7 @@ plant ss_cnt $F "st <= st_t'(ss_wdata[22:18]); cnt <= ss_wdata[24:23];" "st <= s
 # state port: the INTRM line sample not restored
 plant ss_intrm_prev $F "{intr_prev, intr_req, intrm_prev, intrm_req} <= ss_wdata[10:7];" "{intr_prev, intr_req, intrm_req} <= {ss_wdata[10:9], ss_wdata[7]};" tests 1
 # state port: the SDBD low byte not saved
-plant ss_lo $F "8'd5: ss_rdata = {3'd0, taken, hnow, dbd, jpt, cnt, 5'(st), lo, ir};" "8'd5: ss_rdata = {3'd0, taken, hnow, dbd, jpt, cnt, 5'(st), 8'd0, ir};" sweep 1
+plant ss_lo $F "8'd5: ss_rdata = {3'd0, taken, 1'b0, dbd, jpt, cnt, 5'(st), lo, ir};" "8'd5: ss_rdata = {3'd0, taken, 1'b0, dbd, jpt, cnt, 5'(st), 8'd0, ir};" sweep 1
 # NEGR of 0 leaves C clear (MAME's behaviour, CPU_NOTES row 5)
 plant negr_c $F "x_we = 1'b1; x_sz = 1'b1; x_c = sum[17]; x_o = sum[16];" "x_we = 1'b1; x_sz = 1'b1; x_c = sum[17] & (f_m != 3'd4); x_o = sum[16];" tests 0
 # state port: the sequence address/data word not restored
@@ -104,6 +104,10 @@ plant ss_tmp $F "8'd4: {tmp, ea} <= ss_wdata;" "8'd4: ea <= ss_wdata[15:0];" fuz
 plant sin_noint $F "            fin_ok = !cls_shift;                // S1 p.53: shifts not interruptible" "            fin_ok = !cls_shift && !(cls_single && f_m == 3'd6 && f_r[2:1] == 2'b11);" tests 0
 # state port: halt pending not restored
 plant ss_hpend $F "{hlt, hpend} <= ss_wdata[12:11];" "hlt <= ss_wdata[12];" tests 1
+# one NACT after a bus request instead of two (S1 p.36, G82 Fig. 16)
+plant busrq_exit1 $F "if (!busrq) cnt_n = 2'd2;   // released: 2 more NACT (S1 p.36)" "if (!busrq) cnt_n = 2'd1;" tests 0
+# HLT halts after the next instruction, interruptible or not (S1's wording; G82 p.33 says interruptible)
+plant hlt_next_any $F "if (hpend && fin_ok) begin hpend_n = 1'b0; hlt_n = 1'b1; end" "if (hpend) begin hpend_n = 1'b0; hlt_n = 1'b1; end" tests 0
 
 echo "TB_CPU_ALL $([ $rc = 0 ] && echo pass || echo FAIL)"
 exit $rc

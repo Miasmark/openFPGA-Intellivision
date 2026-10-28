@@ -39,8 +39,10 @@
 // INTRM and INTR are edge requests: a rising edge of the (active-high)
 // line sets a request, a low line clears it (wiki CP1610 Signal Pins).
 // After an interruptible instruction: BUSRQ first (busak and NACT for as
-// long as busrq stays high), then INTR, then INTRM if I is set (S1
-// p.24-25). INTR is taken before INTRM and clears only its own request.
+// long as busrq stays high, then two more NACT cycles with busak: the cycle
+// whose TS1 sees BUSRQ* high and the next, S1 p.36, G82 Fig. 16 p.29, O81
+// p.2-13; the lines are sampled again at their end, where the next step
+// starts), then INTR, then INTRM if I is set (S1 p.24-25). INTR is taken before INTRM and clears only its own request.
 // No check between the interrupt sequence and the handler's first
 // instruction. The interrupt vector comes from din in the IAB cycle.
 //
@@ -52,7 +54,8 @@
 // ignored; jump with II=11 jumps with I unchanged; MVO@ with the pointer as
 // source writes the old value. Two options are inputs (tie them in the
 // core; the bench runs both ways):
-//   cfg_hlt_imm       0: HLT halts after the next instruction (S1 p.56)
+//   cfg_hlt_imm       0: HLT halts after the next interruptible instruction
+//                        (G82 p.33; S1 p.56 said "next instruction")
 //                     1: HLT halts at once (wiki HLT)
 //   cfg_sdbd_r6_mame  0: SDBD + R6 reads the word under R6 twice, one
 //                        decrement, 10 cycles (wiki Undocumented_SDBD_Behavior)
@@ -73,8 +76,8 @@
 //   word 4 {tmp, ea}  (data and address of the sequence in progress)
 //   word 5 [9:0] ir, [17:10] lo (SDBD low byte), [22:18] st (cycle state),
 //          [24:23] cnt (idle cycles left - 1), [25] jpt (jump word 3),
-//          [26] dbd (this instruction follows SDBD), [27] hnow (halt after
-//          this instruction), [28] taken (branch)
+//          [26] dbd (this instruction follows SDBD), [27] reserved (reads 0;
+//          up to 0.0.11 "halt after this instruction"), [28] taken (branch)
 //   word 6 [3:0] S Z O C, [4] I, [5] D, [6] reserved (reads 0; whether
 //          the instruction ending may be interrupted is decided in its
 //          last cycle and needs no flip-flop), [7] intrm request, [8] intrm line last sample,
@@ -130,7 +133,8 @@ module cp1610 #(
         S_ABAR, S_ANACT, S_AADAR, S_ANACT2,     // direct address
         S_IDLE,                                 // NACT, cnt more after this
         S_IINTAK, S_INACT1, S_IDW, S_IDWS, S_INACT2, S_IIAB, S_INACT3, // interrupt
-        S_BUSAK,                                // bus request wait
+        S_BUSAK,                                // bus request wait (cnt 0), then
+                                                // the 2 NACT after it (cnt 2, 1)
         S_HALT
     } st_t;
 
@@ -144,7 +148,7 @@ module cp1610 #(
     logic [9:0]  ir;
     logic [7:0]  lo;
     logic [15:0] ea, tmp;
-    logic        jpt, dbd, hnow, taken;
+    logic        jpt, dbd, taken;
 
     // next values
     logic [15:0] r_n [0:7];
@@ -157,7 +161,7 @@ module cp1610 #(
     logic [9:0]  ir_n;
     logic [7:0]  lo_n;
     logic [15:0] ea_n, tmp_n;
-    logic        jpt_n, dbd_n, hnow_n, taken_n;
+    logic        jpt_n, dbd_n, taken_n;
 
     // ------------------------------------------------------------- decode
     wire logic [2:0] f_o  = ir[8:6];          // ext/regreg operation
@@ -339,7 +343,7 @@ module cp1610 #(
         intr_req_n = intr_req; intr_prev_n = intr_prev;
         hpend_n = hpend; hlt_n = hlt;
         st_n = st; cnt_n = cnt; ir_n = ir; lo_n = lo; ea_n = ea; tmp_n = tmp;
-        jpt_n = jpt; dbd_n = dbd; hnow_n = hnow; taken_n = taken;
+        jpt_n = jpt; dbd_n = dbd; taken_n = taken;
         fin = 1'b0; fin_ok = 1'b0; ex_rd = 1'b0; ex_idle = 1'b0;
         hlt_now = 1'b0; smp = 1'b0;
 
@@ -355,7 +359,6 @@ module cp1610 #(
                 r_n[7] = r[7] + 16'd1;
                 dbd_n = fD;                     // D lasts one instruction
                 fD_n = 1'b0;
-                hnow_n = hpend;                 // HLT before: halt after this one
                 st_n = S_FNACT2;
             end
             S_FNACT2: begin                     // decode
@@ -483,9 +486,14 @@ module cp1610 #(
             end
 
             S_BUSAK: begin
-                if (!busrq) begin
+                if (cnt == 2'd0) begin
+                    if (!busrq) cnt_n = 2'd2;   // released: 2 more NACT (S1 p.36)
+                end else if (cnt == 2'd2)
+                    cnt_n = 2'd1;
+                else begin                      // the second: the next step starts
+                    cnt_n = 2'd0;
                     smp = 1'b1;
-                    st_n = S_FBAR;              // or INTAK, below
+                    st_n = S_FBAR;              // or BUSAK or INTAK, below
                 end
             end
             S_HALT: ;
@@ -514,8 +522,9 @@ module cp1610 #(
 
         // ---- end of an instruction: halt, sample, next step
         if (fin) begin
-            // S1 p.56: HLT halts after the next instruction (CPU_NOTES row 7)
-            if (hnow) begin hpend_n = 1'b0; hlt_n = 1'b1; end
+            // G82 p.33: HLT halts after the next interruptible instruction
+            // (CPU_NOTES row 7); HLT itself is not, so a second HLT runs on
+            if (hpend && fin_ok) begin hpend_n = 1'b0; hlt_n = 1'b1; end
             if (hlt_now) hlt_n = 1'b1;
             smp = 1'b1;
             intok_n = fin_ok && !hlt_n;
@@ -531,14 +540,19 @@ module cp1610 #(
         if (fin) begin
             if (hlt_n)
                 st_n = S_HALT;
-            else if (intok_n && busrq)
+            else if (intok_n && busrq) begin
                 st_n = S_BUSAK;
+                cnt_n = 2'd0;
+            end
             else if (intok_n && (intr_req_n || (intrm_req_n && fI_n)))
                 st_n = S_IINTAK;
             else
                 st_n = S_FBAR;
-        end else if (st == S_BUSAK && !busrq && (intr_req_n || (intrm_req_n && fI_n))) begin
-            st_n = S_IINTAK;
+        end else if (st == S_BUSAK && cnt == 2'd1) begin
+            if (busrq)                          // requested again: another wait
+                st_n = S_BUSAK;
+            else if (intr_req_n || (intrm_req_n && fI_n))
+                st_n = S_IINTAK;
         end
     end
 
@@ -556,7 +570,7 @@ module cp1610 #(
             hpend <= 1'b0; hlt <= 1'b0;
             st <= S_RST; cnt <= 2'd0; ir <= 10'd0; lo <= 8'd0;
             ea <= 16'd0; tmp <= 16'd0;
-            {jpt, dbd, hnow, taken} <= 4'd0;
+            {jpt, dbd, taken} <= 3'd0;
         end else if (ss_we && ss_mod) begin
             unique case (ss_w)
                 8'd0: {r[1], r[0]} <= ss_wdata;
@@ -567,7 +581,7 @@ module cp1610 #(
                 8'd5: begin
                     ir <= ss_wdata[9:0]; lo <= ss_wdata[17:10];
                     st <= st_t'(ss_wdata[22:18]); cnt <= ss_wdata[24:23];
-                    {taken, hnow, dbd, jpt} <= ss_wdata[28:25];
+                    {taken, dbd, jpt} <= {ss_wdata[28], ss_wdata[26:25]};
                 end
                 8'd6: begin
                     {fS, fZ, fO, fC} <= ss_wdata[3:0];
@@ -585,7 +599,7 @@ module cp1610 #(
             hpend <= hpend_n; hlt <= hlt_n;
             st <= st_n; cnt <= cnt_n; ir <= ir_n; lo <= lo_n;
             ea <= ea_n; tmp <= tmp_n;
-            {jpt, dbd, hnow, taken} <= {jpt_n, dbd_n, hnow_n, taken_n};
+            {jpt, dbd, taken} <= {jpt_n, dbd_n, taken_n};
         end
     end
 
@@ -598,7 +612,7 @@ module cp1610 #(
                 8'd2: ss_rdata = {r[5], r[4]};
                 8'd3: ss_rdata = {r[7], r[6]};
                 8'd4: ss_rdata = {tmp, ea};
-                8'd5: ss_rdata = {3'd0, taken, hnow, dbd, jpt, cnt, 5'(st), lo, ir};
+                8'd5: ss_rdata = {3'd0, taken, 1'b0, dbd, jpt, cnt, 5'(st), lo, ir};
                 8'd6: ss_rdata = {19'd0, hlt, hpend, intr_prev, intr_req,
                                   intrm_prev, intrm_req, 1'b0, fD, fI, fS, fZ, fO, fC};
                 default: ss_rdata = 32'd0;

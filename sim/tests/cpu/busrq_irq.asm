@@ -1,8 +1,10 @@
 ; Bus requests are served before interrupts (S1 p.25: "the CPU will honor
 ; Bus Requests before it will honor Interrupt Requests").
+; Each served request ends with 2 more NACT cycles, BUSAK* still low: the
+; cycle whose TS1 sees BUSRQ* high and the next (S1 p.36, G82 Fig. 16).
 ;! busrq 20-29
 ;! intrm 20-
-;! expect isr: CYC=39 BUSAK=6 [$0300]=x INTS=1
+;! expect isr: CYC=41 BUSAK=8 [$0300]=x INTS=1
 ;! expect done: INTS=1
         ORG     $5000
 start:  MVII    #$0300, R6      ; 0-8

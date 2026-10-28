@@ -532,6 +532,12 @@ end
     wire    [31:0]  target_buffer_resp_struct  = 32'h6000_0000;
     wire    [31:0]  cfg_st_rd_data;             // the struct RAM, held from its last read
     wire    [2:0]   cfg_fetch_res;
+    wire    [2:0]   cfg_fetch_to;               // the command that timed out (load diagnostics)
+    wire            cfg_wr_ok;                  // a CFG read is outstanding
+    wire            loader_bridge_wr;           // bridge_wr for the data loader (apf_datatable)
+    wire            d_ac, d_req, d_upd;
+    wire    [1:0]   d_phase;
+    wire    [3:0]   target_state;
 
 // bridge data slot access
 // synchronous to clk_74a
@@ -618,7 +624,8 @@ core_bridge_cmd icb (
     .datatable_addr         ( datatable_addr ),
     .datatable_wren         ( datatable_wren ),
     .datatable_data         ( datatable_data ),
-    .datatable_q            ( datatable_q )
+    .datatable_q            ( datatable_q ),
+    .target_state           ( target_state )
 
 );
 
@@ -643,6 +650,8 @@ apf_datatable #(
     .wr_req     ( dataslot_requestwrite ),
     .wr_id      ( dataslot_requestwrite_id ),
     .wr_size    ( dataslot_requestwrite_size ),
+    .upd        ( dataslot_update ),
+    .upd_id     ( dataslot_update_id ),
     .dt_addr    ( datatable_addr ),
     .dt_wren    ( datatable_wren ),
     .dt_data    ( datatable_data ),
@@ -668,7 +677,14 @@ apf_datatable #(
     .st_rd_data     ( cfg_st_rd_data ),
     .fetch_res      ( cfg_fetch_res ),
     .fetch_code     ( ),
-    .fetch_len      ( )
+    .fetch_len      ( ),
+    .fetch_to       ( cfg_fetch_to ),
+    .cfg_wr_ok      ( cfg_wr_ok ),
+    .d_ac           ( d_ac ),
+    .d_req          ( d_req ),
+    .d_upd          ( d_upd ),
+    .d_phase        ( d_phase ),
+    .loader_wr      ( loader_bridge_wr )      // the CFG slot's writes only for a fetch read
 );
 
 
@@ -695,7 +711,7 @@ data_loader #(
 ) loader (
     .clk_74a                ( clk_74a ),
     .clk_memory             ( clk_sys ),
-    .bridge_wr              ( bridge_wr ),
+    .bridge_wr              ( loader_bridge_wr ),
     .bridge_endian_little   ( bridge_endian_little ),
     .bridge_addr            ( bridge_addr ),
     .bridge_wr_data         ( bridge_wr_data ),
@@ -836,9 +852,13 @@ intv_core machine_side (
 // The CFG fetch's result (clk_74a, set once a load) into clk_sys for the
 // CFG's second card
     reg     [2:0]   cfg_res_s1 = 3'd0, cfg_res_s2 = 3'd0;
+// and the load's diagnostics (0.0.14; all held or slow-changing)
+    reg     [13:0]  diag_s1 = 14'd0, diag_s2 = 14'd0;
 always @(posedge clk_sys) begin
     cfg_res_s1 <= cfg_fetch_res;
     cfg_res_s2 <= cfg_res_s1;
+    diag_s1 <= {cfg_fetch_to, target_state, d_ac, d_req, d_upd, d_phase, 2'b00};
+    diag_s2 <= diag_s1;
 end
 
 test_pattern pattern (
@@ -849,6 +869,12 @@ test_pattern pattern (
     .slot_req   ( 6'b001101 ),
     .len_st     ( cart_len_st ),
     .cfg_res    ( cfg_res_s2 ),
+    .fetch_to   ( diag_s2[13:11] ),
+    .tstate     ( diag_s2[10:7] ),
+    .d_ac       ( diag_s2[6] ),
+    .d_req      ( diag_s2[5] ),
+    .d_upd      ( diag_s2[4] ),
+    .d_phase    ( diag_s2[3:2] ),
     .colour     ( pat_colour )
 );
 

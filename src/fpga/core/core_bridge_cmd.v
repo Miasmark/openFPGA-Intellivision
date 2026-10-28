@@ -95,7 +95,12 @@ input   wire    [31:0]  target_buffer_resp_struct,  // bus address of the memory
 input   wire    [9:0]   datatable_addr,
 input   wire            datatable_wren,
 input   wire    [31:0]  datatable_data,
-output  wire    [31:0]  datatable_q
+output  wire    [31:0]  datatable_q,
+
+// Intellivision core (0.0.14): the target command state machine's state, for
+// the test pattern's load diagnostics (0 idle, 14 waiting for the host's ok
+// to Ready to run 0x0140, 15 waiting for a data slot command's ok)
+output  wire    [3:0]   target_state
 
 );
 
@@ -178,6 +183,7 @@ localparam  [3:0]   TARG_ST_DATASLOTOP  = 'd2;
 localparam  [3:0]   TARG_ST_WAITRESULT_RTR  = 'd14;
 localparam  [3:0]   TARG_ST_WAITRESULT_DSO  = 'd15;
     reg     [3:0]   tstate;
+    assign target_state = tstate;
     
     reg             status_setup_done_1, status_setup_done_queue;
     reg             target_dataslot_read_1, target_dataslot_read_queue;

@@ -140,10 +140,13 @@ def fetch_expect(img):
     size, 2 found with no size in the table (img['nodt']: the length found by reading), 3 none
     beside the cartridge (none, or another name: img['miss']), 4 the host refused the read (the
     table's size past the file: img['cfglenadj']), 5 a cartridge path without an extension
-    (img['nodot'])."""
+    (img['nodot']), 7 a command the host never answers (img['nohost'], a command number, or
+    img['rtrhold']: Ready to run never acked, so the first command never runs: 0.0.14's watchdog)."""
     cfg = img.get('cfg')
     if img.get('neg') == 'nocart':
         return 0, None
+    if img.get('nohost') is not None or img.get('rtrhold'):
+        return 7, None
     if img.get('nodot'):
         return 5, None
     if cfg is None or img.get('miss') or len(cfg) == 0:
@@ -151,6 +154,13 @@ def fetch_expect(img):
     if img.get('cfglenadj'):
         return 4, None
     return (2 if img.get('nodt') else 1), cfg
+
+
+def fetch_to(img):
+    """apf_cfgfetch's to_cmd: the command that timed out (1 get filename, 2 open, 4 read)."""
+    if img.get('rtrhold'):
+        return 1
+    return {0x190: 1, 0x192: 2, 0x180: 4}.get(img.get('nohost'), 0)
 
 
 def load_model(img, tab):
@@ -204,9 +214,19 @@ def expect(img, tab, bios):
     L.append('status crc %s words %d layout %d flags %02X hit %d err %d lenst %d' % (
         crc, ld.words, ld.layout, ld.flags, int(ld.hit), err, lenst))
     fres, fcfg = fetch_expect(img)
-    L.append('fetch res %d len %d' % (fres, len(fcfg) if fcfg is not None else 0))
+    L.append('fetch res %d len %d to %d' % (fres, len(fcfg) if fcfg is not None else 0, fetch_to(img)))
+    # the load's diagnostics (0.0.14): all complete seen; the cartridge's 0x0082 (none without a
+    # cartridge); no 0x008A; the length handed on; core_bridge_cmd's target state: waiting for
+    # Ready to run's ok (14) or a held command's (15) when the line is printed (+late answers
+    # them only after it: the late line shows 0)
+    tst = 14 if img.get('rtrhold') else 15 if img.get('nohost') is not None else 0
+    L.append('diag ac 1 req %d upd 0 phase 2 tstate %d' % (0 if img.get('neg') == 'nocart' else 1, tst))
     cfgslot = (2 << 2) if fcfg is not None else 0
-    L.append('slots %03X' % (cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+    slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10
+    if img.get('late'):
+        # the held command answered after the map: a read's bytes never reach the loader
+        L.append('late slots %03X tstate 0' % slots)
+    L.append('slots %03X' % slots)
     L.append('ecs auto %d' % ecs_auto(ld))
     L.append('format cfgcrc %08X noss %d ferr %02X' % (ld.cfg_crc, int(ld.noss), max(ld.err, 0)))
     sram = bench_sram(ld)
@@ -326,6 +346,8 @@ def expect(img, tab, bios):
         rimg = dict(img['reload'])
         rcfg = fcfg if not img.get('cfgclear2') else None
         rres = fres if rcfg is not None else 3
+        if fres == 7:
+            rcfg, rres = None, 7                # a timed-out command: no more fetches this session
         rl = cf.load(rimg['data'], rcfg, tab, tab.pages, cfg_len=len(rcfg) if rcfg is not None else None)
         rsram = dict(sram)
         # the session's SRAM: the first image's words stay where the second does not write
@@ -335,7 +357,7 @@ def expect(img, tab, bios):
             rsram[a] = v
         L.append('reload status crc %08X words %d layout %d flags %02X hit %d err 0 lenst %d' % (
             rl.crc, rl.words, rl.layout, rl.flags, int(rl.hit), 3 if img.get('notable2') else 1))
-        L.append('reload fetch res %d len %d' % (rres, len(rcfg) if rcfg is not None else 0))
+        L.append('reload fetch res %d len %d to 0' % (rres, len(rcfg) if rcfg is not None else 0))
         L.append('reload slots %03X' % (2 | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
         L.append('reload ecs auto %d' % ecs_auto(rl))
         L.append('reload image %08X' % crc32(struct.pack('>%dH' % rl.words, *[rsram[i] for i in range(rl.words)])))
@@ -400,6 +422,12 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
     args += ['+cartpath=' + cart_p, '+cfgpath=' + cfg_p]
     if img.get('nodt'):
         args.append('+dtupdate=0')
+    if img.get('nohost') is not None:
+        args.append('+nohost=%x' % img['nohost'])
+    if img.get('rtrhold'):
+        args.append('+rtrhold=1')
+    if img.get('late'):
+        args.append('+late=1')
     if img.get('cfglenadj'):
         args.append('+dtcfgadj=%d' % img['cfglenadj'])      # the table's size past the file
     if path2:
@@ -607,6 +635,14 @@ PLANTS = [
     ('fetch_dir_dot', 'apf_cfgfetch.sv', "                            has_dot <= 1'b0;                 // a '.' in a folder",
      "                            has_dot <= has_dot;              // a '.' in a folder",
      "CFG fetch: a '.' in a folder taken for the extension"),
+    # 0.0.14: the watchdog never fires (a held command hangs the load); a timeout that never
+    # ends the fetch (len_valid stays low); a late read's bytes let through to the loader
+    ('fetch_wd_never', 'apf_cfgfetch.sv', "if (wd[WD_BITS] && !(cph == 2'd2 && t_done)) begin",
+     "if (1'b0 && wd[WD_BITS] && !(cph == 2'd2 && t_done)) begin", 'CFG fetch: the watchdog never fires'),
+    ('fetch_to_nolv', 'apf_cfgfetch.sv', "                th   <= 32'(TO_HOLD);\n                st   <= S_TOHOLD;",
+     "                th   <= 32'(TO_HOLD);\n                st   <= S_IDLE;", 'CFG fetch: a timeout never ends the fetch'),
+    ('cfg_gate_open', 'apf_datatable.sv', "assign loader_wr = bridge_wr && !(bridge_addr[31:24] == 8'h01 && !cfg_wr_ok);",
+     "assign loader_wr = bridge_wr;", 'a late CFG read\'s bytes reach the loader'),
     ('fetch_port_bridge', 'apf_cfgfetch.sv', "assign mem_own = b_we || (cph == 2'd0",
      "assign mem_own = 1'b0 && (cph == 2'd0", 'CFG fetch: the struct RAM port never given to the steps'),
     ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
@@ -616,7 +652,8 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
-                'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT')
+                'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT',
+                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL')
 
 
 def main():
@@ -709,6 +746,18 @@ def main():
             if 'rombank' in s8:
                 imgs.append(dict(s8['rombank'], name='cfg fetch: a .rom with a CFG beside it', crc='ROMCFG',
                                  cfg=z['cfg']))
+            # 0.0.14: a host that never answers (the owner's Pocket held a second cartridge at the
+            # test pattern): the watchdog gives up, the cartridge maps without its CFG; a read
+            # answered after the map (late) must not reach the loader; Ready to run never acked
+            imgs.append(dict(z, name='cfg fetch: get filename never answered', crc='NOHOSTGF', nohost=0x190))
+            imgs.append(dict(z, name='cfg fetch: open never answered', crc='NOHOSTOF', nohost=0x192))
+            imgs.append(dict(z, name='cfg fetch: read answered after the timeout', crc='NOHOSTRD', nohost=0x180,
+                             late=True))
+            imgs.append(dict(z, name='cfg fetch: Ready to run never acked', crc='RTRHOLD', rtrhold=True))
+            if 'zoo1' in s8 and 'synthetic:b' in byname:
+                imgs.append(dict(s8['zoo1'], name='cfg fetch: get filename answered late, then a reload',
+                                 crc='NOHOSTRL', nohost=0x190, late=True, reload=byname['synthetic:b'],
+                                 cfgclear2=True, dtfirst=0))
         # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
         # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),
         # the ECS incompatible tags (ecsoffcfg, ecsoffrom: off)

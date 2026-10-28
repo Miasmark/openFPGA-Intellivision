@@ -44,7 +44,26 @@
 // res says how it went (test pattern and benches): 0 not run, 1 found
 // (the table's length), 2 found (length by reading), 3 no CFG beside the
 // cartridge, 4 the host refused (getfile, openfile or read), 5 the path
-// has no extension to replace, 6 the CFG is over MAX_LEN bytes.
+// has no extension to replace, 6 the CFG is over MAX_LEN bytes, 7 a
+// command was not answered in time (to_cmd says which).
+//
+// The watchdog (0.0.14, after the owner's Pocket held a second cartridge's
+// load at the test pattern with this fetch not finished): each target
+// command must end within 2^WD_BITS clk_74a (2^26: 0.9 s) of being raised,
+// or the fetch gives up with res 7, no CFG, and the cartridge maps as
+// without one. core_bridge_cmd has queued the command by then and cannot
+// take it back, so its answer may still come: after a timeout this module
+// issues no further command until the core is loaded again (the bitstream
+// reloads with every cartridge, data.json 0x109), so a late "done" cannot be
+// taken for another command's; a later start gives res 7 at once (to_cmd
+// 0). After a timeout the fetch holds TO_HOLD clk_74a more (3e8: 4 s)
+// before done, so the machine stays held with the test pattern and its
+// load diagnostics on screen long enough for a photograph (a normal load
+// is too fast to see it). cfg_wr_ok is high only while a read is
+// outstanding: core_top lets
+// the bridge's writes to the CFG slot's addresses (CFG_ADDR's top byte)
+// reach the data loader only then, so a late read's bytes never reach a
+// cartridge that has already been mapped.
 //
 // SPDX-License-Identifier: MIT
 
@@ -56,7 +75,9 @@ module apf_cfgfetch #(
     parameter logic [31:0] CFG_ADDR = 32'h0100_0000,  // the CFG slot's bridge address
     parameter logic [31:0] ST_ADDR  = 32'h6000_0000,  // the struct RAM
     parameter int          MAX_LEN = 16384,
-    parameter int          DRAIN   = 2048              // clk_74a after the last read
+    parameter int          DRAIN   = 2048,             // clk_74a after the last read
+    parameter int          WD_BITS = 26,               // a command's time limit: 2^WD_BITS clk_74a
+    parameter int          TO_HOLD = 300000000         // clk_74a held after a timeout (4 s)
 ) (
     input  wire logic        clk,                 // clk_74a
     input  wire logic        start,               // a pulse
@@ -64,6 +85,8 @@ module apf_cfgfetch #(
     output logic [2:0]       res,
     output logic [31:0]      len,                 // the CFG's length when res is 1 or 2
     output logic [2:0]       code,                // the last command's result code
+    output logic [2:0]       to_cmd,              // the command that timed out (res 7): 1 getfile, 2 openfile, 4 read
+    output logic             cfg_wr_ok,           // a read is outstanding: its bytes may reach the loader
     // the data table's size for CFG_ID (apf_datatable rescans on sz_req)
     output logic             sz_req,
     input  wire logic        sz_ack,
@@ -120,7 +143,7 @@ module apf_cfgfetch #(
     // ------------------------------------------------------------ steps
     typedef enum logic [4:0] {
         S_IDLE, S_CLR0, S_CLR1, S_GETF, S_SCAN, S_SCANW, S_SCANB, S_EDITR, S_EDITW, S_EDITM,
-        S_OPEN, S_SIZE, S_READ, S_CHUNK, S_DRAIN, S_END
+        S_OPEN, S_SIZE, S_READ, S_CHUNK, S_DRAIN, S_TOHOLD, S_END
     } st_t;
     st_t         st = S_IDLE;
     st_t         after = S_IDLE;                  // the step a command returns to
@@ -132,9 +155,12 @@ module apf_cfgfetch #(
     logic [2:0]  k = 3'd0;                        // the 'cfg' + NUL byte being written
     logic [31:0] off = 32'd0, cl = 32'd0;         // chunk offset and length
     logic [15:0] dr = 16'd0;
+    logic [WD_BITS:0] wd = '0;                    // the watchdog: bit WD_BITS set = expired
+    logic        poisoned = 1'b0;                 // a command timed out: no more until reloaded
+    logic [31:0] th = 32'd0;                      // the hold after a timeout
 
     initial begin
-        done = 1'b0; res = 3'd0; len = 32'd0; code = 3'd0; sz_req = 1'b0;
+        done = 1'b0; res = 3'd0; len = 32'd0; code = 3'd0; sz_req = 1'b0; to_cmd = 3'd0; cfg_wr_ok = 1'b0;
         t_read = 1'b0; t_getfile = 1'b0; t_openfile = 1'b0;
         t_id = 16'd0; t_offset = 32'd0; t_bridgeaddr = 32'd0; t_length = 32'd0;
     end
@@ -162,25 +188,53 @@ module apf_cfgfetch #(
             len    <= 32'd0;
             code   <= 3'd0;
             sz_req <= 1'b0;
+            to_cmd <= 3'd0;
             {t_read, t_getfile, t_openfile} <= 3'b000;
+            cmd    <= 3'd0;
             cph    <= 2'd0;
-            st     <= S_CLR0;
+            cfg_wr_ok <= 1'b0;
+            if (poisoned) begin
+                res <= 3'd7;                             // an earlier command never ended
+                st  <= S_END;
+            end else
+                st  <= S_CLR0;
         end else if (cph != 2'd0 || cmd != 3'd0) begin
-            // ---- one target command (cmd), then back to after
+            // ---- one target command (cmd), then back to after; the watchdog runs from raising it
             case (cph)
                 2'd0: begin
                     {t_read, t_openfile, t_getfile} <= cmd;
+                    cfg_wr_ok <= cmd == 3'b100;
+                    wd  <= '0;
                     cph <= 2'd1;
                 end
-                2'd1: if (!t_done) cph <= 2'd2;          // the bridge took it
-                default: if (t_done) begin
-                    {t_read, t_openfile, t_getfile} <= 3'b000;
-                    code <= t_err;
-                    cmd  <= 3'd0;
-                    cph  <= 2'd0;
-                    st   <= after;
+                2'd1: begin
+                    wd <= wd + 1'b1;
+                    if (!t_done) cph <= 2'd2;            // the bridge took it
+                end
+                default: begin
+                    wd <= wd + 1'b1;
+                    if (t_done) begin
+                        {t_read, t_openfile, t_getfile} <= 3'b000;
+                        cfg_wr_ok <= 1'b0;
+                        code <= t_err;
+                        cmd  <= 3'd0;
+                        cph  <= 2'd0;
+                        st   <= after;
+                    end
                 end
             endcase
+            if (wd[WD_BITS] && !(cph == 2'd2 && t_done)) begin
+                // not answered in time: give up, no CFG
+                {t_read, t_openfile, t_getfile} <= 3'b000;
+                cfg_wr_ok <= 1'b0;
+                to_cmd   <= cmd;
+                poisoned <= 1'b1;
+                res  <= 3'd7;
+                cmd  <= 3'd0;
+                cph  <= 2'd0;
+                th   <= 32'(TO_HOLD);
+                st   <= S_TOHOLD;
+            end
         end else begin
             case (st)
                 S_IDLE: ;
@@ -303,6 +357,8 @@ module apf_cfgfetch #(
                     end
                 end
                 S_DRAIN: if (dr == 16'd0) st <= S_END; else dr <= dr - 16'd1;
+                // a timeout: the test pattern stays up (its diagnostic cards) a while
+                S_TOHOLD: if (th == 32'd0) st <= S_END; else th <= th - 32'd1;
                 S_END: begin
                     done <= 1'b1;
                     st   <= S_IDLE;

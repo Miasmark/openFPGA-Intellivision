@@ -132,7 +132,7 @@ module tb_loader;
         .dataslot_requestwrite(dataslot_requestwrite), .dataslot_requestwrite_id(dataslot_requestwrite_id),
         .dataslot_requestwrite_size(dataslot_requestwrite_size),
         .dataslot_requestwrite_ack(1'b1), .dataslot_requestwrite_ok(1'b1),
-        .dataslot_update(), .dataslot_update_id(), .dataslot_update_size(),
+        .dataslot_update(dataslot_update), .dataslot_update_id(dataslot_update_id), .dataslot_update_size(),
         .dataslot_allcomplete(dataslot_allcomplete),
         .rtc_epoch_seconds(), .rtc_date_bcd(), .rtc_time_bcd(), .rtc_valid(),
         .savestate_supported(1'b0), .savestate_addr(32'h5000_0000), .savestate_size(32'd0),
@@ -149,7 +149,8 @@ module tb_loader;
         .target_dataslot_bridgeaddr(t_bridgeaddr), .target_dataslot_length(t_length),
         .target_buffer_param_struct(32'h6000_0000), .target_buffer_resp_struct(32'h6000_0000),
         .datatable_addr(datatable_addr), .datatable_wren(datatable_wren),
-        .datatable_data(datatable_data), .datatable_q(datatable_q)
+        .datatable_data(datatable_data), .datatable_q(datatable_q),
+        .target_state(tstate)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
@@ -161,7 +162,7 @@ module tb_loader;
         .WRITE_MEM_EN_CYCLE_LENGTH(1), .OUTPUT_WORD_SIZE(1)
     ) loader (
         .clk_74a(clk_74a), .clk_memory(clk_sys),
-        .bridge_wr(bridge_wr), .bridge_endian_little(1'b0),
+        .bridge_wr(loader_wr), .bridge_endian_little(1'b0),
         .bridge_addr(bridge_addr), .bridge_wr_data(bridge_wr_data),
         .write_en(ioctl_wr), .write_addr(ioctl_addr), .write_data(ioctl_dout)
     );
@@ -170,13 +171,22 @@ module tb_loader;
     wire logic [1:0]  len_chk;
     wire logic        len_valid, cfg_inlist;
     wire logic        t_read, t_getfile, t_openfile, t_done;
-    wire logic [2:0]  t_err, fetch_res;
+    wire logic [2:0]  t_err, fetch_res, fetch_to;
+    wire logic        dataslot_update, loader_wr, d_ac, d_req, d_upd;
+    wire logic [15:0] dataslot_update_id;
+    wire logic [1:0]  d_phase;
+    wire logic [3:0]  tstate;
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire logic        cfg_wr_ok;
+    /* verilator lint_on UNUSEDSIGNAL */
     wire logic [15:0] t_id;
     wire logic [31:0] t_offset, t_bridgeaddr, t_length, st_rd_data, fetch_len;
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic [2:0]  fetch_code;
     /* verilator lint_on UNUSEDSIGNAL */
-    apf_datatable dtab (
+    // the fetch's watchdog: 2^18 clk_74a (3.5 ms; the Pocket's build: 2^26), past the bench's
+    // longest answer and inside wait_ready's limit; the hold after a timeout 1,000 (the Pocket's: 4 s)
+    apf_datatable #(.WD_BITS(18), .TO_HOLD(1000)) dtab (
         .clk(clk_74a), .allcomplete(dataslot_allcomplete),
         .wr_req(dataslot_requestwrite), .wr_id(dataslot_requestwrite_id),
         .wr_size(dataslot_requestwrite_size),
@@ -188,7 +198,10 @@ module tb_loader;
         .t_done(t_done), .t_err(t_err),
         .bridge_addr(bridge_addr), .bridge_wr(bridge_wr), .bridge_wr_data(bridge_wr_data),
         .bridge_rd(bridge_rd), .st_rd_data(st_rd_data),
-        .fetch_res(fetch_res), .fetch_code(fetch_code), .fetch_len(fetch_len)
+        .fetch_res(fetch_res), .fetch_code(fetch_code), .fetch_len(fetch_len),
+        .upd(dataslot_update), .upd_id(dataslot_update_id),
+        .fetch_to(fetch_to), .cfg_wr_ok(cfg_wr_ok), .loader_wr(loader_wr),
+        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase)
     );
 
     // ---------------------------------------------------------------- DUT
@@ -274,6 +287,10 @@ module tb_loader;
     int gap = 75, jitter = 0, seed = 1, dtfirst = 0, lenadj = 0, reqadj = 0, notable = 0;
     int cfglenadj = 0, cfgnotable = 0;
     int cfgpush = 0, dtupdate = 1, dtcfgadj = 0, cfg2same = 0;
+    // 0.0.14: the host never answers target command +nohost=K (hex; 0: any) or never acks Ready to
+    // run (+rtrhold=1); with +late=1 it answers them once the first load has mapped
+    int nohost = -1, rtrhold = 0, late = 0;
+    bit hold = 1'b1;
     string cartpath = "", cfgpath = "", cart2path = "", cfg2path = "";
     bit    reloaded = 1'b0, cfg_open = 1'b0;
     logic [7:0] pad = 8'hA5;
@@ -368,6 +385,9 @@ module tb_loader;
         string       path, want;
         bread(32'hF800_1000, t0);
         if (t0[31:16] != 16'h636D) return;
+        if (hold && ((nohost >= 0 && (nohost == 0 || t0[15:0] == 16'(nohost)) && t0[15:0] != 16'h0140)
+                     || (rtrhold != 0 && t0[15:0] == 16'h0140)))
+            return;                                                // not answered (yet)
         ntarget++;
         bwrite(32'hF800_1000, {16'h6275, t0[15:0]});               // busy
         bread(32'hF800_1020, p20);
@@ -496,12 +516,12 @@ module tb_loader;
         int to;
         to = 0;
         // the host serves the core's target commands while it waits
-        while (!(ready && !busy) && to < 20000) begin
+        while (!(ready && !busy) && to < 40000) begin
             serve_target();
             repeat (100) @(negedge clk_sys);
             to++;
         end
-        check(to < 20000, "loader ready");
+        check(to < 40000, "loader ready");
         repeat (10) @(negedge clk_sys);
     endtask
     task automatic image_crc(input string tag);
@@ -549,6 +569,9 @@ module tb_loader;
         void'($value$plusargs("dtupdate=%d", dtupdate));
         void'($value$plusargs("dtcfgadj=%d", dtcfgadj));
         void'($value$plusargs("cfg2same=%d", cfg2same));
+        void'($value$plusargs("nohost=%h", nohost));
+        void'($value$plusargs("rtrhold=%d", rtrhold));
+        void'($value$plusargs("late=%d", late));
         void'($value$plusargs("cartpath=%s", cartpath));
         void'($value$plusargs("cfgpath=%s", cfgpath));
         void'($value$plusargs("cart2path=%s", cart2path));
@@ -584,7 +607,16 @@ module tb_loader;
             for (int s = 0; s < 6; s++) $display("loader cnt %0d = %0d", s, dut.loader.cnt[s]);
         $fdisplay(outf, "status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                   crc, words, layout, flags, hit, err, len_st);
-        $fdisplay(outf, "fetch res %0d len %0d", fetch_res, fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0);
+        $fdisplay(outf, "fetch res %0d len %0d to %0d", fetch_res, fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0,
+                  fetch_to);
+        $fdisplay(outf, "diag ac %0d req %0d upd %0d phase %0d tstate %0d", d_ac, d_req, d_upd, d_phase, tstate);
+        // a command held past the watchdog, answered now (+late): a read's bytes must not reach
+        // the loader (the CFG slot stays empty), and the next commands must still work
+        if (late != 0) begin
+            hold = 1'b0;
+            for (int i = 0; i < 40; i++) begin serve_target(); repeat (100) @(negedge clk_sys); end
+            $fdisplay(outf, "late slots %03X tstate %0d", slot_st, tstate);
+        end
         $fdisplay(outf, "slots %03X", slot_st);
         $fdisplay(outf, "ecs auto %0d", ecs_auto);
         $fdisplay(outf, "format cfgcrc %08X noss %0d ferr %02X", cfg_crc, noss, fmt_err);
@@ -735,8 +767,8 @@ module tb_loader;
             wait_ready();
             $fdisplay(outf, "reload status crc %08X words %0d layout %0d flags %02X hit %0d err %0d lenst %0d",
                       crc, words, layout, flags, hit, err, len_st);
-            $fdisplay(outf, "reload fetch res %0d len %0d", fetch_res,
-                      fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0);
+            $fdisplay(outf, "reload fetch res %0d len %0d to %0d", fetch_res,
+                      fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0, fetch_to);
             $fdisplay(outf, "reload slots %03X", slot_st);
             $fdisplay(outf, "reload ecs auto %0d", ecs_auto);
             image_crc("reload image");

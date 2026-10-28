@@ -65,7 +65,11 @@ module tb_timing;
 
     test_pattern pattern (
         .in_pf(in_pf), .pf_x(pf_x), .pf_y(pf_y),
-        .slot_st(SLOT_ST), .slot_req(6'b001101), .len_st(2'd2), .cfg_res(3'd2), .colour(colour)
+        .slot_st(SLOT_ST), .slot_req(6'b001101), .len_st(2'd2), .cfg_res(3'd2),
+        // the load diagnostics (0.0.14): open file timed out, waiting for Ready to run's ok,
+        // all complete seen, no 0x0082, a 0x008A, waiting for the fetch
+        .fetch_to(3'b010), .tstate(4'd14), .d_ac(1'b1), .d_req(1'b0), .d_upd(1'b1), .d_phase(2'd1),
+        .colour(colour)
     );
 
     logic [23:0] video_rgb;
@@ -497,9 +501,16 @@ module tb_timing;
                 end
                 ok &= lines_rgb[oy + 184][ox + 28] == pal(9);
                 ok &= lines_rgb[oy + 184][ox + 12] == pal(10);
-                ok &= lines_rgb[oy + 184][ox + 120] == pal(0);
             end
-            check(ok, "slot indicators: green+orange / grey+cyan / green / yellow / grey / green, then black");
+            check(ok, "slot indicators: green+orange / grey+cyan / green / yellow / grey / green");
+            // the load diagnostics, cards 12-17, then black: red (open timed out), yellow
+            // (Ready to run), green (all complete), black (no 0x0082), green (0x008A), cyan
+            begin
+                int want [7] = '{2, 6, 5, 0, 5, 9, 0};
+                ok = 1;
+                for (int c = 0; c < 7; c++) ok &= lines_rgb[oy + 184][ox + (12 + c) * 8 + 3] == pal(want[c]);
+            end
+            check(ok, "load diagnostics: red / yellow / green / black / green / cyan, then black");
         end
 
         $display("TB_TIMING %s", fails == 0 ? "pass" : $sformatf("FAIL (%0d)", fails));

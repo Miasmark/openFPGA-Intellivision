@@ -23,7 +23,28 @@
 //     (apf_cfgfetch's res): green = found, its length from the data table;
 //     cyan = found, its length found by reading; grey = no such file;
 //     orange = the host refused a command; red = the cartridge's path has
-//     no extension; purple = over 16 KiB; black = not looked for.
+//     no extension; purple = over 16 KiB; yellow = a command was not
+//     answered in time (the cartridge then maps without a CFG); black = not
+//     looked for, or the look not finished.
+//   - (0.0.14) Load diagnostics, cards 12-17 of that row, one card each
+//     (cards 18-19 stay black):
+//       12  the command that timed out: black none, blue get filename
+//           (0x0190), red open file (0x0192), tan read (0x0180)
+//       13  core_bridge_cmd's target command state: black idle, yellow
+//           waiting for the host's ok to Ready to run (0x0140), orange
+//           waiting for a data slot command's ok, purple any other
+//       14  "all complete" (0x008F) seen since power-on: green, else black
+//       15  a 0x0082 for the cartridge slot seen since power-on: green,
+//           else black
+//       16  a 0x008A data slot update for the cartridge slot seen since
+//           power-on: green, else black
+//       17  the load: green = its length handed to the loader, cyan =
+//           waiting for the CFG fetch, black = idle or still scanning
+//     A normal load is too quick to see the pattern. When a fetch command
+//     times out (the CFG's second card yellow), the machine stays held about
+//     5 s (the 0.9 s watchdog, then apf_cfgfetch's 4 s hold): after Core
+//     Settings -> Cartridge, the pattern stays about 5 s: photograph the
+//     bottom row.
 //   - The outermost pixel ring of the playfield is white, to check the
 //     crop; the border outside it is blue.
 //
@@ -39,6 +60,12 @@ module test_pattern (
     input  wire logic [5:0]  slot_req,  // slot is required
     input  wire logic [1:0]  len_st,    // cartridge length source (see above)
     input  wire logic [2:0]  cfg_res,   // the CFG fetch (see above)
+    input  wire logic [2:0]  fetch_to,  // load diagnostics (see above)
+    input  wire logic [3:0]  tstate,
+    input  wire logic        d_ac,
+    input  wire logic        d_req,
+    input  wire logic        d_upd,
+    input  wire logic [1:0]  d_phase,
     output logic      [3:0]  colour
 );
 
@@ -74,11 +101,24 @@ module test_pattern (
             colour = bar;                                           // colour bars
         else if (cy != 4'd11)
             colour = (cx[0] ^ cy[0]) ? 4'd7 : 4'd0;                 // card grid
+        else if (cx == 5'd12)                                       // the timed-out command
+            colour = fetch_to == 3'b001 ? 4'd1 : fetch_to == 3'b010 ? 4'd2 : fetch_to == 3'b100 ? 4'd3 : 4'd0;
+        else if (cx == 5'd13)                                       // core_bridge_cmd's target state
+            colour = tstate == 4'd0 ? 4'd0 : tstate == 4'd14 ? 4'd6 : tstate == 4'd15 ? 4'd10 : 4'd15;
+        else if (cx == 5'd14)
+            colour = d_ac ? 4'd5 : 4'd0;
+        else if (cx == 5'd15)
+            colour = d_req ? 4'd5 : 4'd0;
+        else if (cx == 5'd16)
+            colour = d_upd ? 4'd5 : 4'd0;
+        else if (cx == 5'd17)
+            colour = d_phase == 2'd2 ? 4'd5 : d_phase == 2'd1 ? 4'd9 : 4'd0;
         else if (cx >= 5'd12)
             colour = 4'd0;
         else if (cx == 5'd3)                                        // the CFG fetch
             colour = cfg_res == 3'd1 ? 4'd5 : cfg_res == 3'd2 ? 4'd9 : cfg_res == 3'd3 ? 4'd8
-                   : cfg_res == 3'd4 ? 4'd10 : cfg_res == 3'd5 ? 4'd2 : cfg_res == 3'd6 ? 4'd15 : 4'd0;
+                   : cfg_res == 3'd4 ? 4'd10 : cfg_res == 3'd5 ? 4'd2 : cfg_res == 3'd6 ? 4'd15
+                   : cfg_res == 3'd7 ? 4'd6 : 4'd0;
         else if (cx == 5'd1 && st != 2'd0)                          // cartridge length
             colour = len_st == 2'd1 ? 4'd5 : len_st == 2'd2 ? 4'd10
                    : len_st == 2'd3 ? 4'd9 : 4'd8;

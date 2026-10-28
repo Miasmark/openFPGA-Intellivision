@@ -544,8 +544,10 @@ PLANTS = [
      "o = st == F_CF0 ? cfg_n - 25'd3 : st == F_CF1 ? cfg_n - 25'd2 : cfg_n;", 'the CFG\'s last byte dropped'),
     ('cfg_stale', 'intv_loader.sv', "cfg_on <= cnt[1] != 25'd0 && !(cinl && clen == 32'd0);",
      "cfg_on <= cnt[1] != 25'd0;", 'a CFG the data table no longer lists applied to a reload'),
-    ('cfg_refeed', 'intv_loader.sv', "if (cfg_n != 25'd0 && !cfg_fin) begin   // once per CFG stream",
-     "if (cfg_n != 25'd0) begin", 'a kept CFG\'s last bytes fed again at a reload'),
+    # cfg_refeed (intv_loader's "once per CFG stream" guard dropped: a CFG kept from the last load,
+    # not streamed again, had its last bytes fed again at a reload) is retired with the CFG fetch
+    # (autocfg): every new cartridge fetches its CFG afresh or has none, so no CFG is kept across a
+    # reload and no image can show the fault (the autocfg full run: not caught). The guard stays.
     # the step-8 review
     ('sel_no_range_match', 'intv_pagesel.sv', "wdata[15:4] == {addr[15:12], 8'hA5}", "wdata[11:4] == 8'hA5",
      'a page select taken from another range\'s value'),

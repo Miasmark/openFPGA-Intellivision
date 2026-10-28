@@ -595,6 +595,10 @@ PLANTS = [
      'CFG fetch: the length found by reading one too long'),
     ('fetch_notfound_err', 'apf_cfgfetch.sv', "                        if (code == 3'd3) begin\n                            res <= 3'd3;",
      "                        if (code == 3'd3) begin\n                            res <= 3'd4;", 'CFG fetch: not found taken as a refusal'),
+    # the CFG slot's table entry taken for the cartridge's when the table has none for the
+    # cartridge (the 0x0082 size must be used: NOTAB1); the full run of autocfg found it
+    ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
+     "end else if (!got_cart && !rescan) begin", 'the CFG entry taken for the cartridge without a cartridge entry'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',

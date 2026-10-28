@@ -163,7 +163,7 @@ module apf_datatable #(
                          end else if (is_cfg && !FETCH) begin
                              cfg_len    <= dt_q;
                              cfg_inlist <= 1'b1;
-                         end else if (!got_cart && !rescan) begin
+                         end else if (!is_cfg && !got_cart && !rescan) begin
                              got_cart <= 1'b1;
                              cart_len <= dt_q;
                              len_chk  <= !req_seen ? 2'd0 : dt_q == req_len ? 2'd1 : 2'd2;

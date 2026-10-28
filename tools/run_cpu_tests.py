@@ -48,6 +48,7 @@ sys.path.insert(0, HERE)
 
 import as1610  # noqa: E402
 import cp1610  # noqa: E402
+from g82_cycles import g82_cycles  # noqa: E402
 
 REPO = os.path.dirname(HERE)
 TEST_DIR = os.path.join(REPO, "sim", "tests", "cpu")
@@ -465,10 +466,15 @@ def sweep_cycles():
                     fails.append("op $%03X%s%s: %d cycles, want %d" % (
                         op, " sdbd" if sdbd else "", " taken" if taken else "",
                         ev.cycles, want))
+                g = g82_cycles(op, taken, sdbd)    # a third source (G82 p.45, p.52-53)
+                if ev.cycles != g:
+                    fails.append("op $%03X%s%s: %d cycles, G82 %d" % (
+                        op, " sdbd" if sdbd else "", " taken" if taken else "",
+                        ev.cycles, g))
                 if ev.interruptible != doc_interruptible(op):
                     fails.append("op $%03X: interruptible=%s, want %s" % (
                         op, ev.interruptible, doc_interruptible(op)))
-    return "builtin: cycles and interruptibility of all 1024 opcodes", fails, n
+    return "builtin: cycles (S1/wiki and G82) and interruptibility of all 1024 opcodes", fails, n
 
 
 def sweep_buslog():

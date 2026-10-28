@@ -34,7 +34,8 @@
 // core_bridge_cmd clears target_dataslot_done when it starts the command
 // and sets it with the result code at the end; the request falls then.
 //
-// The struct RAM (66 words, 256-byte path, flags word, size word) is served
+// The struct RAM (66 words, 256-byte path, flags word, size word: one block
+// RAM with one port, the bridge's or the steps', see below) is served
 // at the bridge address ST_ADDR (0x6000_0000; 0x00-0x05 are the slots, 0x20
 // the JLP flash, 0x50 the save state). The bridge is big-endian (core_top
 // keeps bridge_endian_little 0): byte k of the path is in word k / 4, bits
@@ -88,25 +89,33 @@ module apf_cfgfetch #(
 );
 
     // ------------------------------------------------------- struct RAM
+    // One block RAM port (as intv_ram: one process, one address, a
+    // registered read), shared in time: the steps below that read or write
+    // the struct own it (mem_own), the bridge has it otherwise. The host
+    // touches the struct only while a target command runs, and the steps
+    // never do then, so neither waits. (Two write ports on the array, as
+    // in 0.0.11, kept Quartus from inferring a RAM: 5,000 ALMs of
+    // registers and multiplexers.)
     logic [31:0] mem [128];
     wire  logic  a_hit = bridge_addr[31:24] == ST_ADDR[31:24];
-    logic [31:0] a_q;
+    logic [31:0] p_q;
     logic        rd_d = 1'b0;
-    always_ff @(posedge clk) begin
-        if (bridge_wr && a_hit) mem[bridge_addr[8:2]] <= bridge_wr_data;
-        a_q <= mem[bridge_addr[8:2]];
-    end
-    always_ff @(posedge clk) begin
-        rd_d <= bridge_rd && a_hit;
-        if (rd_d) st_rd_data <= a_q;
-    end
     logic [6:0]  b_addr = 7'd0;
     logic        b_we = 1'b0;
-    logic [31:0] b_d = 32'd0, b_q;
+    logic [31:0] b_d = 32'd0;
+    logic        mem_own;
+    wire  logic [6:0]  p_addr = mem_own ? b_addr : bridge_addr[8:2];
+    wire  logic        p_we   = mem_own ? b_we : bridge_wr && a_hit;
+    wire  logic [31:0] p_d    = mem_own ? b_d : bridge_wr_data;
     always_ff @(posedge clk) begin
-        if (b_we) mem[b_addr] <= b_d;
-        b_q <= mem[b_addr];
+        if (p_we) mem[p_addr] <= p_d;
+        p_q <= mem[p_addr];
     end
+    always_ff @(posedge clk) begin
+        rd_d <= bridge_rd && a_hit && !mem_own;
+        if (rd_d) st_rd_data <= p_q;
+    end
+    wire logic [31:0] b_q = p_q;
 
     // ------------------------------------------------------------ steps
     typedef enum logic [4:0] {
@@ -134,6 +143,12 @@ module apf_cfgfetch #(
     function automatic logic [31:0] smaller(input logic [31:0] n);
         return n > 32'd4 ? n >> 1 : n - 32'd1;
     endfunction
+
+    // the steps that use the struct RAM, and the cycle after one that
+    // writes (b_we is registered)
+    assign mem_own = b_we || (cph == 2'd0 && cmd == 3'd0 &&
+                              (st == S_CLR0 || st == S_CLR1 || st == S_SCAN || st == S_SCANW ||
+                               st == S_SCANB || st == S_EDITR || st == S_EDITW || st == S_EDITM));
 
     // the byte of the edit: 'c', 'f', 'g', NUL
     wire logic [7:0] ext_b = k == 3'd0 ? 8'h63 : k == 3'd1 ? 8'h66 : k == 3'd2 ? 8'h67 : 8'h00;

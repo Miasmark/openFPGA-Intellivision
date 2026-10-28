@@ -599,6 +599,14 @@ PLANTS = [
      "                        if (code == 3'd3) begin\n                            res <= 3'd4;", 'CFG fetch: not found taken as a refusal'),
     # the CFG slot's table entry taken for the cartridge's when the table has none for the
     # cartridge (the 0x0082 size must be used: NOTAB1); the full run of autocfg found it
+    # (shrink) the scan's folder rule dropped (a '.' in a folder taken for the extension:
+    # CFGDIRNODOT), and the struct RAM's port never given to the steps (they read the
+    # bridge's address and their writes are lost)
+    ('fetch_dir_dot', 'apf_cfgfetch.sv', "                            has_dot <= 1'b0;                 // a '.' in a folder",
+     "                            has_dot <= has_dot;              // a '.' in a folder",
+     "CFG fetch: a '.' in a folder taken for the extension"),
+    ('fetch_port_bridge', 'apf_cfgfetch.sv', "assign mem_own = b_we || (cph == 2'd0",
+     "assign mem_own = 1'b0 && (cph == 2'd0", 'CFG fetch: the struct RAM port never given to the steps'),
     ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
      "end else if (!got_cart && !rescan) begin", 'the CFG entry taken for the cartridge without a cartridge entry'),
 ]
@@ -606,7 +614,7 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
-                'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS')
+                'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT')
 
 
 def main():
@@ -691,6 +699,9 @@ def main():
                              cartname='ZOO2X.BIN', cfgname='zoo2x.cfg'))
             imgs.append(dict(z, name='cfg fetch: a dot in a folder', crc='CFGDOTDIR', cartdir='/Assets/intv/v1.0/'))
             imgs.append(dict(z, name='cfg fetch: no extension', crc='CFGNODOT', cartname='zoo2x', nodot=True))
+            # (shrink) a '.' in a folder and none in the name: still no extension
+            imgs.append(dict(z, name='cfg fetch: a dot in a folder, no extension', crc='CFGDIRNODOT',
+                             cartdir='/Assets/intv/v1.0/', cartname='zoo2x', nodot=True))
             imgs.append(dict(z, name='cfg fetch: the CFG under another name', crc='CFGMISS',
                              cfgname='other.cfg', miss=True))
             if 'rombank' in s8:

@@ -19,7 +19,9 @@ RTL=(intv_timing.sv intv_palette.sv test_pattern.sv pocket_video.sv)
 # build DIR SRCDIR: the bench against the RTL in SRCDIR
 build() {
 	mkdir -p "$1"
-	"$VERILATOR" --binary --timing -j 2 -Wall -Wno-PROCASSINIT -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME \
+	# --verilate-jobs 1: Verilator 5.040's multithreaded verilation (what -j N turns on besides --build-jobs) crashed
+	# about one build in 16 with "internal fault" (2026-10-28: 5 of 80 with -j 2, 0 of 210 with one verilate job)
+	"$VERILATOR" --binary --timing --verilate-jobs 1 --build-jobs 2 -Wall -Wno-PROCASSINIT -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME \
 		-Wno-BLKSEQ -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-TIMESCALEMOD \
 		--top-module tb_timing -Mdir "$1/obj" -o tb_timing \
 		"${RTL[@]/#/$2/}" "$ROOT/sim/tb/tb_timing.sv" > "$1/build.log" 2>&1 \

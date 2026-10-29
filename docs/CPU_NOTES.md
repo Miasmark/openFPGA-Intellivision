@@ -10,13 +10,17 @@ lockstep with the model.
 
 | Code | Document | Used for |
 |---|---|---|
-| S1 | GI CP-1600 Microprocessor Users Manual, May 1975 | pins p.12-14; state flow p.21-25; timing diagrams p.27-37 (interrupt sequence p.35); formats p.44-52; instruction set and cycles p.53-58 |
+| S1 | GI CP-1600 Microprocessor Users Manual, May 1975 (bitsavers scan; the owner's copy, same pagination, is kept outside the repo) | pins p.12-14; state flow p.21-25; timing diagrams p.27-37 (interrupt sequence p.35, bus request p.36); formats p.44-52; instruction set and cycles p.53-58 |
+| G82 | GI CP1600/CP1610 Microprocessor Data Manual, 1982 (archive.org; kept outside the repo); CP1610 = CP1600 at a 1 µs cycle, 2 MHz two-phase clock (p.5) | pins and state flow (book p.8-16, HLT/STPST p.11, initialisation 2.5.1 p.16); timing diagrams (BUSRQ/BUSAK Fig. 16 p.29); instruction summary with microcycles p.45 (transcribed in `tools/g82_cycles.py`); internal control p.33 (HLT); double byte data p.52-53 |
+| O81 | Osborne 16-Bit Microprocessor Handbook (1981), chapter 2 "The General Instrument CP1600" (archive.org OCR, kept outside the repo) | prose on bus requests (p.2-13, Fig. 2-8), halt (p.2-12), interrupts (p.2-15), initialisation (p.2-13); instruction table p.2-16 to 2-26 |
 | wiki | wiki.intellivision.us: CP1610, Bus_Phases, Branch, Jump, Double_Byte_Data, Undocumented_SDBD_Behavior, Interrupt_Enable_Flag, VBlank_Interrupt, the opcode pages | cycles, interruptibility, flags, bus phase sequences |
 | S9 | jzIntv documents `doc/jzintv/cp_1610.txt` (read as specification text, no code) | SDBD and HLT remarks |
 | MAME | `src/devices/cpu/cp1610/cp1610.cpp` (BSD-3) | cross-check of facts only; no code taken |
 
-The page numbers are PDF pages of the bitsavers scan. The S1 text layer is
-OCR; tables were checked against the page images where the OCR was unclear.
+S1 page numbers are PDF pages of the bitsavers scan; G82 and O81 page numbers
+are the books' own. The S1 text layer is OCR; tables were checked against the
+page images where the OCR was unclear (G82's tables and figures were read from
+the page images).
 
 ## The model
 
@@ -27,7 +31,13 @@ OCR; tables were checked against the page images where the OCR was unclear.
 - **Reset:** the PC comes from the bus in an IAB phase (S1 p.21); on the
   Intellivision that is $1000. Registers and flags are undefined on the chip
   (S1 p.21); the model clears them. I is clear (S1 p.21). The
-  initialisation sequence is not counted: cycle 0 is the first fetch.
+  initialisation sequence is not counted: cycle 0 is the first fetch. G82
+  2.5.1 (p.16) says only that the bus issues IAB when MSYNC* goes high; O81
+  (p.2-13) lists NACT, IAB, NACT, NACT, NACT, then the first BAR; the RTL
+  gives one IAB cycle. Only the offset of the CPU's first fetch from the core's reset
+  release would change (a few cycles once per power-on, against a STIC
+  frame of 14,934 cycles), which no bench or game depends on, so it is
+  documented, not modelled.
 - **Opcode width:** bits 15-10 of an opcode are "Future Use" (S1 p.46); the
   model decodes the low 10 bits of the opcode and of the jump's address
   words. Immediate data, direct addresses and branch displacements use all
@@ -83,8 +93,19 @@ not documented; the model puts them before the read (estimated).
   interrupts (wiki CP1610 Interruptibility).
 - After an interruptible instruction: BUSRQ first, then INTR, then INTRM if
   I is set (S1 p.24-25). During a bus request the bus shows NACT with BUSAK
-  for exactly as long as BUSRQ stays low (S1 p.24); entry or exit overhead is
-  not documented and the model adds none (estimated).
+  for as long as BUSRQ stays low (S1 p.24), and then for two more cycles:
+  the cycle whose TS1 samples BUSRQ high and the next stay NACT with BUSAK
+  low, and BAR (or INTAK for an interrupt) comes in the cycle after them,
+  with BUSAK high t_BU after its TS1 (S1 p.36 and G82 Fig. 16 p.29, the same
+  drawing; O81 p.2-13: "two additional NACT machine cycles are executed,
+  then BUSAK is output high"). The request lines are sampled again at the
+  end of those two cycles, where the next step starts: BUSRQ asserted there
+  gives a second wait at once with BUSAK kept low throughout (no source draws
+  that case; estimated), and an interrupt edge that came during the wait or
+  the two cycles is taken there (busrq_exit_again.asm, busrq_exit_gap.asm).
+  Entry costs nothing: BUSAK goes low in the first NACT cycle after the
+  instruction (S1 p.36, O81 p.2-13). Until build step 9b the model ended the
+  wait in the cycle that saw BUSRQ high (no exit overhead, estimated).
 - INTRM and INTR are edge requests: a high-to-low transition latches a
   request, which is dropped if the line goes high before it is taken (wiki
   CP1610 Signal Pins). The model samples the lines at every instruction
@@ -109,14 +130,14 @@ not documented; the model puts them before the read (estimated).
 |---|---|---|---|---|---|---|
 | 1 | Cost of taking an interrupt | 9 cycles: INTAK NACT DW DWS NACT IAB NACT NACT NACT, counted on the p.35 timing diagram | 7 (Interrupt_Enable_Flag); 10 (Bus_Phases, "unsure about the NACTs at the end") | MAME 9 | **9** | interrupts.asm, phase sweep |
 | 2 | SIN interruptible? | yes: "The interrupt will be acknowledged at the end of the SIN instruction" (p.13) | CP1610 table: yes; SIN page: no | MAME: yes | **yes** | sweep |
-| 3 | SETC cycles | 4 (p.56) | 4 | MAME 6 (cp1610.cpp:153); the lockstep sees MAME charge 6 for every SETC in the game traces | **4** | implied.asm |
-| 4 | SARC Rr, 2 cycles | 8 ("add 2 cycles if shift is 2 bits", p.53) | 8 | MAME 6 (cp1610.cpp:567; every other two-position shift there is 8); the lockstep sees 6 for every SARC Rr,2 | **8** | sweep |
+| 3 | SETC cycles | 4 (p.56) | 4 | G82 p.45: 4; MAME 6 (cp1610.cpp:153); the lockstep sees MAME charge 6 for every SETC in the game traces | **4** | implied.asm |
+| 4 | SARC Rr, 2 cycles | 8 ("add 2 cycles if shift is 2 bits", p.53) | 8 | G82 p.45: 6, "add two cycles for 2-position shift"; MAME 6 (cp1610.cpp:567; every other two-position shift there is 8); the lockstep sees 6 for every SARC Rr,2 | **8** | sweep |
 | 5 | NEGR of 0: carry | status S Z C OV (p.53, OCR damaged) | "Negating 0 ... sets the Carry Flag" (NEGR) | MAME never sets C (it truncates to 16 bits before the carry test) | **C=1** | single_reg.asm |
-| 6 | SWAP Rr, 2 | "swap bytes ..., then swap them back to original form" (p.53) | low byte copied to both halves (SWAP) | MAME as the wiki ("not officially supported by GI"); S9 "swaps bytes in word once or twice" | **wiki** | shifts.asm |
-| 7 | HLT | "HaLT after next instruction is executed. Resume on control start", 4 cycles (p.56) | halts, cycles "Infinity", ignores interrupts until reset or STPST (HLT) | S9: "Halts the CPU (until next interrupt?)"; MAME: 4 cycles, does not halt (TBD) | **S1**: the instruction after HLT runs, whatever it is (a second HLT included), then the CPU halts; option `hlt='immediate'` | hlt.asm, hlt_twice.asm, hlt_immediate.asm |
+| 6 | SWAP Rr, 2 | "swap bytes ..., then swap them back to original form" (p.53) | low byte copied to both halves (SWAP) | G82 p.45: "Two position SWAP not supported"; MAME as the wiki ("not officially supported by GI"); S9 "swaps bytes in word once or twice" | **wiki** (undefined per G82) | shifts.asm |
+| 7 | HLT | "HaLT after next instruction is executed. Resume on control start", 4 cycles (p.56) | halts, cycles "Infinity", ignores interrupts until reset or STPST (HLT) | G82 p.33: "Halt after next interruptable instruction is executed", and STPST stops the CPU "only after the completion of an interruptable instruction" (p.11); O81: table "Halt after executing next instruction", prose "following the instruction fetch" (p.2-12); S9: "Halts the CPU (until next interrupt?)"; MAME: 4 cycles, does not halt (TBD) | **G82** (S1 until build step 9b): the CPU halts at the end of the first interruptible instruction after HLT; non-interruptible ones (a second HLT, SDBD, shifts, MVO) run on; option `hlt='immediate'` | hlt.asm, hlt_twice.asm, hlt_immediate.asm |
 | 8 | SDBD with R6 | not supported (p.49, p.57) | 10 cycles "regardless of which register" (MVI@, ADD@...); "two stack reads from top of stack, ... decrements stack pointer once" (Undocumented_SDBD_Behavior, from memory) | S9: "not allowed, although I suspect it works as expected (two accesses through R6)"; MAME: two pre-decrements, 13 cycles + SDBD | **wiki** (one decrement, same word twice, 10); option `sdbd_r6='mame'`; strict raises | sdbd.asm, sdbd_r6_mame.asm, strict_sdbd_r6.asm |
 | 9 | SDBD with direct mode | not supported (p.49) | "modifies the behavior of Direct Mode", details unknown (Double_Byte_Data, Undocumented_SDBD_Behavior) | MAME decodes it as indirect through R0 | **D ignored**, one direct read; marked undefined; strict raises | undefined.asm, strict_sdbd_direct.asm |
-| 10 | SDBD before MVO | double byte data is described for reads (p.46-49) | CP1610 table lists D as an input of MVO@ and MVOI | S9: "bringing in (or out) two 8-bit words"; MAME: illegal | **D ignored**, one write; marked undefined | undefined.asm |
+| 10 | SDBD before MVO | double byte data is described for reads (p.46-49) | CP1610 table lists D as an input of MVO@ and MVOI | G82 p.45: SDBD "must precede external reference [instructions] other than MVO", p.52-53 list only reads; S9: "bringing in (or out) two 8-bit words"; MAME: illegal | **D ignored**, one write; marked undefined | undefined.asm |
 | 11 | Branch not taken | 7/9 (p.54) | 7/9 | MAME 7/9 | **7**; the dropped NACT is estimated | branch_range.asm, phase sweep |
 | 12 | INTRM: level or edge | "low active ... honor an interrupt at the completion of any interruptable instruction" (p.12) | high-to-low transition, dropped if released first (CP1610 Signal Pins) | MAME: pending on assert, cleared on release or when taken | **edge latch** | interrupts.asm, irq_mask.asm |
 | 13 | Branch reach in 10-bit ROM | "+1025 to -1024" (p.54) | 2K words either way (Branch) | | **the encoding rule**: forward PC+2+d, backward PC+1-d, d up to 2^ROMW-1, so PC+1025 and PC-1022 | branch_romw10.asm |
@@ -176,6 +197,12 @@ values" (Undocumented_SDBD_Behavior), without details.
    in the traced code, so rows 5-10 and 14-15 of the table are still
    unchecked against MAME; only our own test ROMs cover them.
 4. **HLT** is never used by games; the choice only matters for test ROMs.
+   G82's wording (halt after the next interruptible instruction) replaced
+   S1's in build step 9b.
+5. **Back-to-back bus requests**: whether BUSAK goes high for a cycle when
+   BUSRQ is asserted again right at the end of the two exit cycles is not
+   drawn anywhere; the model and the RTL keep BUSAK low and start the next
+   wait at once.
 
 ## MAME lockstep (step 0 done-test)
 
@@ -264,8 +291,10 @@ bus phase per `ce` (one CPU cycle). No tristate: a 3-bit phase code
 - **Reset.** One IAB cycle loads the PC (S1 p.21), then the first fetch.
   The model does not count that cycle; its cycle 0 is the fetch's BAR.
 - **Request lines** (active high in the core) are sampled at the `ce`
-  that ends the last cycle of an instruction or of a bus-wait cycle,
-  never elsewhere (not after the interrupt sequence, not while halted),
+  that ends the last cycle of an instruction, of a bus-wait cycle (BUSRQ
+  only) or of the second NACT after a bus request (all lines: `S_BUSAK`
+  with its counter at 2, then 1 for those two cycles, so the state codes and
+  the save-state layout stay as they were), never elsewhere (not after the interrupt sequence, not while halted),
   exactly where the model calls `_sample_irq`. The model's "line at
   cycle c" is the RTL's sample at the `ce` that starts cycle c. A device
   that changes a line with its own registered output at the `ce` ending
@@ -322,7 +351,7 @@ state must agree. Case sets:
 
 | Set | Cases | What |
 |---|---|---|
-| tests | 35 | every program in `sim/tests/cpu` with its own start, stop, request lines, BEXT conditions and options (the 3 asm-error tests have no program; the 3 strict tests run non-strict, so the RTL's default choice is the one compared) |
+| tests | 39 | every program in `sim/tests/cpu` with its own start, stop, request lines, BEXT conditions and options (the 3 asm-error tests have no program; the 3 strict tests run non-strict, so the RTL's default choice is the one compared) |
 | sweep | 1,420 | every opcode once, after SDBD for each double-byte read, each branch taken and not taken, registers as in `run_cpu_tests.py`'s cycle sweep, at least 40 cycles each |
 | fuzz | 300 | random programs: all 64K words from a hash both sides compute, random registers, flags, I, start address, INTRM/INTR/BUSRQ windows, BEXT conditions, and both HLT and SDBD+R6 options; about 600 cycles each |
 
@@ -335,7 +364,16 @@ run on). Planted faults that the script builds and the bench must catch:
 taken with the trailing NACT, SWAP's S from bit 15, MVO interruptible, no
 line sample after a bus wait, JSR return address one low, NEGR 0 without
 C, and the state port missing the idle counter, the INTRM line sample,
-the SDBD low byte, the sequence data word or halt pending.
+the SDBD low byte, the sequence data word or halt pending; since build
+step 9b also one NACT after a bus request instead of two (busrq_exit1) and
+HLT halting after any next instruction (hlt_next_any, S1's wording). The
+step-start check finds a wait by the CPU's state (a bus-wait cycle after one
+that was not), since BUSAK stays low from one wait into the next.
+
+`run_cpu_tests.py`'s opcode sweep holds every opcode's cycles against two
+independent transcriptions: `doc_cycles` (S1 and the wiki) and
+`tools/g82_cycles.py` (G82 p.45 and the double byte data listings, p.52-53,
+whose 14 cycles are SDBD's 4 plus 10). All 1,420 cases agree with both.
 
 ## Assembler
 

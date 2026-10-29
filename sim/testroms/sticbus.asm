@@ -208,14 +208,13 @@ dla_d:  DECR    R2
         BNEQ    dla_d
         NOP
         NOP
-        NOP
+        CLRC                    ; 4 cycles: tuned (build step 9b: 2 NACT after each bus request)
         BNEQ    dla             ; not taken (7 cycles)
         B       dl_blk
 dlb:    MVII    #217, R2        ; tuned: the block ends at a row's R + 58
 dlb_d:  DECR    R2
         BNEQ    dlb_d
-        NOP
-        MVII    #0, R1
+        CLRR    R1              ; 6 cycles: tuned (build step 9b: 2 NACT after each bus request)
 dl_blk: SLL     R0
         SLL     R0
         SLL     R0

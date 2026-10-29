@@ -22,6 +22,10 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   `;! raises` test, any expectation before the raise point), if it halts
   without `;! stop halt`, or if it fetches an instruction from a word that
   was neither assembled nor written.
+- `g82_cycles.py`: the cycles per opcode as GI's 1982 CP1600/CP1610 data
+  manual gives them (summary listing p.45, double byte data p.52-53), our
+  transcription; the opcode sweep holds the model against it as well as
+  against `doc_cycles` (S1 and the wiki).
 - `lockstep.py`: runs the model against MAME instruction traces (from
   `tools/refs/mame_trace.sh`) of real games: compares state before each
   instruction, every bus access and the cycle counts, replaying only the

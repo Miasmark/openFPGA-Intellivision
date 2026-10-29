@@ -53,13 +53,17 @@ module apf_datatable #(
     parameter logic [31:0] CFG_ID  = 32'h0000_0101,
     parameter int          JLP_IDX = 6,
     parameter int          ENTRIES = 16,       // pairs scanned
-    parameter bit          FETCH   = 1'b1      // the CFG found by name (apf_cfgfetch)
+    parameter bit          FETCH   = 1'b1,     // the CFG found by name (apf_cfgfetch)
+    parameter int          WD_BITS = 26,       // apf_cfgfetch's time limit per command (2^WD_BITS clk_74a)
+    parameter int          TO_HOLD = 300000000 // apf_cfgfetch's hold after a timeout (clk_74a: 4 s)
 ) (
     input  wire logic        clk,             // clk_74a
     input  wire logic        allcomplete,
     input  wire logic        wr_req,          // dataslot_requestwrite (0x0082)
     input  wire logic [15:0] wr_id,
     input  wire logic [31:0] wr_size,
+    input  wire logic        upd,             // dataslot_update (0x008A)
+    input  wire logic [15:0] upd_id,
 
     output logic [9:0]       dt_addr,
     output logic             dt_wren,
@@ -90,7 +94,18 @@ module apf_datatable #(
     output logic [31:0]      st_rd_data,
     output logic [2:0]       fetch_res,
     output logic [2:0]       fetch_code,
-    output logic [31:0]      fetch_len
+    output logic [31:0]      fetch_len,
+    // the load's diagnostics (test pattern, 0.0.14): which command timed out
+    // (apf_cfgfetch's to_cmd); all complete seen since power-on; a 0x0082 and
+    // a 0x008A for the cartridge slot seen since power-on; where the last
+    // load is: 0 idle or scanning, 1 waiting for the fetch, 2 len_valid set
+    output logic [2:0]       fetch_to,
+    output logic             cfg_wr_ok,       // the CFG slot's bridge writes may reach the loader
+    output logic             loader_wr,       // bridge_wr for the data loader: the CFG slot's only while cfg_wr_ok
+    output logic             d_ac,
+    output logic             d_req,
+    output logic             d_upd,
+    output logic [1:0]       d_phase
 );
 
     typedef enum logic [3:0] {D_IDLE, D_ID, D_IDW, D_SIZEW, D_NEXT, D_DECIDE, D_FETCH, D_FWAIT, D_SET} dstate_t;
@@ -113,8 +128,15 @@ module apf_datatable #(
         cart_len = 32'd0; len_chk = 2'd0; len_valid = 1'b0; cfg_len = 32'd0; cfg_inlist = 1'b0;
     end
 
+    logic reached = 1'b0;                      // len_valid set for the current load
+    initial begin d_ac = 1'b0; d_upd = 1'b0; end
+    assign d_req   = req_seen;
+    assign d_phase = st == D_FWAIT ? 2'd1 : reached ? 2'd2 : 2'd0;
+
     always_ff @(posedge clk) begin
         ac_d <= allcomplete;
+        if (allcomplete) d_ac <= 1'b1;
+        if (upd && upd_id == SLOT_ID[15:0]) d_upd <= 1'b1;
         dt_wren <= 1'b0;
         f_start <= 1'b0;
         if (wr_req && wr_id == SLOT_ID[15:0]) begin
@@ -131,6 +153,7 @@ module apf_datatable #(
                 dt_data <= 32'd0;
                 dt_wren <= 1'b1;
                 if (allcomplete && !ac_d) begin
+                    reached <= 1'b0;
                     i  <= 5'd0;
                     got_cart <= 1'b0;
                     rescan <= 1'b0;
@@ -213,6 +236,7 @@ module apf_datatable #(
             end
             D_SET: begin
                 len_valid <= allcomplete;
+                reached <= 1'b1;
                 st <= D_IDLE;
             end
             default: st <= D_IDLE;
@@ -220,9 +244,10 @@ module apf_datatable #(
     end
 
     apf_cfgfetch #(
-        .CART_ID(SLOT_ID[15:0]), .CFG_ID(CFG_ID[15:0])
+        .CART_ID(SLOT_ID[15:0]), .CFG_ID(CFG_ID[15:0]), .WD_BITS(WD_BITS), .TO_HOLD(TO_HOLD)
     ) fetch (
         .clk(clk), .start(f_start), .done(f_done), .res(fetch_res), .len(f_len), .code(fetch_code),
+        .to_cmd(fetch_to), .cfg_wr_ok(cfg_wr_ok),
         .sz_req(f_sz_req), .sz_ack(sz_ack), .sz(sz),
         .t_read(t_read), .t_getfile(t_getfile), .t_openfile(t_openfile), .t_id(t_id),
         .t_offset(t_offset), .t_bridgeaddr(t_bridgeaddr), .t_length(t_length),
@@ -231,6 +256,11 @@ module apf_datatable #(
         .bridge_rd(bridge_rd), .st_rd_data(st_rd_data)
     );
     assign fetch_len = f_len;
+    // The CFG slot is a deferload slot: the host writes its bytes to the bridge only for
+    // apf_cfgfetch's reads. A read that timed out may still be answered later; its bytes must
+    // not reach a cartridge already mapped, so the CFG slot's addresses reach the data loader
+    // only while a read is outstanding.
+    assign loader_wr = bridge_wr && !(bridge_addr[31:24] == 8'h01 && !cfg_wr_ok);
 
 endmodule
 

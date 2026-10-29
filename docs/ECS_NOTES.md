@@ -191,6 +191,12 @@ load with it off, or with another ECS ROM (docs/SAVESTATE.md).
   Football (writes the ECS RAM), Atlantis (its `$4800` hook), Body Slam (a Super Pro title: clears
   `$00E0-$00FF`); every image's `L ecs full` line (the key routing's mode).
 - `tools/ecs_mix_check.py` on WSMLB: no sample of the mix at the ceiling.
+- ECS BASIC's `CALL GRAB` (owner, 2026-10-27: it copies a MOB picture from the cartridge in the
+  slot, so the cartridge stays mapped under ECS BASIC): `--ecs-play` run `grab`, ECS on with AD&D
+  Cloudy Mountain, Bomb Run I's lines 140-180 (the 1998 ECS BASIC contest) typed and run. MOB 0
+  then shows GRAM card 62, the cartridge's picture at `$53F5`; the model equals MAME intvecs over
+  the 4.0M instructions and 4 snapshots of the same keys (`tools/refs/ecs_ref_compare.py`), and the
+  RTL equals the model frame by frame.
 
 **What MAME cannot show and the documents decide:** the `$F` page value (ecssound's ROMS OUT line;
 REPORT 2), the masking and the ghost (DESIGN 7.3), the 8917's single envelope bit, the UART.

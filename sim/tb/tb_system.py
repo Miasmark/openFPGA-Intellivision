@@ -440,6 +440,16 @@ ECS_PLAY = [
     ('astro_auto', 'Astrosmash (USA, Europe).zip', 700,
      '200-206:1,300-400:Upper,400-480:Left,480-600:Right,600-700:Lower-Right', dict(ovr='auto')),
     ('ecssound', ('step9', 'ecssound'), 600, '', dict(ovr='auto')),
+    # ECS BASIC's CALL GRAB copies a MOB picture from the cartridge in the slot (the 1998 contest's
+    # Bomb Run I, lines 140-180, with AD&D Cloudy Mountain; research/ecs-basic, owner 2026-10-27):
+    # ECS forced on (Auto attaches it with its menu skipped), the ECS menu's 1, then the lines typed
+    # without commas (the press list is comma-separated: DATA 0,7,0,0 / READ D,N,M,O give D=0, N=7,
+    # M=0, O=0) and RUN; MOB 0 then shows GRAM card 62 = the cartridge's $53F5 picture (the boat).
+    # MAME's intvecs agrees instruction by instruction and on 4 snapshots (ecs_ref_compare, 2026-10-29).
+    ('grab', 'Advanced Dungeons & Dragons (USA, Europe).zip', 2056,
+     '300-306:Enter,420-426:1,500-506:Enter,'
+     + _typed(800, '140 D=0\n150 N=7\n160 M=0\n170 O=0\n180 CALL GRAB\n190 CO(0)=11\n200 XS(0)=1\n210 GOTO 210\nRUN\n'),
+     dict(ovr='on')),
 ]
 
 PLAY_PEEKS = {'golf': [(540, 0x015F, 0), (600, 0x015F, 15), (660, 0x015F, 4), (720, 0x015F, 3)]}

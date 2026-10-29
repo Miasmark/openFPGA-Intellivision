@@ -224,12 +224,15 @@ def expect(img, tab, bios):
     L.append('diag ac 1 req %d upd 0 phase 2 tstate %d sd 1 early %d' % (
         0 if img.get('neg') == 'nocart' else 1, tst, 1 if img.get('acdelay') else 0))
     cfgslot = (2 << 2) if fcfg is not None else 0
-    slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10
+    iv = not img.get('noivoice')
+    slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | (2 << 10 if iv else 0)
     if img.get('late'):
         # the held command answered after the map: a read's bytes never reach the loader
         L.append('late slots %03X tstate 0' % slots)
     L.append('slots %03X' % slots)
     L.append('ecs auto %d' % ecs_auto(ld))
+    # build step 10: the Intellivoice's Auto rule (intv_media voice_auto): the flag, with ivoice.bin
+    L.append('voice auto %d' % int(bool(ld.flags & m.FLAG_VOICE) and iv))
     L.append('format cfgcrc %08X noss %d ferr %02X' % (ld.cfg_crc, int(ld.noss), max(ld.err, 0)))
     sram = bench_sram(ld)
     if cf.is_rom(data) and ld.err:
@@ -242,7 +245,7 @@ def expect(img, tab, bios):
     L.append('exec %08X' % crc32(b''.join(struct.pack('>H', ((ex[i] << 8) | ex[i + 1]) & 0x3FF)
                                           for i in range(0, 8192, 2))))
     L.append('grom %08X' % crc32(bios['grom']))
-    L.append('ivoice %08X' % crc32(bios['ivoice']))
+    L.append(('ivoice %08X' % crc32(bios['ivoice'])) if iv else 'ivoice *')
     mi = cf.MapCart(ld)
     mi.sram = sram
     for i, w in enumerate(mi.ss_words()):
@@ -456,7 +459,7 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
             '+pad=%02X' % (0xA5, 0x00, 0xFF, 0x5A)[k % 4], '+dtfirst=%d' % img.get('dtfirst', k % 2),
             '+gap=%d' % (40 + 7 * (k % 5)), '+jitter=%d' % (1 + 13 * (k % 3))]
     for key in ('exec', 'grom', 'ecs', 'ivoice'):
-        if bios_paths.get(key):
+        if bios_paths.get(key) and not (key == 'ivoice' and img.get('noivoice')):
             args.append('+%s=%s' % (key, bios_paths[key]))
     t0 = time.time()
     r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
@@ -604,6 +607,12 @@ PLANTS = [
     # probe at $4801. intv_cart's m4 alone cannot be planted: the loader sets ECS_OFF for every page-0
     # entry of $4000-$47FF that m4 counts (R, W or B: intv_loader's CFG and .rom paths; the table path
     # has no B entries), so with m4 ignored every image keeps its mode (the fix9 run: not caught)
+    # build step 10: the Intellivoice's Auto rule without its ROM check (the flagged title without
+    # ivoice.bin), and with the flag ignored (the voice titles, the CFG and .rom cases)
+    ('voice_auto_norom', 'intv_media.sv', "assign voice_auto = flags[1] && slot_st[11:10] == 2'd2;",
+     "assign voice_auto = flags[1];", 'Auto: the voice on without ivoice.bin'),
+    ('voice_auto_noflag', 'intv_media.sv', "assign voice_auto = flags[1] && slot_st[11:10] == 2'd2;",
+     "assign voice_auto = slot_st[11:10] == 2'd2;", 'Auto: the voice flag ignored'),
     ('auto_flag', 'intv_media.sv', "ecs_auto <= (res_ecs || res_none) ? 2'd1", "ecs_auto <= (res_none) ? 2'd1",
      'Auto: the ECS flag ignored'),
     ('auto_4800_any', 'intv_media.sv', "code48 <= c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0;",
@@ -704,6 +713,10 @@ def main():
                              reqadj=4, dtfirst=dt))
             imgs.append(dict(syn[0], name='length:no table entry, dtfirst %d' % dt, crc='NOTAB%d' % dt,
                              notable=True, dtfirst=dt))
+    # build step 10: a title the CRC table flags for the Intellivoice, without ivoice.bin: Auto off
+    fv = [i for i in imgs if i['name'] == 'forced:2B856EBC']
+    if fv:
+        imgs.append(dict(fv[0], name='voice: flagged title, no ivoice.bin', crc='NOIVOICE', noivoice=True))
     # user reloads in one session (no power-on reset between): synthetic:a,
     # then synthetic:b (another size, in the table, data table after the
     # files), or C2063C08 (paged layout 26, no table entry: its own 0x0082
@@ -735,6 +748,20 @@ def main():
         # reading: the last read below 4 bytes), the cartridge's name in capitals, a '.' in a
         # folder, a path without an extension (no CFG), a CFG under another name (not found),
         # and a .rom with a CFG beside it (fetched, ignored)
+        # build step 10: the Intellivoice's Auto rule (voice auto): a CFG's voice = 1 and
+        # voice_compat = 2, a .rom's compatibility tag (Intellivoice "requires")
+        if 'zoo1' in s8:
+            z = s8['zoo1']
+            imgs.append(dict(z, name='voice: CFG voice = 1', crc='VOICECFG', cfg=z['cfg'] + b'\n[vars]\nvoice = 1\n'))
+            imgs.append(dict(z, name='voice: CFG voice_compat = 2', crc='VOICECMP',
+                             cfg=z['cfg'] + b'\n[vars]\nvoice_compat = 2\n'))
+        if 'romfine' in s8:
+            acc, fine = [0] * 16, [0x07] * 32
+            acc[5] = 0x11
+            rv = build_images.rom_file([(0x50, 0x50, [(0x5000 + i) ^ 0x5A5A for i in range(0x100)])], acc, fine,
+                                       build_images.tag(0x06, [0x08, 0, 0]) + b'\x00')
+            imgs.append(dict(s8['romfine'], name='voice: .rom tag (requires)', crc='VOICEROM', data=rv,
+                             image='voicerom'))
         if 'zoo2' in s8:
             z = s8['zoo2']
             odd = z['cfg'].rstrip(b'\r\n')

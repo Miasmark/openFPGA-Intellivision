@@ -95,13 +95,15 @@ import as1610               # noqa: E402
 import synth_image          # noqa: E402
 import intv_system as isys  # noqa: E402
 import stic                 # noqa: E402
+import sp0256               # noqa: E402
 import intvcart as m        # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
-       'intv_ecs.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv']
+INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
 FRAME = isys.FRAME
@@ -155,7 +157,12 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('ecsnorom', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
           ('nfl_auto', 'Super NFL Footbal (USA) (Proto).zip', None, 24, (0xFF, 0xFF), 'stic'),
           ('atlantis_auto', 'Atlantis (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
-          ('bodyslam_auto', 'Body Slam! - Super Pro Wrestling (USA).zip', None, 10, (0xFF, 0xFF), 'stic')]
+          ('bodyslam_auto', 'Body Slam! - Super Pro Wrestling (USA).zip', None, 10, (0xFF, 0xFF), 'stic'),
+          # step 10: the Intellivoice (VOICE_OF): our sim/testroms/voicetest.py in the EXEC slot with the
+          # voice on (clean sound at the default level; the 7-bit DAC sound at 3/2) and forced off
+          ('voicetest', None, 'voicetest.py', 30, (0xFF, 0xFF), 'stic'),
+          ('voicedac', None, 'voicetest.py', 16, (0xFF, 0xFF), 'stic'),
+          ('voice_off', None, 'voicetest.py', 10, (0xFF, 0xFF), 'stic')]
 # the hardware measurement cartridges (sim/testroms/hw/build_hw.py, docs/HW_TESTS.md): RTL = model on
 # the owner's test programs before they go to his console. Long runs (hundreds of frames, to their
 # results screens), so only by name (--only hw_steal,...), never in --all
@@ -164,6 +171,21 @@ HW_IMAGES = [('hw_steal', ('hw', 'hw_steal'), None, 460, (0xFF, 0xFF), 'stic'),
              ('hw_rowcopy', ('hw', 'hw_rowcopy'), None, 1150, (0xFF, 0xFF), 'stic'),
              ('hw_cpuodd', ('hw', 'hw_cpuodd'), None, 60, (0xFF, 0xFF), 'stic'),
              ('hw_ecskeys', ('hw', 'hw_ecskeys'), None, 60, (0xFF, 0xFF), 'stic')]
+# step 10: the Intellivoice of an image: the menu override ('on', 'off'), level, DAC sound. Images
+# not listed run with it Off (the RTL's override 2; the model without one)
+VOICE_OF = {'voicetest': dict(ovr='on', level=4, dac=False),
+            'voicedac': dict(ovr='on', level=3, dac=True),
+            'voice_off': dict(ovr='off', level=4, dac=False)}
+
+
+def ivoice_rom():
+    d = os.environ.get('INTV_BIOS_DIR', os.path.expanduser('~/pocket_projects/intellivision/bios'))
+    for n in ('ivoice.bin', 'IVOICE.BIN'):
+        if os.path.exists(os.path.join(d, n)):
+            return os.path.join(d, n)
+    return None
+
+
 # a cartridge file's CFG (step 8): the model and the bench load it with the image
 CFG_OF = {}
 # step 9: the ECS of an image: the menu override ('auto', 'on', 'off'), the synthesizer,
@@ -456,7 +478,8 @@ SECT7_START = 7 * FRAME
 TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
 SS = {'cpu': 0x02, 'bus': 0x03, 'stic': 0x04, 'psg': 0x05, 'scr': 0x06, 'sys': 0x07,
-      'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D, 'ecs': 0x0E, 'psg2': 0x0F, 'eram': 0x10}
+      'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D, 'ecs': 0x0E, 'psg2': 0x0F, 'eram': 0x10,
+      'voice': 0x18}
 
 
 # ------------------------------------------------------------------- model
@@ -470,6 +493,8 @@ class Exp:
         self.name = None
         self.ecs = None                 # ECS_OF's entry (step 9)
         self.ecs_audio = {}             # PSG #2 and the mix by frame (E lines)
+        self.voice = None               # VOICE_OF's entry (step 10)
+        self.vsamples = []              # the model's voice samples [(cycle fired, sample)]
 
 
 def stic_expect(info):
@@ -513,13 +538,16 @@ def ecs_device(cart, ecs):
     return dev
 
 
-def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic', ecs=None):
+def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic', ecs=None, voice=None):
     """The model's expected log: bus phases, step starts, handshake and mode
     latch changes, state at the dumps, pictures and STIC logs. ecs: an
-    ECS_OF entry (step 9)."""
+    ECS_OF entry (step 9); voice: a VOICE_OF entry (step 10)."""
     cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
+    vdev = None
+    if voice:
+        vdev = sp0256.VoiceBus(open(ivoice_rom(), 'rb').read(), on=voice['ovr'] == 'on')
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
-                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs))
+                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs), voice=vdev)
     bus.vid.mobs = STIC_MOBS
     bus.pad = tuple(pads)
     if ecs and ecs.get('presses'):
@@ -583,6 +611,8 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
     if bus.ecs is not None and bus.ecs.on:
         bus.ecs.psg.advance(ncyc - 1)
     bus.vid.advance(ncyc + FRAME)     # draw the last frame
+    if vdev is not None and vdev.on:
+        vdev.run_to(ncyc)
     advance(ncyc - 1)
     blog = [(c, PHASE[p], a or 0, d or 0) for (c, p, a, d) in cpu.buslog
             if c < ncyc and p != 'NACT']
@@ -592,6 +622,9 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
     exp.audio = audio
     exp.ecs = ecs
     exp.ecs_audio = ecs_audio.done()
+    exp.mix_raw = ecs_audio
+    exp.voice = voice
+    exp.vsamples = [x for x in vdev.samples if x[0] < ncyc] if vdev is not None else []
     return exp
 
 
@@ -787,7 +820,7 @@ def build(work, rtl_dir, verilator, strict=True):
     # --verilate-jobs 1: Verilator 5.040's multithreaded verilation (what -j N turns on besides --build-jobs)
     # crashed about one build in 16 with "internal fault" (2026-10-28: 5 of 80 with -j 2, 0 of 210 with one)
     cmd = [verilator, '--binary', '--timing', '--verilate-jobs', '1', '--build-jobs', '4', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD',
-           '-Wno-PROCASSINIT', '--top-module', 'tb_system', '-Mdir', obj, '-o', 'tb_system',
+           '-Wno-PROCASSINIT', '--top-module', 'tb_system', '-I' + rtl_dir, '-Mdir', obj, '-o', 'tb_system',
            '-DCRC_HEX="%s"' % os.path.join(tables, 'cart_crc.hex'),
            '-DLAYOUT_HEX="%s"' % os.path.join(tables, 'cart_layouts.hex')]
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + OTHER
@@ -814,6 +847,7 @@ class Got(tuple):
 def parse_log(path, pic_path=None):
     blog, steps, dumps, notes, fails, mlog = [], [], {}, [], [], []
     gl, gw, cl, hl, kl, al, el = [], {}, [], {}, [], {}, {}
+    vl = []
     mark = (0, 0, 0)
     for ln in open(path):
         t = ln.split()
@@ -833,6 +867,8 @@ def parse_log(path, pic_path=None):
             al[int(t[1])] = [int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5])]
         elif t[0] == 'E':
             el[int(t[1])] = [int(t[2], 16), int(t[3]), int(t[4], 16), int(t[5]), int(t[6], 16)]
+        elif t[0] == 'V':
+            vl.append((int(t[1]), int(t[2]), int(t[3], 16)))
         elif t[0] == 'B':
             blog.append((int(t[1]), int(t[2]), int(t[3], 16), int(t[4], 16)))
         elif t[0] == 'S':
@@ -851,6 +887,7 @@ def parse_log(path, pic_path=None):
             blog = [b for b in blog if b[0] < c]
             steps = [s for s in steps if s[0] < c]
             mlog = [x for x in mlog if x[0] < c]
+            vl = [x for x in vl if x[0] < c]
             # the STIC's lines are cut at the save (a freeze inside a cycle
             # may come after some of that cycle's lines)
             gl, cl, kl = gl[:mark[0]], cl[:mark[1]], kl[:mark[2]]
@@ -874,6 +911,7 @@ def parse_log(path, pic_path=None):
     got.hashes = hl
     got.audio = al
     got.ecs_audio = el
+    got.voice = vl
     got.pics = read_pics(pic_path) if pic_path else {}
     return got
 
@@ -894,18 +932,61 @@ def compare_audio(got, exp, frames, samples):
     return []
 
 
-def compare_ecs_audio(got, exp, frames, samples):
+def compare_ecs_audio(got, exp, frames, samples, ea=None):
     """PSG #2 and the mixed sound (E lines, step 9) against the model: PSG #2's steps in
     every run, its samples and the mix's with `samples` (straight runs)."""
     for k in frames:
         g = got.ecs_audio.get(k)
-        e = exp.ecs_audio.get(k, [FNV0, 0, FNV0, 0, FNV0])
+        e = (ea or exp.ecs_audio).get(k, [FNV0, 0, FNV0, 0, FNV0])
         if g is None:
             return ['frame %d PSG #2: no E line' % k]
         if g[:2] != e[:2] or (samples and (g[2:4] != e[2:4] or g[4] != e[4])):
             return ['frame %d PSG #2 / mix (step hash, steps, 48 kHz hash, samples, mix hash): RTL %s, '
                     'model %s' % (k, ' '.join('%X' % x for x in g), ' '.join('%X' % x for x in e))]
     return []
+
+
+def voice_mix(got, exp):
+    """Step 10: the E lines' mix hashes with the voice on top: the model's samples through
+    sp0256.VoiceOut, each seen from the 48 kHz strobe the RTL's V line names (when the sample
+    is made inside a CPU cycle is the RTL's, not machine state), the sum saturated to 16 bits
+    (intv_machine). PSG #1's samples are the strobes, in order."""
+    out = {k: list(v) for k, v in exp.ecs_audio.items()}
+    vo = sp0256.VoiceOut(exp.voice['dac'], exp.voice['level'])
+    vis, vals = [x[1] for x in got.voice], [x[1] for x in exp.vsamples]
+    hm, j = {}, 0
+    for i, (t, v1, on) in enumerate(exp.mix_raw.s1):
+        while j < len(vis) and j < len(vals) and vis[j] <= i:
+            vo.sample(vals[j])
+            j += 1
+        m = max(-32768, min(32767, mix_sample(v1, exp.mix_raw.s2.get(t, 0), on) + vo.strobe()))
+        k = (4 * (t - 1) + 1) // FRAME
+        hm[k] = fnv(hm.get(k, FNV0), m & 0xFFFF)
+    for k, h in hm.items():
+        out.setdefault(k, [FNV0, 0, FNV0, 0, FNV0])[4] = h
+    return out
+
+
+def compare_voice(got, exp, run):
+    """Step 10: the voice's samples (V lines: the cycle each fired at, its value) against the
+    model's, up to a few cycles before the end (the last may be made during the freeze); the
+    mode and late (L lines)."""
+    probs = []
+    on = bool(exp.voice) and exp.voice['ovr'] == 'on'
+    want = 'L voice mode %d' % on
+    if want not in got[3]:
+        probs.append('RTL voice: %s, want "%s"' % ([x for x in got[3] if x.startswith('L voice')], want))
+    want = 'L voice on %d late 0' % on
+    if want not in got[3]:
+        probs.append('RTL voice: %s, want "%s"' % ([x for x in got[3] if x.startswith('L voice on')], want))
+    lim = exp.ncyc - 8
+    g = [(f, v) for f, _, v in got.voice if f < lim]
+    e = [(f, v & 0xFFFF) for f, v in exp.vsamples if f < lim]
+    if g != e:
+        i = next((j for j in range(max(len(g), len(e))) if (g[j] if j < len(g) else None) != (e[j] if j < len(e) else None)), 0)
+        probs.append('voice sample %d of %d / %d (cycle, value): RTL %s, model %s' % (
+            i, len(g), len(e), g[i] if i < len(g) else None, e[i] if i < len(e) else None))
+    return probs
 
 
 def audio_summary(exp):
@@ -1052,13 +1133,18 @@ def compare(name, run, got, exp):
         checks += [('psg2 %d' % (14 + i), d[(SS['psg2'], 14 + i)], st['psg2x'][i]) for i in range(7)]
         checks += [('ECS RAM %03X' % (4 * i), d[(SS['eram'] + i // 256, i % 256)], st['ecsram'][i])
                    for i in range(512)]
+        # step 10: intv_voice's own words (the sample enable, the window, the held write)
+        checks += [('voice word %d' % (20 + i), d[(SS['voice'], 20 + i)], st['voice'][i]) for i in range(3)]
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (
                 k, cyc, len(bad), '; '.join('%s RTL %X model %X' % b for b in bad[:4])))
     probs += compare_stic(got, exp, range(exp.ncyc // FRAME - 1))
     probs += compare_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
-    probs += compare_ecs_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight')
+    on = bool(exp.voice) and exp.voice['ovr'] == 'on'
+    probs += compare_ecs_audio(got, exp, range(exp.ncyc // FRAME), run == 'straight',
+                               voice_mix(got, exp) if on and run == 'straight' else None)
+    probs += compare_voice(got, exp, run)
     mode = 0
     if exp.ecs:
         mode = exp.ecs['auto'] if exp.ecs['ovr'] == 'auto' else {'on': 1, 'off': 0}[exp.ecs['ovr']]
@@ -1084,6 +1170,9 @@ def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pad
         if CFG_OF.get(cart_path):
             cmd.append('+cfg=' + CFG_OF[cart_path])
     cmd += ecs_args(work, tag, exp.ecs, exp.ncyc // FRAME)
+    if exp.voice:
+        cmd += ['+voice=%d' % {'auto': 0, 'on': 1, 'off': 2}[exp.voice['ovr']], '+ivoice=' + ivoice_rom(),
+                '+vlevel=%d' % exp.voice['level'], '+vdac=%d' % exp.voice['dac']]
     with open(os.path.join(work, 'stdout_%s.txt' % tag), 'w') as f:
         r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout, cwd=work)
     if r.returncode != 0 or not os.path.exists(log):
@@ -1784,6 +1873,15 @@ PLANTS = [
     ('ecs_env2', 'intv_ecs.sv', [(".ENV2(1'b0)", ".ENV2(1'b1)")], 'ecstest', None),
     ('ecs_uart_0', 'intv_ecs.sv', [("a[1:0] == 2'd0 ? 16'h0002 : 16'h0000", "16'h0000")], 'ecstest', None),
     ('ecs_ram_not_owned', 'intv_cart.sv', [("ba[15:11] == 5'b01000));", "1'b0));")], 'cart4000_on', None),
+    # step 10: the Intellivoice: mapped while off (reads $0000 / $8000, not the pull-ups), the level's
+    # x2 lost, the voice added to the mix as unsigned (its negative half wraps), the DAC sound's bits
+    # (voicetest makes no PSG sound, so the mix's saturation is not reached here: VOICE_NOTES 8.7)
+    ('voice_mapped_off', 'intv_voice.sv', [("assign hit = on && sel;", "assign hit = sel;")], 'voice_off', None),
+    ('voice_level2_lost', 'intv_voice.sv', [("3'd4: g = v <<< 1;", "3'd4: g = v;")], 'voicetest', None),
+    ('voice_mix_unsigned', 'intv_machine.sv', [("wire logic signed [17:0] vsum = $signed({2'b00, psgs}) + 18'(v_out);",
+                                               "wire logic signed [17:0] vsum = $signed({2'b00, psgs}) + $signed({2'b00, v_out});")],
+     'voicedac', None),
+    ('voice_dac_bits', 'intv_voice.sv', [("($signed(c_sample) >>> 7) <<< 9", "($signed(c_sample) >>> 6) <<< 8")], 'voicedac', None),
     ('ecs_mix_wraps', 'intv_machine.sv', [("assign audio     = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];",
                                           "assign audio     = mixs[15:0];")], 'ecstest', None),
     # the step-9 review: the sum not scaled to 3/4 with the ECS attached (ecsastro: Auto, attached)
@@ -1861,7 +1959,10 @@ def main():
             carts[name] = cart
             pads[name] = pad
             ex = exec_path
-            if prog:
+            if prog == 'voicetest.py':
+                ex = os.path.join(work, name + '_exec.bin')
+                subprocess.run([sys.executable, '-I', os.path.join(TESTROMS, prog), ex], check=True)
+            elif prog:
                 ex = os.path.join(work, name + '_exec.bin')
                 with open(os.path.join(TESTROMS, prog), encoding='utf-8') as f:
                     pr = as1610.assemble(f.read(), romw=10)
@@ -1876,7 +1977,8 @@ def main():
                 with open(ex, 'wb') as f:
                     f.write(img)
             execs[name] = ex
-            exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode, ECS_OF.get(name))
+            exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode, ECS_OF.get(name),
+                                   VOICE_OF.get(name))
             exps[name].name = name
             e = exps[name]
             if name in ECS_OF:
@@ -1913,6 +2015,11 @@ def main():
                                                       if not p8 else 'FAIL: ' + '; '.join(p8)))
                 if p8:
                     fails.append('CART8_SELFCHECK ' + name)
+            if name in VOICE_OF:
+                nz = sum(1 for _, v in e.vsamples if v)
+                print('  %s voice (%s): %d samples, %d not 0' % (name, VOICE_OF[name]['ovr'], len(e.vsamples), nz))
+                if (VOICE_OF[name]['ovr'] == 'on') != (nz > 1000):
+                    fails.append('VOICE_MODEL ' + name)
             if prog == 'systest.asm':
                 p7 = check_sect7(e, pr.symbols)
                 print('  systest section 7: %s' % ('every probe in its slot' if not p7 else '; '.join(p7)))
@@ -1961,7 +2068,7 @@ def main():
                 d = os.path.join(work, 'plant_' + pname)
                 shutil.rmtree(d, ignore_errors=True)
                 os.makedirs(os.path.join(d, 'rtl'))
-                for x in RTL:
+                for x in RTL + INC:
                     shutil.copy(os.path.join(CORE, x), os.path.join(d, 'rtl', x))
                 p = os.path.join(d, 'rtl', f)
                 s = open(p).read()

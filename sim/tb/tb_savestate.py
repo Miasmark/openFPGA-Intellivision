@@ -21,6 +21,8 @@ in play with keys, B-17 Bomber in flight, Atlantis, Buzz Bombers, our sticmob an
      R, untouched;
   E  (build step 9, SS_ECS images) the image's own blob into a core whose ECS is off (the
      menu's override): err, no state set (the header's ECS flag);
+  V  (build step 10, SS_VOICE images) the image's own blob into a core whose Intellivoice is
+     off (the menu's override): err, no state set (the header's voice flag);
   X  (step-9 review, SS_ECS images with the ECS attached or on) the image's own blob into a
      core whose ECS ROM file differs by one byte: err, no state set (the header's ECS CRC);
   C  corrupt and wrong blobs (a payload byte flipped, the header CRC changed, a reserved
@@ -65,7 +67,8 @@ CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v',
-       'intv_ecs.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv']
+INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(HERE, 'models', 'sram_as6c2016.sv'),
          os.path.join(HERE, 'models', 'mf_datatable.sv'), os.path.join(HERE, 'tb_savestate.sv')]
@@ -121,6 +124,10 @@ SS_IMAGES = [
     # BUSRQ or row-fetch save points)
     ('nfl', 'Super NFL Footbal (USA) (Proto).zip', None, (0xFF, 0xFF), 110, None,
      [(30, 'midinst'), (50, 'any'), (65, 'midinst'), (80, 'any')], (88, 8), 98),
+    # build step 10 (SS_VOICE): our voicetest.py in the EXEC slot with the Intellivoice on, saves in
+    # the middle of its phrases (asked for while a sample is made, and in the busy window)
+    ('voicetest', None, 'voicetest.py', (0xFF, 0xFF), 40, None,
+     [(4, 'voice'), (9, 'voicewin'), (15, 'voice'), (21, 'voicewin')], (25, 6), 30),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
@@ -134,6 +141,9 @@ SS_ECS = {
     'atlantis': dict(ovr=0, mode=2),       # Auto: attached (the hardware's default for it)
     'nfl': dict(ovr=0, mode=2),
 }
+# step 10: the Intellivoice of an image (images not listed run with it Off): the menu override (0
+# Auto, 1 On); B-17 Bomber under Auto (the CRC table's flag): speech in flight
+SS_VOICE = {'voicetest': dict(ovr=1), 'b17bomber': dict(ovr=0)}
 FRAMES_AFTER = 24          # an L run goes on this many frames after the restore
 LOAD_AT = FRAME            # fresh cores load from machine cycle 1 frame on
 DEEP_AFTER = 40            # D: s0 loaded into a core this many frames past its save point
@@ -172,7 +182,7 @@ def build(work, rtl_dir, verilator, strict=True):
     # --verilate-jobs 1: Verilator 5.040's multithreaded verilation (what -j N turns on besides --build-jobs)
     # crashed about one build in 16 with "internal fault" (2026-10-28: 5 of 80 with -j 2, 0 of 210 with one)
     cmd = [verilator, '--binary', '--timing', '--verilate-jobs', '1', '--build-jobs', '4', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD',
-           '-Wno-PROCASSINIT', '--top-module', 'tb_savestate', '-Mdir', obj, '-o', 'tb_savestate',
+           '-Wno-PROCASSINIT', '--top-module', 'tb_savestate', '-I' + rtl_dir, '-Mdir', obj, '-o', 'tb_savestate',
            '-DCRC_HEX="%s"' % os.path.join(tables, 'cart_crc.hex'),
            '-DLAYOUT_HEX="%s"' % os.path.join(tables, 'cart_layouts.hex')]
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + OTHER
@@ -205,7 +215,10 @@ def prepare(work, img, lib, bdir):
     GROM CRC, CFG path or None, CFG CRC, header flags, ECS CRC, the ECS plusargs)."""
     name, zipname, prog, pads, nframes, keys = img[:6]
     ex = os.path.join(bdir, 'exec.bin')
-    if prog:
+    if prog == 'voicetest.py':
+        ex = os.path.join(work, name + '_exec.bin')
+        subprocess.run([sys.executable, '-I', os.path.join(TESTROMS, prog), ex], check=True)
+    elif prog:
         ex = os.path.join(work, name + '_exec.bin')
         with open(os.path.join(TESTROMS, prog), encoding='utf-8') as f:
             pr = as1610.assemble(f.read(), romw=10)
@@ -276,6 +289,10 @@ def prepare(work, img, lib, bdir):
             with open(ekf, 'w') as f:
                 f.writelines(out)
             eargs.append('+ekeys=' + ekf)
+    if name in SS_VOICE:
+        rom = [os.path.join(bdir, n) for n in ('ivoice.bin', 'IVOICE.BIN') if os.path.exists(os.path.join(bdir, n))][0]
+        eargs += ['+voice=%d' % SS_VOICE[name]['ovr'], '+ivoice=' + rom]
+        flags |= ss.FLAG_VOICE
     return (ex, cart, kf, crc, words, ss.crc32(open(ex, 'rb').read()),
             ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read()), cfgp, cfgcrc, flags, ecrc, eargs)
 
@@ -314,15 +331,15 @@ class Run:
 
 def compare_frames(ref, got, lo, hi, what, steps_only=False):
     """Frames lo .. hi-1 of got (a dict of lines) against ref.frames; problems.
-    steps_only: of the A lines only the PSG's steps (hash and count), not its
-    48 kHz samples: the output filter and its sample phase are not machine
-    state (DESIGN.md 4.4), so after a load they need not match."""
+    steps_only: of the A lines only the PSG's steps (hash and count) and the voice's samples
+    (step 10), not the PSG's 48 kHz samples: the output filter and its sample phase are not
+    machine state (DESIGN.md 4.4), so after a load they need not match."""
     probs = []
     for k in range(lo, hi):
         for t in 'HAP':
             a, b = ref.frames.get((t, k)), got.get((t, k))
             if a is not None and b is not None and t == 'A' and steps_only:
-                a, b = a.split()[:4], b.split()[:4]
+                a, b = a.split()[:4] + a.split()[6:8], b.split()[:4] + b.split()[6:8]
             if a is None or b is None:
                 probs.append('%s: frame %d %s line missing (%s)' % (what, k, t, 'ref' if a is None else 'run'))
             elif a != b:
@@ -600,6 +617,9 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:7],
                                  cfgcrc=bench.prep[name][8], flags=bench.prep[name][9],
                                  ecscrc=bench.prep[name][10])
+        want_v = 'L voice mode %d' % (name in SS_VOICE)
+        if want_v not in ref.lines:
+            p.append('R: %s, want %s' % ([x for x in ref.lines if x.startswith('L voice')], want_v))
         if name in SS_ECS:
             want_e = 'L ecs mode %d' % SS_ECS[name]['mode']
             if want_e not in ref.lines:
@@ -660,6 +680,12 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             end = 20 * FRAME
             lf.append((img, 'E', None, end, None, sub('E', end, ['load %d %s err -1' % (LOAD_AT, p0)],
                                                          ['+ecs=2'])))
+        # step 10, V: the image's own state into a core whose Intellivoice is off: refused (header
+        # flags), the run untouched
+        if name in SS_VOICE:
+            end = 20 * FRAME
+            lf.append((img, 'V', None, end, None, sub('V', end, ['load %d %s err -1' % (LOAD_AT, p0)],
+                                                         ['+voice=2'])))
         # X (step-9 review): the image's own state into a core whose ECS ROM file differs from the
         # saving core's by one byte: refused (header word 13, the ECS ROM's CRC), the run untouched
         if SS_ECS.get(name, {}).get('mode'):
@@ -715,7 +741,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             elif zc is None:                   # F: untouched all the way
                 if run.set_cycle is not None or applied:
                     q.append('state set by a refused load')
-                if tag not in ('E', 'X'):      # E: the ECS off, X: another ECS ROM: not R's run
+                if tag not in ('E', 'X', 'V'):  # E: the ECS off, X: another ECS ROM, V: the voice off
                     q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
             else:
                 if run.set_cycle != zc:
@@ -734,7 +760,7 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
             if tag == 'C':
                 if [x.split()[1] for x in loads] != ['err'] * 6 + ['ok']:
                     q.append('loads %s' % loads)
-            if tag in ('F', 'E', 'X') and loads != ['LOAD err EXPECT err']:
+            if tag in ('F', 'E', 'X', 'V') and loads != ['LOAD err EXPECT err']:
                 q.append('loads %s' % loads)
         print('%s %s: %s' % (name, tag, 'pass' if not q else 'FAIL ' + '; '.join(q[:3])), flush=True)
         probs += ['%s %s: %s' % (name, tag, x) for x in q]
@@ -817,7 +843,7 @@ PLANTS = [
     # first and the image stops there, so either counts); the ECS RAM not restored (ECS BASIC's
     # typed line lost)
     ('ss_ecs_unchecked', 'intv_ss_ctl.sv',
-     [("4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = 32'd0;")],
+     [("4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, 1'b0};")],
      'ecsavail', 'psgtest', r' (E: (FAIL load|loads |state set)|S: blob \S+: \[.header flags = \$00000000, want \$00000001)'),
     # the step-9 review: the header's ECS ROM CRC not checked (an ECS state loads into a core with
     # another ECS ROM: the X run)
@@ -828,6 +854,17 @@ PLANTS = [
     ('ss_ecsram_lost', 'intv_ecs.sv',
      [("rwe  = ss_en ? ss_we && ss_rhit : wr && sel_ram && on;", "rwe  = ss_en ? 1'b0 : wr && sel_ram && on;")],
      'ecsbasic', 'psgtest', AFTER),
+    # build step 10: the header's voice flag not checked (a state with the Intellivoice loads into a
+    # core with it off: the V run, or the S run's blob check first); the sample enable's
+    # accumulator not restored (the voice's samples after a load move); the quiet point not
+    # waiting for a voice sample (a save in the middle of one: the chip's sequencer state lost)
+    ('ss_voice_unchecked', 'intv_ss_ctl.sv',
+     [("4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};")],
+     'voicetest', 'psgtest', r' (V: (FAIL load|loads |state set)|S: blob \S+: \[.header flags = \$00000000, want \$00000002)'),
+    ('ss_voice_acc_lost', 'intv_voice.sv', [("if (ss_w20) acc <= ss_wdata;", "if (ss_w20) acc <= 32'd0;")],
+     'voicetest', 'psgtest', AFTER),
+    ('ss_voice_busy_ignored', 'intv_voice.sv', [("assign busy = c_busy || fire_d;", "assign busy = 1'b0;")],
+     'voicetest', 'psgtest', AFTER),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 
@@ -925,7 +962,7 @@ def main():
                 d = os.path.join(work, 'plant_' + pname)
                 shutil.rmtree(d, ignore_errors=True)
                 os.makedirs(os.path.join(d, 'rtl'))
-                for x in RTL:
+                for x in RTL + INC:
                     shutil.copy(os.path.join(CORE, x), os.path.join(d, 'rtl', x))
                 p = os.path.join(d, 'rtl', f)
                 s = open(p).read()

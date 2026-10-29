@@ -22,6 +22,11 @@
 //                   read through the cartridge port: ecs_on, ecs_pg to
 //                   intv_media); ecs_mode is taken at machine reset. The
 //                   sound is PSG #1 + PSG #2, at most 32,767.
+//   intv_voice      the Intellivoice (build step 10): the SPB640 at
+//                   $0080-$0081 and the SP0256 (sp0256.sv), its ROM read
+//                   from intv_sysrom (ivoice_addr / ivoice_q); voice_mode
+//                   is taken at machine reset. Its output (signed) is added
+//                   to the PSGs' and the sum saturated to 16 bits signed.
 //
 // ce is the CPU cycle enable from intv_timing (ce_cpu: only while the
 // machine is live), ce_pix its pixel clock (ce_stic), live high on every
@@ -49,6 +54,7 @@
 //   SS_ECS  ($0E)        intv_ecs, 1 word
 //   SS_PSG2 ($0F)        PSG #2, 21 words
 //   SS_ERAM ($10, $11)   ECS RAM, 512 words
+//   SS_VOICE ($18)       intv_voice, 24 words; its FIFO ($19), 64 words
 // The timing ($01) and the cartridge ($0B) have their own modules.
 //
 // SPDX-License-Identifier: MIT
@@ -70,7 +76,8 @@ module intv_machine #(
     parameter logic [7:0] SS_LINE = 8'h0D,
     parameter logic [7:0] SS_ECS  = 8'h0E,
     parameter logic [7:0] SS_PSG2 = 8'h0F,
-    parameter logic [7:0] SS_ERAM = 8'h10
+    parameter logic [7:0] SS_ERAM = 8'h10,
+    parameter logic [7:0] SS_VOICE = 8'h18
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
@@ -90,6 +97,14 @@ module intv_machine #(
     output logic             ecs_on,          // to intv_media: the ECS ROMs
     output logic             ecs_full,        // the ECS fully on (mode on): intv_input's key routing
     output logic [11:0]      ecs_pg,
+    input  wire logic        voice_mode,      // the Intellivoice: 0 off, 1 on (taken at reset)
+    input  wire logic        voice_dac7,      // its 7-bit DAC sound instead of the clean one
+    input  wire logic [2:0]  voice_level,     // 0 off, 1-4: x 1/2, 1, 3/2, 2
+    output logic             voice_on,
+    output logic             voice_busy,      // a voice sample in the making (intv_ss_ctl waits)
+    output logic             voice_late,      // a sample outlasted its window (sticky; benches)
+    output logic [10:0]      ivoice_addr,     // the SP0256-012 ROM (intv_sysrom)
+    input  wire logic [7:0]  ivoice_q,
 
     // cartridge port and system ROMs (intv_media)
     output logic             cart_req,
@@ -107,7 +122,7 @@ module intv_machine #(
     input  wire logic [7:0]  vgrom_q,
 
     output logic [3:0]       colour,          // the picture, this pixel clock
-    output logic [15:0]      audio,           // the PSG, 48 kHz (0..32766)
+    output logic [15:0]      audio,           // the PSGs and the voice, 48 kHz, signed (PSGs alone 0..32767)
     output logic             audio_stb,
 
     // what the bus does (bench, later the STIC)
@@ -143,9 +158,10 @@ module intv_machine #(
     logic        stic_open;
     logic [15:0] stic_q, sys_q;
     logic [7:0]  scr_q, psg_q, gram_q;
-    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs;
-    logic        ecs_hit;
-    logic [15:0] ecs_q, audio1, audio2;
+    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs, ssr_voice;
+    logic        ecs_hit, v_hit;
+    logic [15:0] ecs_q, v_q, audio1, audio2;
+    logic signed [15:0] v_out;
     logic        audio1_stb;
     /* verilator lint_off UNUSEDSIGNAL */
     logic [7:0]  psg1_ctrl;
@@ -165,7 +181,8 @@ module intv_machine #(
         .a(addr), .rd, .wr, .vb, .scr_we, .psg_we, .sys_we, .gram_we, .stic_we,
         .stic_open, .stic_q, .scr_q, .psg_q, .sys_q, .exec_q, .grom_q, .gram_q,
         .cart_req, .cart_we, .cart_wdata, .cart_ack, .cart_rdata,
-        .cart_hit_in(cart_hit), .ecs_hit, .ecs_q,
+        .cart_hit_in(cart_hit), .ecs_hit(ecs_hit || v_hit),
+        .ecs_q((ecs_hit ? ecs_q : 16'hFFFF) & (v_hit ? v_q : 16'hFFFF)),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_bus));
 
     assign cart_addr = addr;
@@ -194,6 +211,14 @@ module intv_machine #(
         .audio(audio2), .audio_stb(audio2_stb),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_ecs));
 
+    intv_voice #(.SS_ID(SS_VOICE)) voice (
+        .clk, .mreset, .mode(voice_mode), .ce, .run(!hold),
+        .a(addr), .wr, .wdata(dout), .hit(v_hit), .q(v_q),
+        .rom_addr(ivoice_addr), .rom_q(ivoice_q),
+        .dac7(voice_dac7), .level(voice_level), .audio_stb(audio1_stb), .out(v_out),
+        .on(voice_on), .busy(voice_busy), .late(voice_late),
+        .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_voice));
+
     // the two PSGs' samples come together (same reset, same steps); PSG #2 is
     // silent (0) unless the ECS is attached. While the ECS is attached or on
     // the sum is scaled to 3/4 (floor), so the loudest six-channel music
@@ -204,7 +229,10 @@ module intv_machine #(
     wire logic [18:0] mix3 = 19'(mix) + {1'b0, mix, 1'b0};      // 3 x mix; [1:0] dropped (floor)
     /* verilator lint_on UNUSEDSIGNAL */
     wire logic [16:0] mixs = ecs_on ? mix3[18:2] : mix;
-    assign audio     = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];
+    wire logic [15:0] psgs = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];
+    // the voice (0 when off) on top, saturated to 16 bits signed
+    wire logic signed [17:0] vsum = $signed({2'b00, psgs}) + 18'(v_out);
+    assign audio     = vsum > 18'sd32767 ? 16'h7FFF : vsum < -18'sd32768 ? 16'h8000 : vsum[15:0];
     assign audio_stb = audio1_stb;
 
     intv_ram #(.AW(8), .DW(8), .WORDS(256), .SS_ID(SS_SCR)) scratch (
@@ -222,7 +250,7 @@ module intv_machine #(
         .addr_b(v_gram_addr), .q_b(v_gram_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_gram));
 
-    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs;
+    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs | ssr_voice;
 
 endmodule
 

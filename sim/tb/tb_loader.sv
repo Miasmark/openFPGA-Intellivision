@@ -232,6 +232,7 @@ module tb_loader;
     wire  logic [16:0] words;
     wire  logic [7:0]  layout, flags;
     wire  logic [1:0]  ecs_auto;              // step 9: the Auto rule's mode
+    wire  logic        voice_auto;            // step 10: the Intellivoice's Auto rule
     /* verilator lint_off UNUSEDSIGNAL */
     wire  logic        ecs_rom_ok;
     /* verilator lint_on UNUSEDSIGNAL */
@@ -253,7 +254,7 @@ module tb_loader;
         .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
         .bus_attr(bus_attr), .bus_paged(bus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
-        .ecs_on(1'b0), .ecs_pg(12'd0), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok),
+        .ecs_on(1'b0), .ecs_pg(12'd0), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok), .voice_auto(voice_auto),
         .aux_req(aux_req), .aux_we(1'b0), .aux_addr(aux_addr), .aux_wdata(16'd0), .aux_be(2'b11),
         .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -648,6 +649,7 @@ module tb_loader;
         end
         $fdisplay(outf, "slots %03X", slot_st);
         $fdisplay(outf, "ecs auto %0d", ecs_auto);
+        $fdisplay(outf, "voice auto %0d", voice_auto);
         $fdisplay(outf, "format cfgcrc %08X noss %0d ferr %02X", cfg_crc, noss, fmt_err);
         image_crc("image");
         if (floaded[4]) begin

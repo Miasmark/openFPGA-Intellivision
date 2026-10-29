@@ -34,6 +34,11 @@
 // $7000 / $4000; step-9 review) -> 0 (off); else 2 (attached, ROMs paged
 // out).
 //
+// The Intellivoice (build step 10): voice_auto is its Auto rule, the
+// loader's flag (bit 1: the CRC table, a CFG's voice / voice_compat, a
+// .rom's tag) with its ROM slot (5) loaded whole; intv_core takes it, or
+// the menu's On (with the ROM) or Off, at machine reset.
+//
 // Three SRAM masters, fixed priority: the loader (only while loading, when
 // the machine is held in reset), the cartridge port, and an auxiliary port
 // (the ECS module from step 9; the bench reads the stored image with it).
@@ -80,6 +85,7 @@ module intv_media #(
     input  wire logic [11:0] ecs_pg,
     output logic [1:0]       ecs_auto,        // the Auto rule's mode for this image
     output logic             ecs_rom_ok,
+    output logic             voice_auto,      // the Intellivoice's Auto rule (step 10)
 
     // auxiliary SRAM port
     input  wire logic        aux_req,
@@ -196,6 +202,7 @@ module intv_media #(
     initial ecs_auto = 2'd0;
     assign ready      = ld_ready && !probing && !res_we;   // res_we: the clk before probing rises
     assign ecs_rom_ok = slot_st[9:8] == 2'd2;
+    assign voice_auto = flags[1] && slot_st[11:10] == 2'd2;
     assign c_bus_req  = probing ? pr_req : bus_req;
     assign bus_ack    = c_bus_ack && !probing;
     assign bus_rdata  = c_bus_rdata;

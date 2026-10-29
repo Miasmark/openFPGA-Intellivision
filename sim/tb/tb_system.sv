@@ -23,6 +23,9 @@
 //   +ekeys=F            scripted ECS keyboard: lines "k K", the pressed
 //                       switches K (hex, bit 8 row + column) from frame k on
 //   +synth=1            the music synthesizer instead of the keyboard
+//   +voice=N            the Intellivoice (step 10) as the menu's: 0 Auto, 1 On,
+//                       2 Off (default); +ivoice=F its ROM (slot 5); +vlevel=N
+//                       (0-4, default 4) +vdac=1 (the chip's 7-bit DAC sound)
 //   +log=F              the output (below)
 //   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
 //   +pic=F              write every picture to F (binary, see below)
@@ -162,6 +165,15 @@ module tb_system;
     wire logic [11:0] ecs_pg;
     wire logic [1:0]  ecs_auto;
     wire logic [1:0]  ecs_mode = ecs_ovr == 2'd1 ? 2'd1 : ecs_ovr == 2'd2 ? 2'd0 : ecs_auto;
+    // the Intellivoice (step 10): intv_core's rule (On, or Auto and the cartridge's flag; never
+    // without its ROM slot)
+    logic [1:0]       voice_ovr = 2'd2;
+    logic             vdac = 1'b0;
+    logic [2:0]       vlevel = 3'd4;
+    wire logic [10:0] iv_addr;
+    wire logic        voice_auto;
+    wire logic        voice_mode = voice_ovr == 2'd1 ? slot_st[11:10] == 2'd2 : voice_ovr == 2'd0 && voice_auto;
+    wire logic        voice_on, voice_busy, voice_late;
 
     intv_media #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) media (
         .clk, .reset, .mreset,
@@ -169,11 +181,11 @@ module tb_system;
         .bus_req(c_req), .bus_we(c_we), .bus_addr(c_addr), .bus_wdata(c_wdata),
         .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_attr(c_attr),
         .bus_paged(c_paged), .pg_rst(64'd0), .pg_sel,
-        .ecs_on, .ecs_pg, .ecs_auto, .ecs_rom_ok,
+        .ecs_on, .ecs_pg, .ecs_auto, .ecs_rom_ok, .voice_auto,
         .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q,
-        .ivoice_addr(11'd0), .ivoice_q,
+        .ivoice_addr(iv_addr), .ivoice_q,
         .ready, .busy, .err, .fmt_err, .len_st(), .slot_st, .crc, .words, .layout, .flags, .hit,
         .cfg_crc, .noss,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_c),
@@ -221,6 +233,8 @@ module tb_system;
         .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
+        .voice_mode, .voice_dac7(vdac), .voice_level(vlevel), .voice_on, .voice_busy, .voice_late,
+        .ivoice_addr(iv_addr), .ivoice_q,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
         .phase, .dout, .din, .addr, .fetch, .hold, .halted,
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_m));
@@ -330,6 +344,16 @@ module tb_system;
         if (dut.audio_stb && cyc > 0 && !ss_en)
             hm = fnv(hm, 32'(dut.audio));
 
+    // the Intellivoice's samples (step 10): "V <cycle it fired at> <strobe> <sample>", strobe:
+    // the number of 48 kHz strobes (audio_stb) before the first that sees it
+    longint v_fire = 0, nstb = 0;
+    always @(posedge clk) begin
+        if (dut.voice.fire) v_fire = cyc;
+        if (dut.voice.c_done)
+            $fdisplay(fd, "V %0d %0d %04x", v_fire, nstb + (dut.audio_stb ? 1 : 0), dut.voice.c_sample);
+        if (dut.audio_stb) nstb++;
+    end
+
     // ------------------------------------------------- the STIC's side
     // row fetches (decided the clk after the fetch cycle's ce) and the card
     // engine at the first line of each card row
@@ -409,9 +433,9 @@ module tb_system;
 
     // --------------------------------------------------------- state port
     // module id, word count (the order is the write order)
-    localparam int NMOD = 17;
-    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256};
+    localparam int NMOD = 19;
+    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64};
     logic [31:0] saved [NMOD][256];
     logic [3:0]  pbuf_saved [2][45360];
 
@@ -470,6 +494,7 @@ module tb_system;
         @(negedge clk);
         run = 1'b0;
         repeat (16) @(negedge clk);       // let a cartridge access finish
+        while (voice_busy) @(negedge clk); // and a voice sample (intv_ss_ctl's quiet point)
         if (live) fail("machine still live after run = 0");
         ss_en = 1'b1;
     endtask
@@ -616,6 +641,9 @@ module tb_system;
             int e;
             if ($value$plusargs("ecs=%d", e)) ecs_ovr = 2'(e);
             if ($value$plusargs("synth=%d", e)) synth = e != 0;
+            if ($value$plusargs("voice=%d", e)) voice_ovr = 2'(e);
+            if ($value$plusargs("vlevel=%d", e)) vlevel = 3'(e);
+            if ($value$plusargs("vdac=%d", e)) vdac = e != 0;
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -632,6 +660,10 @@ module tb_system;
             if ($value$plusargs("ecsrom=%s", ecs_f)) begin
                 load_file(ecs_f, 4'd4, n);
                 $fdisplay(fd, "L ecsrom %0d", n);
+            end
+            if ($value$plusargs("ivoice=%s", ecs_f)) begin
+                load_file(ecs_f, 4'd5, n);
+                $fdisplay(fd, "L ivoice %0d", n);
             end
         end
         n = 0;
@@ -654,6 +686,7 @@ module tb_system;
         $fdisplay(fd, "L ready err %0d crc %08x words %0d layout %0d flags %02x hit %0d",
                   err, crc, words, layout, flags, hit);
         $fdisplay(fd, "L ecs auto %0d rom %0d mode %0d", ecs_auto, ecs_rom_ok, ecs_mode);
+        $fdisplay(fd, "L voice mode %0d", voice_mode);
         repeat (10) @(negedge clk);
         mres_tb = 1'b0;
 
@@ -700,6 +733,7 @@ module tb_system;
         wait_cycle(ncyc);
         freeze();
         $fdisplay(fd, "L ecs full %0d", efull);
+        $fdisplay(fd, "L voice on %0d late %0d", voice_on, voice_late);
         dump_all(2);
         ss_en = 1'b0;
         if (halted) $fdisplay(fd, "R CPU halted");

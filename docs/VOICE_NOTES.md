@@ -232,102 +232,131 @@ of that speech, and starts a 20-decle stream that runs past the FIFO's head. Run
 (`EXEC=`) it is the `voicetest` row above. It checks nothing itself and is the RTL bench's main
 stimulus (section 8.7).
 
-## 8 RTL design (next pass)
+## 8 RTL (as built, pass 2: core 0.0.16)
 
 ### 8.1 Modules
 
 | Module | Holds | Notes |
 |---|---|---|
-| `intv_voice` | bus decode `$0080-$0081`, LRQ, ALD, the FIFO (64 x 10, M10K or MLAB), head/tail/bit pointer, the bit reader | answers only when the voice is on (8.6); reads return `$8000`/`$0000` patterns as section 1 |
-| `sp0256_seq` | PC, stack, PAGE, MODE + prefix, halted, the instruction FSM (fetch imm/op, data fields from a format ROM), the resident ROM (2 KiB M10K, loaded from `ivoice.bin` through the data slot 0x105) | one bit-field per clk_sys; a format ROM generated from `sp0256.FORMATS` (as `intv_ss_pkg.sv` is from `savestate.py`) |
-| `sp0256_lpc` | the 16 parameter registers, the decoded copy (amp, P, interp, the 12 coefficients as register values), the excitation (period and repeat counters, LFSR), the 6-stage filter with one multiplier, 12 delay words | time-multiplexed: one stage half (B or F) per clk_sys |
-| `voice_mix` (in `intv_machine`'s mix) | hold, the analog chain approximation, level, sum | section 8.5 |
+| `intv_voice.sv` | the bus at `$0080-$0081`, the sample enable, the busy window (8.2), the output chain (8.5) | in `intv_machine`; answers only while on (8.6) |
+| `sp0256.sv` | the SPB640 (LRQ, ALD, the 64 x 10 FIFO in an `intv_ram` block RAM, head / tail / bit pointer) and the SP0256 (PC, stack, PAGE, MODE + prefix, halted, the 16 parameter registers, the decoded copy, amp, period, repeat, LFSR, interpolation, the 12-word delay line) | one FSM: the sequencer reads one bit field at a time (two words, two clocks each), the filter makes its 12 products one a clock with one multiplier |
+| `sp0256_fmt.svh` | the instruction formats (`fmt_hdr`, `fmt_fld`) and the coefficient table `qtbl` | generated: `tools/sp0256.py gen` (`gen --check` in the gates), from `sp0256.FORMATS` and `QTBL` |
 
-### 8.2 Clocking
+The resident ROM (2 KiB, `ivoice.bin`, data slot 0x105) stays where step 2 put it, in
+`intv_sysrom` (M10K), read through `ivoice_addr` / `ivoice_q` (one clock); bytes outside
+`$1000-$17FF` read 0, as the model's memory. The planned split into `sp0256_seq` / `sp0256_lpc`
+was not needed: the sequencer and the filter never run at the same time, so one FSM with one
+multiplier is smaller.
 
-A 10 kHz sample enable from clk_sys by a phase accumulator, exact for both PLLs: NTSC clk_sys is
-472.5/11 MHz, so +220 per clock wrapping at 945,000 gives exactly 10,000 Hz; PAL (48 MHz) +1
-wrapping at 4,800. (The chip's own resonator is not locked to the console, so the 10 kHz need not
-be tied to the CPU clock; a bench parameter sets 9,285 Hz for direct comparison with MAME.) Each
-sample has about 4,295 clk_sys: the sequencer (at most one instruction, about 130 bits, plus the
-re-made step) and the filter (12 multiplies) fit in a few hundred, so a single sequential datapath
-does it with no pipelining. Bus writes and reads act between samples in the order they come, the
-model's order.
+### 8.2 Clocking: the sample enable and the busy window
 
-### 8.3 Area and DSP budget
+The enable is a phase accumulator on the CPU's cycle enable while the machine runs (`ce && run`,
+as the PSG's): +INC per cycle, a sample each time it passes WRAP. INC / WRAP = 88 / 7,875 is
+exactly 10,000 Hz on NTSC clk_sys (472.5 / 11 MHz, a cycle every 48 clocks: 10,000 x 528 /
+472,500,000 = 88 / 7,875), so the rate is the clk_sys accumulator of the first plan, gated by the
+cycle enable. Counting CPU cycles rather than free clk_sys makes the machine deterministic: the
+enable stops with the machine (menu pause, save, load), its phase is one state word, and the
+model (`tools/sp0256.py VoiceBus`) works in cycle numbers. 12,480,000 / 1,202,727,120 gives
+MAME's 3,120,000 / 336 Hz on MAME's CPU clock (parameters only: the benches).
 
-One 18 x 18 DSP (16-bit z times the 10-bit table value T(x), signed), or none with a shift-add
-multiplier over 10 clocks per product (time is plentiful). The coefficient table (128 x 9 bits)
-in LUTs or an MLAB. Registers: 16 x 8 parameters, 12 x 8 decoded coefficients, 12 x 16 delay
-line, about 70 bits of sequencer state: about 500 flip-flops, which a 32 x 16 MLAB for the delay
-line and coefficients would halve. Estimated 600-900 ALMs and 1 DSP, inside DESIGN 3's 500-1,000
-+ 1-2 DSP.
+A sample fires at the ce that ends cycle c, after that cycle's bus access, and `sp0256.sv`
+makes it in at most 181 clk_sys (measured over the six references; usually about 30). Accesses at
+the ces that end cycles c + 1 .. c + 8 are in the busy window: a read gives the values `$0080` /
+`$0081` had when the sample fired; a write is held and lands after the window's last ce (8
+cycles = 384 clk_sys, so the sample is always made by then; two CPU writes are at least 9
+cycles apart, so at most one is held). A sample still unmade at the window's end would keep the
+window open and set `late` (sticky; every bench checks 0). The chip sees bus accesses only
+between samples, in the order they come, as the model's.
 
-### 8.4 Save state: module id $18
+### 8.3 Resources (expected; the fit is the owner's)
 
-Reserved in SAVESTATE.md. Words (32 bits each, about 40):
+One 18 x 18 DSP (the filter's products), about 600-900 ALMs (the FSM, 16 + 12 parameter bytes,
+12 x 16 delay words, the output chain's three accumulators), one M10K for the FIFO (64 x 10;
+it may land in MLAB). No new M10K for the ROM (`intv_sysrom` had it since step 2).
 
-| Words | Contents |
-|---|---|
-| 1 | LRQ, ALD (8), halted, FIFO select, MODE + prefix (6), PAGE (4) |
-| 1 | PC (19 bits, bit address) |
-| 1 | stack (19 bits) |
-| 1 | FIFO head (7), tail (7), bit pointer (4) |
-| 20 | FIFO, 64 x 10 bits (or through `ss_en` from its block RAM, as the ECS RAM) |
-| 4 | the 16 parameter registers |
-| 3 | the 12 decoded coefficient registers (kept apart: the halted poll clears the registers without decoding them) |
-| 1 | amp (12 bits), P (8), interp |
-| 1 | period counter (9 bits signed), repeat (7 bits signed), LFSR (15) |
-| 6 | the delay line, 12 x 16 |
+### 8.4 Save state: ids $18 and $19
 
-The output filter (8.5) is not machine state (DESIGN 4.4), as for the PSG. A state saved with the
-voice on refuses to load with it off (as the ECS's flag).
+`$18`, 24 words: `sp0256.sv`'s words 0-19 (listed in its header: the sequencer and SPB640
+registers, the FIFO pointers, the parameter registers, the decoded coefficient copy kept apart, the
+excitation, the delay line, the last sample) and `intv_voice.sv`'s 20-22 (the accumulator; late,
+the held write's flag and address, mode, the window count, the snapshot; the held write's data);
+word 23 is 0. `$19`, 64 words: the FIFO (`intv_ram`). The format is version 4
+(`tools/savestate.py`; states of 0.0.15 and earlier, version 3, are refused). Header flags bit 1
+is set while the voice is on, and a state with it refuses to load into a core with the voice off
+(and the other way), as the ECS's bit 0. A save lands only while the chip is idle:
+`intv_ss_ctl`'s quiet point waits for `voice_busy` low (at most 181 clk_sys). The output chain
+is not machine state (DESIGN 4.4).
 
-### 8.5 The mix
+### 8.5 The output chain and the level
 
-The SP0256's 14-bit output (`mame_out`, 16-bit signed) is held for each 10 kHz sample, then on
-the PSG's 223.7 kHz tick: a one-pole high-pass at about 150 Hz (C3, C9/R25) and a two-pole low-pass
-at about 5 kHz (the LM324 stages), times a menu level, added to the PSG sum (PSG #1, or the ECS's
-3/4 sum) before the existing box filter, and saturated to 16 bits signed. The PSG sum is
-unipolar, so silence stays 0 and the speech's negative half has room. Level steps: Off, 25 %,
-50 %, 75 %, 100 %, where 100 % puts the speech's peak (meas: 13,480 of 32,767 over the five
-titles) near the PSG's (WSMLB 25,967 for one PSG). The default is open (section 9).
+The sample (16-bit signed) is clamped to 14 bits and shifted left 2 (MAME's HIGH_QUALITY value,
+the default "Clean"), or, with "Voice Sound: Chip DAC (7-bit)", taken as the PWM DAC's code
+(v >> 7, clamped to -64 .. 63) at full scale (<< 9). It is held between samples; at each of the
+PSG's 48 kHz strobes a one-pole high-pass at about 150 Hz (x minus a low-pass of x, alpha 5/256:
+the coupling capacitors) and two one-pole low-passes at about 5 kHz (alpha 1/2 each at 48 kHz:
+the LM324 stages), in 1/256ths, then times the level, added to the PSG sum (PSG #1, or the ECS's
+3/4 sum; 0 to 32,767) and saturated to signed 16 bits. The model is `sp0256.VoiceOut`.
+
+Level (menu "Voice Level", 0x220): Off, Half, Normal, Loud, Loudest = x0, x1/2, x1, x3/2, x2;
+default Loudest (x2). How it was chosen: the speech's peak over the five titles' MAME references
+is 13,480 (of 32,767, in the clean scale), one PSG's measured peak is 25,967 (WSMLB): x2 puts the
+speech's peak (about 27,000, a little less after the filters) at the PSG's, as the owner asked
+(speech about as loud as the game's sound); no console recording has been measured yet (section
+9, item 3), and the softer steps are there for games whose music is quiet. The saturation keeps a loud phrase over loud music from
+wrapping.
 
 ### 8.6 Menu and detection
 
-"Intellivoice: Auto / On / Off" (DESIGN 5.5 and 11 row 10). Auto: on when the CRC table's Voice flag,
-a CFG's `voice` / `voice_compat` var or a .rom compat tag says so (all already parsed by the
-loader, step 8). Off: `$0080-$0081` unmapped (reads `$FFFF`, as a console without the module),
-the module held in reset. Without `ivoice.bin` (data slot 0x105) the voice is off and the menu
-item says so. The Intellivoice's expansion bus `$0700-$0CFF` stays unmapped either way (DESIGN
-13 item 15). "Voice level" with the steps of 8.5.
+Three items in `interact.json` (11 items, 2,380 bytes minified; `apf_json_check` checks each
+against `core_top`'s register and power-up value):
 
-### 8.7 Bench plan
+| Item | Address | Values (default first) |
+|---|---|---|
+| Intellivoice | 0x1000021C | Auto (by cartridge), On, Off |
+| Voice Level | 0x10000220 | Loudest (as the PSG) = 4; Off, Half, Normal, Loud |
+| Voice Sound | 0x10000224 | Clean, Chip DAC (7-bit) |
 
-- `tb_voice` (Verilator, new): RTL = model sample by sample and state word by word, driven by
-  event lists: the six references' `voice_t.log`s (at 9,285 Hz, the RTL's enable set to match),
-  `voicetest`, and random streams from `sp0256.Stream` (every opcode, MODE, repeat 0-63, wraps,
-  noise, interpolation). VOICE_RTL pass needs 0 differences.
-- MAME refs: model = MAME is section 6.4 (VOICE_REF pass); RTL = model makes RTL = MAME.
-- Plants (each must fail the bench): LOADALL with a 6-bit amplitude; the half decle kept on a jump
-  into the FIFO; LRQ set at the write instead of the take; the repeat prefix kept for two
-  instructions; sign-and-magnitude coefficients; no interpolation; another LFSR tap; FIFO full at
-  63; a command taken while busy; the delay line not cleared at a period start; the halted poll
-  decoding the cleared registers; a save-state word not restored (`ss_voice_fifo`).
-- `tb_system`: the voicetest image through the RTL CPU and bus, the voice's samples hashed against
-  the system model (`intv_system.py` gains the voice at `$0080`); B-17's title with its MAME keys.
-- `tb_savestate`: saves mid-phrase and mid-FIFO stream, loads, and the samples continue unchanged.
-- `tb_loader`: the Auto rule on the voice titles and a CFG with `voice`.
+Auto is `intv_media`'s `voice_auto`: the loader's flag bit 1 (the CRC table's voice flag, a
+CFG's `voice = 1` or `voice_compat = 2 / 3`, a .rom's compatibility tag saying "supports" or
+"requires") with the ROM slot (5) loaded whole. On needs the ROM too: without `ivoice.bin` the
+voice is off whatever the menu says. Off (or no ROM) leaves `$0080-$0081` unmapped (reads `$FFFF`,
+writes dropped: a console without the module) and holds the chip in reset. The mode is taken at
+machine reset, as the ECS's. The expansion bus `$0700-$0CFF` stays unmapped (DESIGN 13 item 15).
+
+### 8.7 Benches (sim/tb/tb_voice.py; the others' voice cases)
+
+- `tb_voice` (chip: `tb_voice.sv`; bus: `tb_voicebus.sv`): RTL = model sample by sample, read by
+  read (with the sequencer's state at each read) and through save / reset / restore every 50,000
+  samples, on the six MAME references at 9,285 Hz (`ref:`), 24 random streams (`rnd:`), and on
+  the bus level 24 random programs at 10 kHz (`bus:`) and 12 at MAME's rate (`bmame:`), comparing
+  read values, sample cycles and values, and `late` = 0. Plants (20, each must be caught):
+  `loadall_amp6`, `fifo_jump_keep`, `lrq_at_write`, `prefix_two`, `sign_magnitude`,
+  `no_interp`, `lfsr_tap`, `fifo_full_63`, `cmd_while_busy`, `no_z_clear`, `halted_decode`,
+  `ss_word5`, `ss_fifo`, `rom_range`, `mac_shift`, `win_short`, `snap_live`, `held_lost`,
+  `acc_stops`, `ss_window`.
+- `tb_system`: `voicetest` (voice on, clean, default level), `voicedac` (the DAC sound at x3/2)
+  and `voice_off` through the RTL CPU and bus against `intv_system.py` with the voice: every bus
+  phase, every voice sample (its cycle and value: V lines), the mixed sound's hash with the voice
+  (`voice_mix`), `intv_voice`'s state words in the dumps, the round trips. Plants
+  `voice_mapped_off`, `voice_level2_lost`, `voice_mix_unsigned`, `voice_dac_bits`. (voicetest
+  makes no PSG sound, so the mix's saturation is not reached by these images.)
+- `tb_savestate`: `voicetest` (On) and B-17 Bomber (Auto, the CRC table's flag) with saves asked
+  for while a sample is made and in the busy window; the voice's samples (A lines) equal after
+  every load; V: a voice state into a core with the voice off is refused. Plants
+  `ss_voice_unchecked`, `ss_voice_acc_lost`, `ss_voice_busy_ignored`.
+- `tb_loader`: `voice auto` for every image (the table's voice titles, a forced voice CRC), a CFG
+  with `voice = 1` and with `voice_compat = 2`, a .rom with the "requires" tag, a voice title
+  without `ivoice.bin` (Auto off).
 
 ## 9 Open questions for the owner
 
-1. **Rate**: run the voice at 10 kHz as the evidence says (speech sounds 7.7 % higher and quicker
-   than in MAME), or at MAME's 9,285 Hz? A recording of the console with the Intellivoice
+1. **Rate** (built: 10 kHz; MAME's 9,285 Hz is a parameter): run the voice at 10 kHz as the
+   evidence says (speech sounds 7.7 % higher and quicker than in MAME), or at MAME's 9,285 Hz? A recording of the console with the Intellivoice
    ("Mattel Electronics Presents" at a B-17 power-up, through the RF or A/V output) settles it:
    the phrase lasts 1.88 s at 10 kHz and 2.03 s at 9,285 Hz.
-2. **DAC**: the chip has a 7-bit PWM; MAME outputs 14 bits. Keep 14 bits (cleaner), or offer a
-   "chip DAC" option? The same recording would show the 7-bit hiss between words.
-3. **Level**: the default voice level against game sounds (the module's thumbwheel); the
+2. **DAC** (built: Clean by default, "Chip DAC (7-bit)" in the menu): the chip has a 7-bit PWM;
+   MAME outputs 14 bits. The same recording would show the 7-bit hiss between words.
+3. **Level** (built: x2 by default, 8.5): the default voice level against game sounds (the module's thumbwheel); the
    recording at a known thumbwheel position gives a starting point.
 4. **DELTA_9 B4** (row 5): the recording of B-17's title would show which reading is right
    (MAME's or the instruction-set document's), as the two differ there.

@@ -80,8 +80,10 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   FIFO and the SP0256-012's sequencer, LPC filter and excitation, sample-stepped; `Stream`
   writes SP0256 programs for test streams; `compare DIR...` holds it to a
   `tools/refs/mame_voice.sh` run sample by sample, read by read and state by state
-  (VOICE_REF pass; the two documented tolerances in VOICE_NOTES 6.3); `selftest`, `say N`.
-  Needs the user's ivoice.bin.
+  (VOICE_REF pass; the two documented tolerances in VOICE_NOTES 6.3); `selftest`, `say N`;
+  `VoiceBus` (intv_voice.sv's sample enable and busy window on CPU cycles; the system model's
+  `$0080-$0081`), `VoiceOut` (the output chain); `gen [--check]` writes
+  `src/fpga/core/sp0256_fmt.svh`. Needs the user's ivoice.bin.
 - `psg.py`: the PSG model (build step 6): the AY-3-8914's registers,
   tone, noise and envelope generators, the 2-bit envelope select, mixer,
   DAC curve and the 48 kHz filter the core gives the Pocket, clocked from

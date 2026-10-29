@@ -21,7 +21,8 @@
 //   +script=F                 events, one per line, in order:
 //       save C KIND FILE      at machine cycle C (then at the first clk
 //                             where KIND holds, within 30 frames: any, midinst, busrq,
-//                             rowfetch, sound) ask for a save (0x00A0); on
+//                             rowfetch, sound; step 10: voice, a voice sample in the
+//                             making; voicewin, its busy window open) ask for a save (0x00A0); on
 //                             ok read the blob into FILE
 //       saveb C FILE          a save as "save C any FILE", and while it
 //                             reads the state two bridge reads at 0x50000000
@@ -170,6 +171,7 @@ module tb_savestate;
     logic        cfg_inlist = 1'b0;
     logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
     logic [1:0]  ecs_ovr = 2'd2;          // +ecs (step 9): the menu's ECS override; Off by default
+    logic [1:0]  voice_ovr = 2'd2;        // +voice (step 10): the menu's Intellivoice; Off by default
     logic        synth = 1'b0;
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic        ecs_full;
@@ -178,6 +180,7 @@ module tb_savestate;
     wire logic        ce_pix;
     wire logic [8:0]  hcnt, vline;
     wire logic [15:0] audio;
+    wire logic        voice_on;
     /* verilator lint_on UNUSEDSIGNAL */
     wire logic        mreset, live;
     wire logic [8:0]  vcnt;
@@ -217,6 +220,7 @@ module tb_savestate;
         .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .ecs_full(ecs_full),
+        .voice_override(voice_ovr), .voice_dac7(1'b0), .voice_level(3'd4), .voice_on(voice_on),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),
@@ -253,8 +257,8 @@ module tb_savestate;
     wire logic [15:0] dout = core.machine.dout, din = core.machine.din, addr = core.machine.addr;
 
     logic [31:0] hb = 32'h811C9DC5, hs_ = 32'h811C9DC5, ha = 32'h811C9DC5, hq = 32'h811C9DC5;
-    logic [31:0] hp = 32'h811C9DC5;
-    int          nb = 0, ns = 0, na = 0, nq = 0, np = 0;
+    logic [31:0] hp = 32'h811C9DC5, hv = 32'h811C9DC5;   // hv, nv: the voice's samples (step 10)
+    int          nb = 0, ns = 0, na = 0, nq = 0, np = 0, nv = 0;
     logic        set_req = 1'b0;          // the load's state is in: cycle := set_val
     longint      set_val = 0;
 
@@ -264,8 +268,12 @@ module tb_savestate;
             cyc <= set_val;
             $fdisplay(fd, "R set cycle %0d", set_val);
             hb = 32'h811C9DC5; hs_ = 32'h811C9DC5; ha = 32'h811C9DC5; hq = 32'h811C9DC5;
-            hp = 32'h811C9DC5; nb = 0; ns = 0; na = 0; nq = 0; np = 0;
+            hp = 32'h811C9DC5; nb = 0; ns = 0; na = 0; nq = 0; np = 0; hv = 32'h811C9DC5; nv = 0;
         end else begin
+            if (cyc >= 0 && core.machine.voice.c_done) begin
+                hv = fnv(hv, 32'(core.machine.voice.c_sample));
+                nv++;
+            end
             if (ce_stic && live && cyc >= 0) begin
                 hp = fnv(hp, {28'd0, colour});
                 np++;
@@ -294,10 +302,10 @@ module tb_savestate;
                 end
                 if (cyc >= 0 && (cyc + 1) % FRAME == 0) begin
                     $fdisplay(fd, "H %0d %08x %0d %08x %0d", cyc / FRAME, hb, nb, hs_, ns);
-                    $fdisplay(fd, "A %0d %08x %0d %08x %0d", cyc / FRAME, ha, na, hq, nq);
+                    $fdisplay(fd, "A %0d %08x %0d %08x %0d %08x %0d", cyc / FRAME, ha, na, hq, nq, hv, nv);
                     $fdisplay(fd, "P %0d %08x %0d", cyc / FRAME, hp, np);
                     hb = 32'h811C9DC5; hs_ = 32'h811C9DC5; ha = 32'h811C9DC5; hq = 32'h811C9DC5;
-                    hp = 32'h811C9DC5; nb = 0; ns = 0; na = 0; nq = 0; np = 0;
+                    hp = 32'h811C9DC5; nb = 0; ns = 0; na = 0; nq = 0; np = 0; hv = 32'h811C9DC5; nv = 0;
                 end
                 cyc <= cyc + 1;
             end
@@ -473,6 +481,8 @@ module tb_savestate;
             "midinst":  return ce_fired && !core.machine.fetch && !hold && phase != 3'd4;
             "busrq":    return core.machine.busak;
             "rowfetch": return core.machine.stic.cp_on && !cp_q;
+            "voice":    return core.machine.voice_busy;
+            "voicewin": return core.machine.voice.win != 4'd0;
             "sound":    return tick_fired && (core.machine.psg.lv[0] != 4'd0
                                || core.machine.psg.lv[1] != 4'd0 || core.machine.psg.lv[2] != 4'd0);
             default:    return 1'b1;
@@ -702,6 +712,7 @@ module tb_savestate;
             end
             if ($value$plusargs("ecs=%d", p)) ecs_ovr = 2'(p);
             if ($value$plusargs("synth=%d", p)) synth = p != 0;
+            if ($value$plusargs("voice=%d", p)) voice_ovr = 2'(p);
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -713,6 +724,7 @@ module tb_savestate;
         begin
             string ecs_f;
             if ($value$plusargs("ecsrom=%s", ecs_f)) load_file(ecs_f, 4'd4, n);
+            if ($value$plusargs("ivoice=%s", ecs_f)) load_file(ecs_f, 4'd5, n);
         end
         n = 0;
         if ($value$plusargs("cart=%s", cart_f)) load_file(cart_f, 4'd0, n);
@@ -731,6 +743,7 @@ module tb_savestate;
         repeat (8) @(negedge clk);            // the results reach intv_cart's registers
         $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
         $fdisplay(fd, "L ecs mode %0d", core.ecs_mode);
+        $fdisplay(fd, "L voice mode %0d", core.voice_mode);
         repeat (10) @(negedge clk);
         if (hold_on == 0) hold_req = 1'b0;
 

@@ -95,3 +95,10 @@ to `sim/work*` and are not committed.
   value $F), ecshook (the same without the CFG's ECS flag), ecsavail (no
   ECS feature: the Auto rule's attached mode, IntyBASIC's ECS RAM test),
   cart4000 (a cartridge at $4000: the ECS off). Each prints PASS / FAIL.
+- `hw/`: the hardware measurement cartridges for the owner's console on a flash cartridge
+  (docs/HW_TESTS.md): `hwlib.asm` (the EXEC cartridge header, the ISR take-over, text output)
+  and one program each: `hw_steal` (the cycles the STIC takes a frame), `hw_intlate` (where the
+  VBlank interrupt is taken), `hw_rowcopy` (when each card row is copied), `hw_cpuodd` (the
+  undefined CPU cases), `hw_ecskeys` (the ECS keyboard matrix, raw). `build_hw.py build OUTDIR`
+  writes NAME.bin + NAME.cfg; `build_hw.py run NAME ...` runs one in the Python model and writes
+  its pictures. Built, never committed.

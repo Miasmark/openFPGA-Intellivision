@@ -32,7 +32,10 @@
 //           (0x0190), red open file (0x0192), tan read (0x0180)
 //       13  core_bridge_cmd's target command state: black idle, yellow
 //           waiting for the host's ok to Ready to run (0x0140), orange
-//           waiting for a data slot command's ok, purple any other
+//           waiting for a data slot command's ok, purple any other (0.0.15:
+//           Ready to run goes out after the CFG fetch, so on a load the
+//           fetch runs with this black; yellow after it only says the
+//           Pocket has not yet started the core)
 //       14  "all complete" (0x008F) seen since power-on: green, else black
 //       15  a 0x0082 for the cartridge slot seen since power-on: green,
 //           else black

@@ -43,6 +43,17 @@
 //     loader: no cartridge). The 0x0082 size is kept until the next one for
 //     the slot, so a session that does not reload the cartridge checks
 //     against the last load's size.
+//   - setup_done (core_top: status_setup_done, with PLL lock): rises when the
+//     first load since configuration has reached len_valid (D_SET), the CFG
+//     fetch finished whatever its result, so the core reports APF "setup"
+//     ("Pocket loads assets, core may request dataslot reads") while it
+//     fetches and sends Ready to run (0x0140, core_bridge_cmd queues it on
+//     setup_done's rising edge) after. The owner's 0.0.14 photos (2026-10-28)
+//     showed why: with setup_done at PLL lock, 0x0140 went out first and the
+//     Pocket acks it only once it starts the core, so the fetch's 0x0190,
+//     queued behind it in core_bridge_cmd, timed out on every load. Safety:
+//     with no "all complete" SAFE clocks (3 s) after configuration, setup_done
+//     rises anyway, in case a host flow waits for Ready to run before loading.
 //
 // SPDX-License-Identifier: MIT
 
@@ -55,7 +66,8 @@ module apf_datatable #(
     parameter int          ENTRIES = 16,       // pairs scanned
     parameter bit          FETCH   = 1'b1,     // the CFG found by name (apf_cfgfetch)
     parameter int          WD_BITS = 26,       // apf_cfgfetch's time limit per command (2^WD_BITS clk_74a)
-    parameter int          TO_HOLD = 300000000 // apf_cfgfetch's hold after a timeout (clk_74a: 4 s)
+    parameter int          TO_HOLD = 300000000, // apf_cfgfetch's hold after a timeout (clk_74a: 4 s)
+    parameter int          SAFE    = 222750000  // setup_done without an "all complete" (clk_74a: 3 s)
 ) (
     input  wire logic        clk,             // clk_74a
     input  wire logic        allcomplete,
@@ -105,7 +117,8 @@ module apf_datatable #(
     output logic             d_ac,
     output logic             d_req,
     output logic             d_upd,
-    output logic [1:0]       d_phase
+    output logic [1:0]       d_phase,
+    output logic             setup_done       // core_bridge_cmd's status_setup_done (with PLL lock): see above
 );
 
     typedef enum logic [3:0] {D_IDLE, D_ID, D_IDW, D_SIZEW, D_NEXT, D_DECIDE, D_FETCH, D_FWAIT, D_SET} dstate_t;
@@ -129,6 +142,8 @@ module apf_datatable #(
     end
 
     logic reached = 1'b0;                      // len_valid set for the current load
+    logic [$clog2(SAFE + 1) - 1:0] safe_n = '0;
+    initial setup_done = 1'b0;
     initial begin d_ac = 1'b0; d_upd = 1'b0; end
     assign d_req   = req_seen;
     assign d_phase = st == D_FWAIT ? 2'd1 : reached ? 2'd2 : 2'd0;
@@ -136,6 +151,12 @@ module apf_datatable #(
     always_ff @(posedge clk) begin
         ac_d <= allcomplete;
         if (allcomplete) d_ac <= 1'b1;
+        // the safety: no "all complete" SAFE clocks after configuration (a host flow that would
+        // wait for Ready to run before loading): setup done all the same
+        if (!setup_done && !d_ac) begin
+            if (32'(safe_n) == 32'(SAFE)) setup_done <= 1'b1;
+            else safe_n <= safe_n + 1'b1;
+        end
         if (upd && upd_id == SLOT_ID[15:0]) d_upd <= 1'b1;
         dt_wren <= 1'b0;
         f_start <= 1'b0;
@@ -237,6 +258,7 @@ module apf_datatable #(
             D_SET: begin
                 len_valid <= allcomplete;
                 reached <= 1'b1;
+                setup_done <= 1'b1;
                 st <= D_IDLE;
             end
             default: st <= D_IDLE;

@@ -140,12 +140,13 @@ def fetch_expect(img):
     size, 2 found with no size in the table (img['nodt']: the length found by reading), 3 none
     beside the cartridge (none, or another name: img['miss']), 4 the host refused the read (the
     table's size past the file: img['cfglenadj']), 5 a cartridge path without an extension
-    (img['nodot']), 7 a command the host never answers (img['nohost'], a command number, or
-    img['rtrhold']: Ready to run never acked, so the first command never runs: 0.0.14's watchdog)."""
+    (img['nodot']), 7 a command the host never answers (img['nohost'], a command number: 0.0.14's
+    watchdog). Since 0.0.15 Ready to run (0x0140) goes out after the fetch, so a host that acks it
+    late (img['rtrdelay']) or never (img['rtrhold']) no longer holds the fetch up."""
     cfg = img.get('cfg')
     if img.get('neg') == 'nocart':
         return 0, None
-    if img.get('nohost') is not None or img.get('rtrhold'):
+    if img.get('nohost') is not None:
         return 7, None
     if img.get('nodot'):
         return 5, None
@@ -158,8 +159,6 @@ def fetch_expect(img):
 
 def fetch_to(img):
     """apf_cfgfetch's to_cmd: the command that timed out (1 get filename, 2 open, 4 read)."""
-    if img.get('rtrhold'):
-        return 1
     return {0x190: 1, 0x192: 2, 0x180: 4}.get(img.get('nohost'), 0)
 
 
@@ -219,8 +218,11 @@ def expect(img, tab, bios):
     # cartridge); no 0x008A; the length handed on; core_bridge_cmd's target state: waiting for
     # Ready to run's ok (14) or a held command's (15) when the line is printed (+late answers
     # them only after it: the late line shows 0)
+    # (0.0.15) setup_done (status_setup_done, Ready to run) up after the fetch; early: it was up
+    # before all complete (img['acdelay']: the host started loading after setup_done's safety)
     tst = 14 if img.get('rtrhold') else 15 if img.get('nohost') is not None else 0
-    L.append('diag ac 1 req %d upd 0 phase 2 tstate %d' % (0 if img.get('neg') == 'nocart' else 1, tst))
+    L.append('diag ac 1 req %d upd 0 phase 2 tstate %d sd 1 early %d' % (
+        0 if img.get('neg') == 'nocart' else 1, tst, 1 if img.get('acdelay') else 0))
     cfgslot = (2 << 2) if fcfg is not None else 0
     slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10
     if img.get('late'):
@@ -426,6 +428,10 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
         args.append('+nohost=%x' % img['nohost'])
     if img.get('rtrhold'):
         args.append('+rtrhold=1')
+    if img.get('rtrdelay'):
+        args.append('+rtrdelay=%d' % img['rtrdelay'])
+    if img.get('acdelay'):
+        args.append('+acdelay=%d' % img['acdelay'])
     if img.get('late'):
         args.append('+late=1')
     if img.get('cfglenadj'):
@@ -645,6 +651,10 @@ PLANTS = [
      "assign loader_wr = bridge_wr;", 'a late CFG read\'s bytes reach the loader'),
     ('fetch_port_bridge', 'apf_cfgfetch.sv', "assign mem_own = b_we || (cph == 2'd0",
      "assign mem_own = 1'b0 && (cph == 2'd0", 'CFG fetch: the struct RAM port never given to the steps'),
+    # 0.0.15: Ready to run at PLL lock again (0.0.14's wiring): the fetch's first command queues behind
+    # it and the late ack (RTRDLY) runs the watchdog out
+    ('rtr_at_lock', 'apf_datatable.sv', "    initial setup_done = 1'b0;", "    initial setup_done = 1'b1;",
+     'Ready to run before the CFG fetch'),
     ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
      "end else if (!got_cart && !rescan) begin", 'the CFG entry taken for the cartridge without a cartridge entry'),
 ]
@@ -653,7 +663,7 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
                 'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT',
-                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL')
+                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL')
 
 
 def main():
@@ -754,9 +764,19 @@ def main():
             imgs.append(dict(z, name='cfg fetch: read answered after the timeout', crc='NOHOSTRD', nohost=0x180,
                              late=True))
             imgs.append(dict(z, name='cfg fetch: Ready to run never acked', crc='RTRHOLD', rtrhold=True))
+            # 0.0.15: the owner's Pocket acks Ready to run only once it starts the core (0.0.14's photos:
+            # later than the 0.9 s watchdog on a first load, never in a Core Settings reload): 600,000
+            # clk_74a after all complete here (the watchdog: 2^18); with Ready to run after the fetch
+            # the CFG still loads, also when the host starts loading after setup_done's safety (acdelay)
+            imgs.append(dict(z, name='cfg fetch: Ready to run acked late', crc='RTRDLY', rtrdelay=600000))
+            imgs.append(dict(z, name='cfg fetch: loading after the setup safety', crc='ACDELAY',
+                             acdelay=(1 << 24) + 2000000))
             if 'zoo1' in s8 and 'synthetic:b' in byname:
                 imgs.append(dict(s8['zoo1'], name='cfg fetch: get filename answered late, then a reload',
                                  crc='NOHOSTRL', nohost=0x190, late=True, reload=byname['synthetic:b'],
+                                 cfgclear2=True, dtfirst=0))
+                imgs.append(dict(s8['zoo1'], name='cfg fetch: Ready to run acked late, then a reload',
+                                 crc='RTRDLYRL', rtrdelay=600000, reload=byname['synthetic:b'],
                                  cfgclear2=True, dtfirst=0))
         # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
         # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),

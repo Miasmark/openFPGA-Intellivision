@@ -126,7 +126,7 @@ module tb_loader;
         .clk(clk_74a), .reset_n(reset_n),
         .bridge_endian_little(1'b0), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd),
         .bridge_rd_data(cmd_bridge_rd_data), .bridge_wr(bridge_wr), .bridge_wr_data(bridge_wr_data),
-        .status_boot_done(1'b1), .status_setup_done(1'b1), .status_running(reset_n),
+        .status_boot_done(1'b1), .status_setup_done(dt_setup_done), .status_running(reset_n),
         .dataslot_requestread(), .dataslot_requestread_id(),
         .dataslot_requestread_ack(1'b1), .dataslot_requestread_ok(1'b1),
         .dataslot_requestwrite(dataslot_requestwrite), .dataslot_requestwrite_id(dataslot_requestwrite_id),
@@ -176,6 +176,7 @@ module tb_loader;
     wire logic [15:0] dataslot_update_id;
     wire logic [1:0]  d_phase;
     wire logic [3:0]  tstate;
+    wire logic        dt_setup_done;          // core_bridge_cmd's status_setup_done (0.0.15: after the fetch)
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic        cfg_wr_ok;
     /* verilator lint_on UNUSEDSIGNAL */
@@ -185,8 +186,9 @@ module tb_loader;
     wire logic [2:0]  fetch_code;
     /* verilator lint_on UNUSEDSIGNAL */
     // the fetch's watchdog: 2^18 clk_74a (3.5 ms; the Pocket's build: 2^26), past the bench's
-    // longest answer and inside wait_ready's limit; the hold after a timeout 1,000 (the Pocket's: 4 s)
-    apf_datatable #(.WD_BITS(18), .TO_HOLD(1000)) dtab (
+    // longest answer and inside wait_ready's limit; the hold after a timeout 1,000 (the Pocket's: 4 s);
+    // setup_done's safety 2^24 clk_74a (the Pocket's: 3 s), past the longest load from configuration
+    apf_datatable #(.WD_BITS(18), .TO_HOLD(1000), .SAFE(1 << 24)) dtab (
         .clk(clk_74a), .allcomplete(dataslot_allcomplete),
         .wr_req(dataslot_requestwrite), .wr_id(dataslot_requestwrite_id),
         .wr_size(dataslot_requestwrite_size),
@@ -201,7 +203,7 @@ module tb_loader;
         .fetch_res(fetch_res), .fetch_code(fetch_code), .fetch_len(fetch_len),
         .upd(dataslot_update), .upd_id(dataslot_update_id),
         .fetch_to(fetch_to), .cfg_wr_ok(cfg_wr_ok), .loader_wr(loader_wr),
-        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase)
+        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase), .setup_done(dt_setup_done)
     );
 
     // ---------------------------------------------------------------- DUT
@@ -290,6 +292,14 @@ module tb_loader;
     // 0.0.14: the host never answers target command +nohost=K (hex; 0: any) or never acks Ready to
     // run (+rtrhold=1); with +late=1 it answers them once the first load has mapped
     int nohost = -1, rtrhold = 0, late = 0;
+    // 0.0.15: +rtrdelay=N: the host acks Ready to run only N clk_74a after it sent all complete (the
+    // owner's Pocket: more than the 0.9 s watchdog on a first load, never during a Core Settings
+    // reload, 0.0.14's photos); +acdelay=N: the host starts loading only N clk_74a after configuration
+    // (setup_done's safety must raise it first)
+    int rtrdelay = 0, acdelay = 0;
+    longint cyc74 = 0, ac_cyc = -1;
+    bit early = 1'b0;                          // setup_done was up when all complete was sent
+    always @(posedge clk_74a) cyc74 <= cyc74 + 1;
     bit hold = 1'b1;
     string cartpath = "", cfgpath = "", cart2path = "", cfg2path = "";
     bit    reloaded = 1'b0, cfg_open = 1'b0;
@@ -388,6 +398,8 @@ module tb_loader;
         if (hold && ((nohost >= 0 && (nohost == 0 || t0[15:0] == 16'(nohost)) && t0[15:0] != 16'h0140)
                      || (rtrhold != 0 && t0[15:0] == 16'h0140)))
             return;                                                // not answered (yet)
+        if (rtrdelay > 0 && t0[15:0] == 16'h0140 && (ac_cyc < 0 || cyc74 - ac_cyc < longint'(rtrdelay)))
+            return;                                                // the Pocket acks it late
         ntarget++;
         bwrite(32'hF800_1000, {16'h6275, t0[15:0]});               // busy
         bread(32'hF800_1020, p20);
@@ -571,6 +583,8 @@ module tb_loader;
         void'($value$plusargs("cfg2same=%d", cfg2same));
         void'($value$plusargs("nohost=%h", nohost));
         void'($value$plusargs("rtrhold=%d", rtrhold));
+        void'($value$plusargs("rtrdelay=%d", rtrdelay));
+        void'($value$plusargs("acdelay=%d", acdelay));
         void'($value$plusargs("late=%d", late));
         void'($value$plusargs("cartpath=%s", cartpath));
         void'($value$plusargs("cfgpath=%s", cfgpath));
@@ -594,13 +608,27 @@ module tb_loader;
         repeat (50) @(negedge clk_74a);
 
         // ---- the host loads the slots
+        if (acdelay > 0) begin
+            while (cyc74 < longint'(acdelay)) begin serve_target(); repeat (1000) @(negedge clk_74a); end
+        end
         host_cmd(16'h0010, 32'd0, 32'd0);
         if (dtfirst != 0) send_table();
         for (int s = 0; s < 6; s++) if (floaded[s] && (s != 1 || cfgpush != 0)) send_slot(s);
         if (dtfirst == 0) send_table();
+        early = dt_setup_done;
         host_cmd(16'h008F, 32'd0, 32'd0);
+        ac_cyc = cyc74;
         host_cmd(16'h0011, 32'd0, 32'd0);
         wait_ready();
+        // the host serves the core's commands until its request channel is idle (Ready to run acked),
+        // or a bound: held commands (+nohost, +rtrhold) stay pending
+        begin
+            longint t0c;
+            t0c = cyc74;
+            while (tstate != 4'd0 && cyc74 - t0c < longint'(rtrdelay) + 200000) begin
+                serve_target(); repeat (1000) @(negedge clk_74a);
+            end
+        end
 
         // ---- status
         if ($test$plusargs("debug"))
@@ -609,7 +637,8 @@ module tb_loader;
                   crc, words, layout, flags, hit, err, len_st);
         $fdisplay(outf, "fetch res %0d len %0d to %0d", fetch_res, fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0,
                   fetch_to);
-        $fdisplay(outf, "diag ac %0d req %0d upd %0d phase %0d tstate %0d", d_ac, d_req, d_upd, d_phase, tstate);
+        $fdisplay(outf, "diag ac %0d req %0d upd %0d phase %0d tstate %0d sd %0d early %0d", d_ac, d_req, d_upd,
+                  d_phase, tstate, dt_setup_done, early);
         // a command held past the watchdog, answered now (+late): a read's bytes must not reach
         // the loader (the CFG slot stays empty), and the next commands must still work
         if (late != 0) begin

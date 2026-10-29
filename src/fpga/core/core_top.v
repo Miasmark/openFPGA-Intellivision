@@ -464,7 +464,10 @@ end
 // bridge host commands
 // synchronous to clk_74a
     wire            status_boot_done = pll_core_locked_s;
-    wire            status_setup_done = pll_core_locked_s; // rising edge triggers a target command
+    wire            dt_setup_done;          // apf_datatable: the first load's CFG fetch is done (or 3 s, no load)
+    // Ready to run (0x0140) goes out on this rising edge (core_bridge_cmd); it waits for the CFG fetch so
+    // the fetch's own requests are not queued behind it (the Pocket acks 0x0140 only when it starts the core)
+    wire            status_setup_done = pll_core_locked_s & dt_setup_done;
     wire            status_running = reset_n; // we are running as soon as reset_n goes high
 
     wire            dataslot_requestread;
@@ -684,6 +687,7 @@ apf_datatable #(
     .d_req          ( d_req ),
     .d_upd          ( d_upd ),
     .d_phase        ( d_phase ),
+    .setup_done     ( dt_setup_done ),
     .loader_wr      ( loader_bridge_wr )      // the CFG slot's writes only for a fetch read
 );
 

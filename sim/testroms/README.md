@@ -57,6 +57,12 @@ to `sim/work*` and are not committed.
   them) or red in the border. Under MAME's rules (tools/stic.py
   `mob_rules`) it counts 5 fails a pass (M1, M4, M5), and so does MAME
   itself (`tools/refs/mame_exec_prog.sh`, docs/STIC_NOTES.md 6).
+- `voicetest.py`: step 10, builds the Intellivoice test program for the EXEC slot (ROMW 10)
+  with test streams written by `tools/sp0256.py` `Stream`: every data opcode in every MODE
+  through the FIFO, jumps into and out of the FIFO, the resident commands 1-42, dropped
+  commands and FIFO words, resets mid-speech, reads past the FIFO's head. Run in MAME with
+  `tools/refs/mame_voice.sh` (`EXEC=`), compared by `tools/sp0256.py compare`
+  (docs/VOICE_NOTES.md 7).
 - `sticmob_cart.py`: builds sticmob.asm as a cartridge image (8 KiB words
   at $5000, raw big-endian, with a `[mapping]` file on request) that the
   real EXEC starts: a cartridge header and a title with start-up code

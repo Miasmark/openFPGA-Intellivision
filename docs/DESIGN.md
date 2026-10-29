@@ -550,7 +550,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | Noise taps unverified on the 8914 | wrong noise sound | default bit0^bit3, recording later | L-DSL |
 | Palette hue undecided | wrong colours | MAME palette first, capture later | L-SM; L-DSL |
 | PAL timing undocumented | no PAL support | defer to step 12; ask the owner for hardware | L-WIKI; L-PSS |
-| SP0256 SETMSB_3 differs (MAME loads 8-bit pitch; GI spec does not) | speech desync | walk the IVOICE ROM and game streams with a script | L-DSL |
+| SP0256 SETMSB_3 differs (MAME loads 8-bit pitch; GI spec does not) | speech desync | walk the IVOICE ROM and game streams with a script | L-DSL **(build step 10)** moot: no title's stream and no resident phrase uses SETMSB_3 (docs/VOICE_NOTES.md 5 row 4) |
 | 26 images without proven layout; 6 only estimated | some games will not map | user .cfg; owner checks; menu message | L-TA |
 | Pocket save-state behaviour undocumented (timing, size limit, size changing per game) | save or sleep fails | fixed 150 KiB blob; test on the Pocket early (step 7) | L-PSS |
 | Clean-room slip (reading Intv_MiSTer, copying jzIntv code) | licence problem | keep a reference list per module with page or sheet; review notes before commit | PJ |
@@ -656,6 +656,8 @@ The lanes' reports and supporting files are under `research/<lane>/` in the proj
 - MAME STIC constants are derived from jzIntv documents (stic.h:45), so "MAME and wiki agree" counts as one source.
 
 ## 14 Addendum: Intellivoice Service Manual (owner, 2026-10-24)
+**(build step 10)** The facts, the sources' disagreements (MAME's 9,285 Hz against the chip's 10 kHz
+among them), the model's results against MAME and the RTL plan are in docs/VOICE_NOTES.md.
 See research/intellivoice-manual/REPORT.md (docs/Intellivoice_Service_Manual.pdf, Model 3330). It confirms the
 3.12 MHz resonator (Y1) and the chip set (74LS12, SPB640, SP0256, LM324, LM358), shows the module passes the
 cartridge bus through unchanged, and gives the full analog chain (PWM -> ~150 Hz high-pass -> two 5 kHz active

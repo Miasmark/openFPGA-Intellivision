@@ -76,6 +76,12 @@ simulator and comes first. Python 3, standard library only (`stic_frames.py impo
   from register $2C as it is when each pixel is drawn (so a picture is
   handed out at line 24 of the next frame). Facts, sources and
   disagreements: `docs/STIC_NOTES.md`.
+- `sp0256.py`: the Intellivoice model (build step 10; docs/VOICE_NOTES.md): the SPB640
+  FIFO and the SP0256-012's sequencer, LPC filter and excitation, sample-stepped; `Stream`
+  writes SP0256 programs for test streams; `compare DIR...` holds it to a
+  `tools/refs/mame_voice.sh` run sample by sample, read by read and state by state
+  (VOICE_REF pass; the two documented tolerances in VOICE_NOTES 6.3); `selftest`, `say N`.
+  Needs the user's ivoice.bin.
 - `psg.py`: the PSG model (build step 6): the AY-3-8914's registers,
   tone, noise and envelope generators, the 2-bit envelope select, mixer,
   DAC curve and the 48 kHz filter the core gives the Pocket, clocked from

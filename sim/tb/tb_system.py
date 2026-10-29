@@ -156,6 +156,14 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('nfl_auto', 'Super NFL Footbal (USA) (Proto).zip', None, 24, (0xFF, 0xFF), 'stic'),
           ('atlantis_auto', 'Atlantis (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
           ('bodyslam_auto', 'Body Slam! - Super Pro Wrestling (USA).zip', None, 10, (0xFF, 0xFF), 'stic')]
+# the hardware measurement cartridges (sim/testroms/hw/build_hw.py, docs/HW_TESTS.md): RTL = model on
+# the owner's test programs before they go to his console. Long runs (hundreds of frames, to their
+# results screens), so only by name (--only hw_steal,...), never in --all
+HW_IMAGES = [('hw_steal', ('hw', 'hw_steal'), None, 460, (0xFF, 0xFF), 'stic'),
+             ('hw_intlate', ('hw', 'hw_intlate'), None, 230, (0xFF, 0xFF), 'stic'),
+             ('hw_rowcopy', ('hw', 'hw_rowcopy'), None, 1150, (0xFF, 0xFF), 'stic'),
+             ('hw_cpuodd', ('hw', 'hw_cpuodd'), None, 60, (0xFF, 0xFF), 'stic'),
+             ('hw_ecskeys', ('hw', 'hw_ecskeys'), None, 60, (0xFF, 0xFF), 'stic')]
 # a cartridge file's CFG (step 8): the model and the bench load it with the image
 CFG_OF = {}
 # step 9: the ECS of an image: the menu override ('auto', 'on', 'off'), the synthesizer,
@@ -173,6 +181,10 @@ ECS_OF = {
     'ecsboot': dict(ovr='auto', auto=1),
     'ecsastro': dict(ovr='auto', auto=2),
     'ecssound': dict(ovr='auto', auto=1, passes=(2, 3)),
+    # hw_ecskeys (attached under Auto): one key, a row pair, three corners, Shift + a key; its
+    # results are on screen, not in ecstest's scan table (scans=False)
+    'hw_ecskeys': dict(ovr='auto', auto=2, scans=False, presses='20-28:ecs:W,28-36:ecs:W+Q,36-44:ecs:W+Q+1,'
+                                                    '44-52:ecs:SHIFT+L'),
     'ecshook': dict(ovr='auto', auto=1, passes=(2, 3)),
     'ecsavail': dict(ovr='auto', auto=2, passes=(2, 3, 4)),
     'cart4000': dict(ovr='auto', auto=0, passes=(2, 3)),
@@ -250,6 +262,23 @@ def step9_image(name, work):
     return path
 
 
+def hw_image(name, work):
+    """The image path of a hardware measurement cartridge (sim/testroms/hw/build_hw.py), built
+    into work with its CFG (CFG_OF)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('build_hw', os.path.join(TESTROMS, 'hw', 'build_hw.py'))
+    bh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bh)
+    _, image, cfg = bh.build_one(name)
+    path, cpath = os.path.join(work, name + '.bin'), os.path.join(work, name + '.cfg')
+    with open(path, 'wb') as f:
+        f.write(image)
+    with open(cpath, 'w') as f:
+        f.write(cfg)
+    CFG_OF[path] = cpath
+    return path
+
+
 def ecs_selfcheck(name, e):
     """Step 9: the model's ECS mode is the image's Auto mode; ecstest / ecssynth stored the
     scans ECSKBD_WANT has for the keys held in each ISR's frame; the step-9 cartridges printed
@@ -270,7 +299,7 @@ def ecs_selfcheck(name, e):
             if not vals or any(v != 0xFFFF for v in vals):
                 probs.append('no ECS ROM: $%04X read %s, want $FFFF' % (a, ' '.join('$%04X' % v for v in vals) or 'never'))
     ram = e.snaps[e.ncyc]['sysram']
-    if want.get('presses'):
+    if want.get('presses') and want.get('scans', True):     # ecstest's / ecssynth's scan table
         presses = isys.parse_presses(want['presses'])
         names = {}
         for f1, f2, (_, bits) in presses:
@@ -1805,7 +1834,7 @@ def main():
 
     imgs = IMAGES
     if a.only:
-        imgs = [i for i in imgs if i[0] in a.only.split(',')]
+        imgs = [i for i in IMAGES + HW_IMAGES if i[0] in a.only.split(',')]
     carts = {}
     execs = {}
     exps = {}
@@ -1819,6 +1848,8 @@ def main():
                 cart, _ = step8_image(zipname[1], work)
             elif isinstance(zipname, tuple) and zipname[0] == 'step9':
                 cart = step9_image(zipname[1], work)
+            elif isinstance(zipname, tuple) and zipname[0] == 'hw':
+                cart = hw_image(zipname[1], work)
             elif isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
                 cart = os.path.join(work, name + '.bin')
                 with open(cart, 'wb') as f:

@@ -12,8 +12,9 @@ program). Build:
 
 `run` boots the cartridge on the real EXEC in the Python model (`tools/intv_system.py`, the
 user's exec.bin / grom.bin), writes the pictures and prints the program's variables; `--tools`
-takes the model from another tree (the predictions below compare dev 0.0.12 with branch
-`cputime`, which adds the 2-cycle bus request exit), `--intrm-shift` what-ifs the interrupt
+takes the model from another tree (the predictions below are those of the core from 0.0.13 on,
+with the 2-cycle bus request exit of GI's figures; the values before 0.0.13 are kept for
+comparison), `--intrm-shift` what-ifs the interrupt
 sampling point. Every program starts like a normal cartridge (header at $5000, "code after the
 title"), takes the EXEC's ISR vector ($0100) and never returns to the EXEC (the technique of
 `sim/testroms/sticmob_cart.py`). Results are read off the screen.
@@ -37,8 +38,8 @@ Stolen cycles a frame = DIFF x 52 / 120.
 
 | source | OFF | ON | DIFF | stolen / frame |
 |---|---|---|---|---|
-| model, dev (no exit cycles) | 33439 (min 33438) | 30180 (min 30179) | 3259 | 1,412 |
-| model, branch cputime (2 NACT exit, G82 Fig 16) | 33439 | 30120 | 3319 | 1,438 |
+| **model, the core from 0.0.13 (2 NACT exit, G82 Fig 16)** | **33439** | **30120** | **3319** | **1,438** |
+| model before 0.0.13 (no exit cycles) | 33439 (min 33438) | 30180 (min 30179) | 3259 | 1,412 |
 | MAME (takes no cycles, STIC_NOTES T2) | - | - | ~0 | ~0 |
 
 The two models differ by 60 passes (2 cycles x 13 requests a frame x 120 / 52): far over the
@@ -61,9 +62,9 @@ cycles later):
 | model | k0 k1 k2 k3 k4 k5 |
 |---|---|
 | D = -3 | 1C 1C 1C 1C 1C 1C |
-| D = -2, or branch cputime (exit +2) | 1D 1C 1C 1C 1C 1C |
+| **the core from 0.0.13 (D = 0 with the exit +2), = D = -2 before** | **1D 1C 1C 1C 1C 1C** |
 | D = -1 | 1D 1D 1C 1C 1C 1C |
-| **dev, D = 0** | **1D 1D 1D 1C 1C 1C** |
+| before 0.0.13, D = 0 | 1D 1D 1D 1C 1C 1C |
 | D = +1 | 1C 1B 1B 1B 1B 1B |
 | D = +2 | 1C 1C 1B 1B 1B 1B |
 | D = +3 | 1C 1C 1C 1B 1B 1B |
@@ -84,8 +85,8 @@ the writer's column. Model, the number of '#' in that row (columns 1-19, row 3 i
 
 | step | 0-4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| dev | 19 | 19 | 19 | 18 | 17 | 16 | 15 | 14 | 13 | 12 | 11 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 |
-| cputime | 19 | 18 | 17 | 16 | 15 | 14 | 13 | 12 | 11 | 10 | 9 | 8 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 |
+| **the core from 0.0.13** | **19** | **18** | **17** | **16** | **15** | **14** | **13** | **12** | **11** | **10** | **9** | **8** | **8** | **7** | **6** | **5** | **4** | **3** | **2** | **1** |
+| before 0.0.13 | 19 | 19 | 19 | 18 | 17 | 16 | 15 | 14 | 13 | 12 | 11 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 |
 | MAME timers | 19 | 19 | 19 | 19 | 19 | 18 | 17 | 16 | 15 | 14 | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 6 | 5 | 4 |
 
 (Rows 0-2 OLD, rows 4-10 NEW in all.) A row that shows the row above it again (its number
@@ -122,9 +123,11 @@ B>A (column c driven low, rows read); '#' = the line reads 0. Key positions: too
 | three corners (1, 2), (3, 2), (1, 5) | nothing (masking: the keys join a line driven high) | nothing |
 | MAME (rows ANDed, port A reads $FF) | every key at its place, no masking | nothing |
 
-## Still to do on the RTL
+## On the RTL
 
-The programs ran in the Python model only (the 0.0.13 gates held the simulation slots). Before
-the owner's photos come back: run each in tb_system (RTL = model) for hw_steal, hw_intlate and
-hw_rowcopy (the phase lock and the stolen cycles), hw_cpuodd (the undefined cases in
-cp1610.sv), and hw_ecskeys with ECS keys pressed.
+All five run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys`; HW_IMAGES,
+never in `--all`: 60 to 1,150 frames each) with the RTL equal to the model on every bus phase and
+picture, straight and through the bench's save/restore round trips, at the core from 0.0.13
+(2026-10-29): hw_steal 460 frames, hw_intlate 230, hw_rowcopy 1,150 (to step 12), hw_cpuodd 60,
+hw_ecskeys 60 with ECS keys held (W; W+Q; W+Q+1; Shift+L) under Auto (attached). So the screens the
+owner photographs are the model's predictions above, exactly.

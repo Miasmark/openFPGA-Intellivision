@@ -243,7 +243,7 @@ of that speech, and starts a 20-decle stream that runs past the FIFO's head. Run
 (`EXEC=`) it is the `voicetest` row above. It checks nothing itself and is the RTL bench's main
 stimulus (section 8.7).
 
-## 8 RTL (as built, pass 2: core 0.0.16)
+## 8 RTL (as built, pass 2: core 0.0.16; the chip's registers in a block RAM: 0.0.17)
 
 ### 8.1 Modules
 
@@ -271,7 +271,8 @@ model (`tools/sp0256.py VoiceBus`) works in cycle numbers. 12,480,000 / 1,202,72
 MAME's 3,120,000 / 336 Hz on MAME's CPU clock (parameters only: the benches).
 
 A sample fires at the ce that ends cycle c, after that cycle's bus access, and `sp0256.sv`
-makes it in at most 181 clk_sys (measured over the six references; usually about 30). Accesses at
+makes it in at most 232 clk_sys (0.0.17, measured over the bench's 67 runs; at most 204 on the six
+references, about 45 when the sequencer has nothing to read; 0.0.16 took at most 181). Accesses at
 the ces that end cycles c + 1 .. c + 8 are in the busy window: a read gives the values `$0080` /
 `$0081` had when the sample fired; a write is held and lands after the window's last ce (8
 cycles = 384 clk_sys, so the sample is always made by then; two CPU writes are at least 9
@@ -279,11 +280,17 @@ cycles apart, so at most one is held). A sample still unmade at the window's end
 window open and set `late` (sticky; every bench checks 0). The chip sees bus accesses only
 between samples, in the order they come, as the model's.
 
-### 8.3 Resources (expected; the fit is the owner's)
+### 8.3 Resources (the fits)
 
-One 18 x 18 DSP (the filter's products), about 600-900 ALMs (the FSM, 16 + 12 parameter bytes,
-12 x 16 delay words, the output chain's three accumulators), one M10K for the FIFO (64 x 10;
-it may land in MLAB). No new M10K for the ROM (`intv_sysrom` had it since step 2).
+0.0.16: `intv_voice` 1,810 ALMs, of them `sp0256` 1,586, all logic: the 16 + 12 parameter bytes
+and the 12 x 16 delay words in flip-flops, their parallel clears and the save state's write and
+read muxes (a trial without the state port fitted in about 900). 0.0.17 moves them into a
+16 x 32 M10K laid out as state words 6-18 (one read port, one byte-enabled write port; the
+clears are valid flags: per register byte, per decoded word, per delay stage), and the field
+formats (`fmt_fld`) into a 1,024 x 13 ROM: `intv_voice` 1,134 ALMs, `sp0256` 900, the core
+11,420 -> 10,752 (the shrink's fit). One 18 x 18 DSP (the filter's products), M10Ks for the FIFO
+(64 x 10), the register RAM and the format ROM. No new M10K for the resident ROM (`intv_sysrom`
+had it since step 2).
 
 ### 8.4 Save state: ids $18 and $19
 
@@ -295,7 +302,7 @@ word 23 is 0. `$19`, 64 words: the FIFO (`intv_ram`). The format is version 4
 (`tools/savestate.py`; states of 0.0.15 and earlier, version 3, are refused). Header flags bit 1
 is set while the voice is on, and a state with it refuses to load into a core with the voice off
 (and the other way), as the ECS's bit 0. A save lands only while the chip is idle:
-`intv_ss_ctl`'s quiet point waits for `voice_busy` low (at most 181 clk_sys). The output chain
+`intv_ss_ctl`'s quiet point waits for `voice_busy` low (at most 232 clk_sys). The output chain
 is not machine state (DESIGN 4.4).
 
 ### 8.5 The output chain and the level

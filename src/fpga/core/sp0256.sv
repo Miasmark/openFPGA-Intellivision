@@ -12,7 +12,7 @@
 // field at a time (two words from the resident ROM or the FIFO, two clocks
 // each, intv_ram's port-B rule; the field formats are a block ROM), and the
 // filter makes its 12 products two a stage with one multiplier. A step takes
-// about 50 clk_sys without the sequencer and up to about 170 with a LOADALL.
+// about 45 clk_sys without the sequencer and at most 232 in the benches.
 //
 // The 16 parameter registers, the 12 decoded ones and the delay line live in
 // a 16 x 32 block RAM laid out as state words 6-18 (word w at w - 6), one

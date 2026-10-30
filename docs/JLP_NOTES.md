@@ -385,6 +385,12 @@ and taken into `tools/jlp.py`:
 | flash rules | an empty row reads $FFFF; a write to a row not empty is dropped; erase clears the whole sector of JF.row, not the next; rows outside JF.first-JF.last, RAM past $9F7F and a wrong key are dropped | the same (confirmed) |
 | switched off | RAM, accelerators and the flash registers all go; the map's ROM answers; the RAM keeps its data; writes to the ROM do nothing; wrong keys and swapped keys do nothing | the same (confirmed) |
 
+jzIntv's flash file (`--jlp-savegame`, T10h): no header; the rows in order from JF.first, 192
+bytes a row, each word **little-endian** (row 8 of JLPFLS's \$3000 pattern starts `00 30 01 30`
+at byte \$600), erased words \$FFFF; 1,536 bytes a sector (6,144 for 4 sectors, 24,576 for 16); not
+written when the cartridge has no flash. The core's slot 0x106 takes the same layout, so a save
+moves between jzIntv and the Pocket unchanged.
+
 Known differences, kept on purpose (`build_jlp.py compare` lists them apart):
 
 - **Busy time.** jzIntv stalls about as the guide says (polls of the wait loop, about 31 cycles

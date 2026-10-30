@@ -639,10 +639,11 @@ def jlp_config(mode, flash):
 
 
 def rom_jlp(compat):
-    """(mode, sectors) from a .rom compat tag: byte 3 bits 7-6, {byte 3 bits 1-0, byte 4}."""
+    """(mode, sectors) from a .rom compat tag: byte 3 bits 7-6, {byte 3 bits 1-0, byte 4} (a
+    missing byte 4 reads 0, as intv_romparse keeps it: no flash)."""
     if compat is None or len(compat) < 4:
         return jlp_config(0, None)
-    return jlp_config(compat[3] >> 6, ((compat[3] & 3) << 8 | compat[4]) if len(compat) >= 5 else None)
+    return jlp_config(compat[3] >> 6, (compat[3] & 3) << 8 | (compat[4] if len(compat) >= 5 else 0))
 
 
 def rom_flags(compat):

@@ -364,11 +364,16 @@ machine reset, as the ECS's. The expansion bus `$0700-$0CFF` stays unmapped (DES
   phase, every voice sample (its cycle and value: V lines), the mixed sound's hash with the voice
   (`voice_mix`), `intv_voice`'s state words in the dumps, the round trips. Plants
   `voice_mapped_off`, `voice_level2_lost`, `voice_mix_unsigned`, `voice_dac_bits`. (voicetest
-  makes no PSG sound, so the mix's saturation is not reached by these images.)
+  makes no PSG sound, so the mix's saturation is not reached by these images: voicemix reaches it.)
 - `tb_savestate`: `voicetest` (On) and B-17 Bomber (Auto, the CRC table's flag) with saves asked
-  for while a sample is made and in the busy window; the voice's samples (A lines) equal after
-  every load; V: a voice state into a core with the voice off is refused. Plants
-  `ss_voice_unchecked`, `ss_voice_acc_lost`, `ss_voice_busy_ignored`.
+  for just before a sample (two cycles ahead: the request takes about three to reach
+  intv_ss_ctl) at five frames, and in the busy window; the voice's samples (A lines) equal after
+  every load; V: a voice state into a core with the voice off is refused. Every run fails on a
+  freeze that begins inside a voice sample (FRZBUSY), and at least one voice save must have
+  waited for a sample with every other quiet term true (VWAIT; the CPU's fetch points fall at a
+  different phase of the sample at each frame, and one of the five lands inside it). Plants
+  `ss_voice_unchecked`, `ss_voice_acc_lost`, `ss_voice_busy_ignored` (caught by FRZBUSY: the
+  freeze inside a sample, whose making is not in the state).
 - `tb_loader`: `voice auto` for every image (the table's voice titles, a forced voice CRC), a CFG
   with `voice = 1` and with `voice_compat = 2`, a .rom with the "requires" tag, a voice title
   without `ivoice.bin` (Auto off).

@@ -315,7 +315,7 @@ module tb_savestate;
     // raster frames, and what ss_ctl sees
     longint rframes = 0;
     longint req_rf = 0, frz_rf = 0;
-    logic   frz_q = 1'b0, st_q = 1'b0, ld_q = 1'b0;
+    logic   frz_q = 1'b0, st_q = 1'b0, ld_q = 1'b0, run_q = 1'b1, vwait_q = 1'b0;
     longint rcyc_next = -1;
     always @(posedge clk) begin
         if (core.timing.vcnt == 9'd0 && core.timing.hcnt == 9'd0 && core.timing.sub == 4'd0)
@@ -324,11 +324,24 @@ module tb_savestate;
         ld_q <= core.ssc.load_lv;
         if ((core.ssc.start_lv && !st_q) || (core.ssc.load_lv && !ld_q)) begin
             req_rf <= rframes;
-            $fdisplay(fd, "Q %0s %0d busak %0d cp_on %0d fetch %0d lv %0d vcnt %0d",
+            $fdisplay(fd, "Q %0s %0d busak %0d cp_on %0d fetch %0d lv %0d vcnt %0d vbusy %0d",
                       (core.ssc.start_lv && !st_q) ? "save" : "load", cyc, core.machine.busak,
                       core.machine.stic.cp_on, core.machine.fetch,
-                      core.machine.psg.lv[0] | core.machine.psg.lv[1] | core.machine.psg.lv[2], vcnt);
+                      core.machine.psg.lv[0] | core.machine.psg.lv[1] | core.machine.psg.lv[2], vcnt,
+                      core.machine.voice_busy);
         end
+        // the freeze must not begin inside a voice sample (its making is not in the state);
+        // VWAIT: a request held back by the voice alone (every other quiet term true)
+        run_q <= core.ssc.run;
+        if (core.ssc.run && core.ssc.want && core.machine.voice_busy && !vwait_q && core.ssc.live
+            && !core.ssc.mreset && core.ssc.vcnt < 9'(core.ssc.V_QUIET) && !core.ssc.ce_cpu
+            && (core.ssc.cpu_fetch || core.ssc.cpu_halted || core.ssc.cpu_hold)) begin
+            vwait_q <= 1'b1;
+            $fdisplay(fd, "VWAIT %0d", cyc);
+        end
+        if (!core.ssc.want) vwait_q <= 1'b0;
+        if (run_q && !core.ssc.run && core.machine.voice_busy)
+            $fdisplay(fd, "FRZBUSY %0d", cyc);
         frz_q <= core.ssc.frozen;
         if (core.ssc.frozen && !frz_q) begin
             cram_hash("M");
@@ -481,10 +494,13 @@ module tb_savestate;
             "midinst":  return ce_fired && !core.machine.fetch && !hold && phase != 3'd4;
             "busrq":    return core.machine.busak;
             "rowfetch": return core.machine.stic.cp_on && !cp_q;
-            // in VBlank (the quiet point's vcnt < V_QUIET, with a margin): the request reaches
-            // intv_ss_ctl within a few clk, while the sample is still in the making, so a quiet
-            // point that does not wait for the voice freezes inside it (ss_voice_busy_ignored)
-            "voice":    return core.machine.voice_busy && core.ssc.vcnt < 9'd56;
+            // in VBlank (the quiet point's vcnt < V_QUIET, with a margin), two cycles before the
+            // voice's next sample: the request takes about three cycles to reach intv_ss_ctl, so
+            // it is there while the sample is made, and a quiet point that does not wait for the
+            // voice freezes inside it (ss_voice_busy_ignored; VWAIT below shows the wait)
+            "voice":    return core.machine.voice.on && core.machine.voice.started && core.ssc.vcnt < 9'd50
+                               && 33'(core.machine.voice.acc) + 33'(2 * core.machine.voice.INC) >= 33'(core.machine.voice.WRAP)
+                               && 33'(core.machine.voice.acc) + 33'(core.machine.voice.INC) < 33'(core.machine.voice.WRAP);
             "voicewin": return core.machine.voice.win != 4'd0;
             "sound":    return tick_fired && (core.machine.psg.lv[0] != 4'd0
                                || core.machine.psg.lv[1] != 4'd0 || core.machine.psg.lv[2] != 4'd0);

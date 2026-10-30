@@ -125,9 +125,12 @@ SS_IMAGES = [
     ('nfl', 'Super NFL Footbal (USA) (Proto).zip', None, (0xFF, 0xFF), 110, None,
      [(30, 'midinst'), (50, 'any'), (65, 'midinst'), (80, 'any')], (88, 8), 98),
     # build step 10 (SS_VOICE): our voicetest.py in the EXEC slot with the Intellivoice on, saves in
-    # the middle of its phrases (asked for while a sample is made, and in the busy window)
+    # the middle of its phrases (asked for just before a sample, and in the busy window); the
+    # voice saves at several frames, so the CPU's quiet points fall at several phases of the sample
+    # (at least one must wait for it: VWAIT)
     ('voicetest', None, 'voicetest.py', (0xFF, 0xFF), 40, None,
-     [(4, 'voice'), (9, 'voicewin'), (15, 'voice'), (21, 'voicewin')], (25, 6), 30),
+     [(4, 'voice'), (6, 'voice'), (9, 'voicewin'), (12, 'voice'), (15, 'voice'), (18, 'voice'),
+      (21, 'voicewin')], (25, 6), 30),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
@@ -469,8 +472,11 @@ def check_menu(run, pause, what):
 
 
 def check_common(run, what, drops=0):
-    """FAIL lines, END, the bridge accesses overwritten (E drops)."""
+    """FAIL lines, END, the bridge accesses overwritten (E drops), a freeze begun inside a voice
+    sample (FRZBUSY: the sample's making is not in the state)."""
     probs = list(run.fails)
+    for ln in run.tagged('FRZBUSY'):
+        probs.append('%s: freeze inside a voice sample at cycle %s' % (what, ln.split()[1]))
     if not run.end:
         probs.append('%s: no END' % what)
     e = run.tagged('E')
@@ -497,7 +503,8 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
     # pause freezes too (a Z without a Q)
     # each save's request (Q) and the freeze it was taken in: the last Z
     # before its SAVE line (a menu pause may have frozen the machine first)
-    qs, zs, ms, ks, last_z, last_m, last_k = [], [], [], [], None, None, None
+    qs, vws, zs, ms, ks, last_z, last_m, last_k = [], [], [], [], [], None, None, None
+    q_save = False
     for ln in run.lines:
         t = ln.split()
         if t[0] == 'Z':
@@ -506,14 +513,22 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
             last_m = ln
         elif t[0] == 'K':
             last_k = ln
-        elif t[0] == 'Q' and t[1] == 'save':
-            qs.append(ln)
+        elif t[0] == 'Q':
+            q_save = t[1] == 'save'
+            if q_save:
+                qs.append(ln)
+                vws.append(False)
+        elif t[0] == 'VWAIT' and q_save:
+            vws[-1] = True
         elif t[0] == 'SAVE':
             zs.append(last_z)
             ms.append(last_m)
             ks.append(last_k)
     info = []
-    for (p, kind), s, q, z, mline, kline in zip(blobs, saves, qs, zs, ms, ks):
+    vk = [vw for (p, kind), vw in zip(blobs, vws) if kind == 'voice']
+    if vk and not any(vk):
+        probs.append('S: no voice save waited for a sample (VWAIT): the case is not exercised')
+    for (p, kind), s, q, vw, z, mline, kline in zip(blobs, saves, qs, vws, zs, ms, ks):
         qt = q.split()
         cond = {'busrq': qt[4] == '1', 'rowfetch': qt[6] == '1', 'midinst': qt[8] == '0',
                 'sound': qt[10] != '0'}.get(kind, True)
@@ -866,7 +881,7 @@ PLANTS = [
     # (planted in the quiet point, not in intv_voice's busy: the bench asks for its "voice" saves
     # when busy is up, so a busy forced to 0 would never ask for the save it should catch)
     ('ss_voice_busy_ignored', 'intv_ss_ctl.sv', [("&& !ce_cpu && !voice_busy", "&& !ce_cpu")],
-     'voicetest', 'psgtest', AFTER),
+     'voicetest', 'psgtest', AFTER + r'|: freeze inside a voice sample'),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 

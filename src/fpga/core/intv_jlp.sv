@@ -27,8 +27,8 @@
 // not count (started; intv_voice likewise).
 //
 // Flash: the store is a block RAM of 16 sectors x 8 rows x 96 words
-// (12,288 x 16), erased $FFFF, the nonvolatile slot's data (outside the save
-// state). A command is checked at its write: the row in JF.first..JF.last,
+// (12,288 x 16), the nonvolatile slot's data (outside the save state). It
+// holds each word inverted, so its power-on zeros read as erased ($FFFF). A command is checked at its write: the row in JF.first..JF.last,
 // the 96 RAM words in $8040-$9F7F (read, write), and for a write the row
 // empty (empt, one bit a row, kept as rows are written, erased and loaded);
 // one that fails is dropped (nothing, not busy). One that passes makes the
@@ -176,11 +176,12 @@ module intv_jlp #(
         if (st_we) store[st_a] <= st_d;
         st_q <= store[st_a];
     end
+    logic [15:0] nv_qi;
     always_ff @(posedge clk) begin
-        if (nv_we) store[nv_addr] <= nv_wdata;
-        nv_q <= store[nv_addr];
+        if (nv_we) store[nv_addr] <= ~nv_wdata;
+        nv_qi <= store[nv_addr];
     end
-    initial for (int i = 0; i < 12288; i++) store[i] = 16'hFFFF;
+    assign nv_q = ~nv_qi;
 
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic [15:0] row_r  = jf_row - FIRST;               // the row in the store
@@ -327,7 +328,7 @@ module intv_jlp #(
             E_RD_W: if (!jm_req) begin
                 jm_req <= 1'b1; jm_we <= 1'b1;
                 jm_addr <= JLP_BASE + {4'd0, er + 13'(ei)};
-                jm_wdata <= st_q;
+                jm_wdata <= ~st_q;
             end else if (jm_ack) begin
                 jm_req <= 1'b0;
                 if (ei == 10'd95) est <= E_IDLE;
@@ -338,7 +339,7 @@ module intv_jlp #(
                 jm_addr <= JLP_BASE + {4'd0, er + 13'(ei)};
             end else if (jm_ack) begin
                 jm_req <= 1'b0;
-                st_a <= eb + 14'(ei); st_d <= jm_rdata; st_we <= 1'b1;
+                st_a <= eb + 14'(ei); st_d <= ~jm_rdata; st_we <= 1'b1;
                 if (jm_rdata != 16'hFFFF) e_ne <= 1'b1;
                 est <= E_WR_S;
             end
@@ -352,7 +353,7 @@ module intv_jlp #(
                 end
             end
             E_ER: begin                                     // 768 words of $FFFF
-                st_a <= eb + 14'(ei); st_d <= 16'hFFFF; st_we <= 1'b1;
+                st_a <= eb + 14'(ei); st_d <= 16'h0000; st_we <= 1'b1;
                 if (ei == 10'd767) begin
                     empt[{erow[6:3], 3'd0} +: 8] <= 8'hFF;
                     est <= E_IDLE;

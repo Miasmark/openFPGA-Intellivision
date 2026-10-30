@@ -462,9 +462,10 @@ def main():
           and re.search(r"12'h204:\s*set_border\s*<=\s*bridge_wr_data\[0\];", core_top) is not None
           and int(border[0]["address"], 16) & 0xFFF == 0x204,
           "Border: core_top's set_border at 0x204, power-up value = the menu default")
-    # the Intellivoice's three settings (step 10): core_top's registers and power-up values
+    # the Intellivoice's three settings (step 10) and the ECS level: core_top's registers and power-up values
     for nm, off, reg, width in (("Intellivoice", 0x21C, "set_voice", 2), ("Voice Level", 0x220, "set_vlevel", 3),
-                                ("Voice Sound", 0x224, "set_vdac", 1)):
+                                ("Voice Sound", 0x224, "set_vdac", 1),
+                                ("ECS Level", 0x228, "set_elevel", 3)):
         it = [v for v in var if v["name"] == nm]
         pat = (r"reg\s+\[%d:0\]\s+%s\s*=\s*%d'd(\d);" % (width - 1, reg, width)) if width > 1 else (r"reg\s+%s\s*=\s*1'b([01]);" % reg)
         pw = re.search(pat, core_top)

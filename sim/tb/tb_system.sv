@@ -26,6 +26,7 @@
 //   +voice=N            the Intellivoice (step 10) as the menu's: 0 Auto, 1 On,
 //                       2 Off (default); +ivoice=F its ROM (slot 5); +vlevel=N
 //                       (0-4, default 4) +vdac=1 (the chip's 7-bit DAC sound)
+//   +elevel=N           the ECS level (PSG #2 only: 0-4, default 2, the menu's)
 //   +log=F              the output (below)
 //   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
 //   +pic=F              write every picture to F (binary, see below)
@@ -170,6 +171,7 @@ module tb_system;
     logic [1:0]       voice_ovr = 2'd2;
     logic             vdac = 1'b0;
     logic [2:0]       vlevel = 3'd4;
+    logic [2:0]       elevel = 3'd2;
     wire logic [10:0] iv_addr;
     wire logic        voice_auto;
     wire logic        voice_mode = voice_ovr == 2'd1 ? slot_st[11:10] == 2'd2 : voice_ovr == 2'd0 && voice_auto;
@@ -233,7 +235,7 @@ module tb_system;
         .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
-        .voice_mode, .voice_dac7(vdac), .voice_level(vlevel), .voice_on, .voice_busy, .voice_late,
+        .voice_mode, .voice_dac7(vdac), .voice_level(vlevel), .ecs_level(elevel), .voice_on, .voice_busy, .voice_late,
         .ivoice_addr(iv_addr), .ivoice_q,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
         .phase, .dout, .din, .addr, .fetch, .hold, .halted,
@@ -644,6 +646,7 @@ module tb_system;
             if ($value$plusargs("voice=%d", e)) voice_ovr = 2'(e);
             if ($value$plusargs("vlevel=%d", e)) vlevel = 3'(e);
             if ($value$plusargs("vdac=%d", e)) vdac = e != 0;
+            if ($value$plusargs("elevel=%d", e)) elevel = 3'(e);
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");

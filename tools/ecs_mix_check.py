@@ -30,10 +30,11 @@ import intv_system as isys  # noqa: E402
 CEIL = 32767
 
 
-def mix(v1, v2, ecs_on):
-    """intv_machine.sv's sample: (PSG #1 + PSG #2) * 3 / 4 (floor) while the ECS is attached
-    or on, else the sum; at most 32,767."""
-    m = v1 + v2
+def mix(v1, v2, ecs_on, level=2):
+    """intv_machine.sv's sample: (PSG #1 + PSG #2 at the ECS level: 0 off, 1-4: x 1/2, 1, 3/2,
+    2; 2 the default) * 3 / 4 (floor) while the ECS is attached or on, else the sum; at most
+    32,767."""
+    m = v1 + (0, v2 >> 1, v2, v2 + (v2 >> 1), v2 << 1)[level]
     if ecs_on:
         m = (3 * m) >> 2
     return min(CEIL, m)

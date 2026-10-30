@@ -415,6 +415,7 @@ localparam [31:0] SS_SIZE = 32'd153600;
     reg     [1:0]   set_voice = 2'd0;       // Intellivoice: 0 Auto, 1 On, 2 Off (taken at the next reset or load; step 10)
     reg     [2:0]   set_vlevel = 3'd4;      // Voice level: 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: speech peak near a PSG's)
     reg             set_vdac = 1'b0;        // Voice sound: 0 clean (14 bits), 1 the chip's 7-bit DAC
+    reg     [2:0]   set_elevel = 3'd2;      // ECS level: PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: as 0.0.9; the ECS has its own knob)
     reg     [7:0]   menu_reset_cnt = 8'd0;
 
 always @(posedge clk_74a) begin
@@ -433,6 +434,7 @@ always @(posedge clk_74a) begin
             12'h21C: set_voice      <= bridge_wr_data[1:0];
             12'h220: set_vlevel     <= bridge_wr_data[2:0];
             12'h224: set_vdac       <= bridge_wr_data[0];
+            12'h228: set_elevel     <= bridge_wr_data[2:0];
             default: ;
         endcase
     end
@@ -738,6 +740,7 @@ data_loader #(
     // override is taken at a machine reset, the level and DAC choice any time)
     reg     [1:0]   voice_s0 = 2'd0, voice_s1 = 2'd0;
     reg     [2:0]   vlevel_s0 = 3'd4, vlevel_s1 = 3'd4;
+    reg     [2:0]   elevel_s0 = 3'd2, elevel_s1 = 3'd2;     // the ECS level (any time)
     reg     [1:0]   vdac_s = 2'b00;
     reg             timing_reset = 1'b1;
 
@@ -748,6 +751,7 @@ always @(posedge clk_sys) begin
     border_s <= {border_s[0], set_border};
     voice_s0 <= set_voice;  voice_s1 <= voice_s0;
     vlevel_s0 <= set_vlevel; vlevel_s1 <= vlevel_s0;
+    elevel_s0 <= set_elevel; elevel_s1 <= elevel_s0;
     vdac_s   <= {vdac_s[0], set_vdac};
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
@@ -830,6 +834,7 @@ intv_core machine_side (
     .voice_override     ( voice_s1 ),
     .voice_dac7         ( vdac_s[1] ),
     .voice_level        ( vlevel_s1 ),
+    .ecs_level          ( elevel_s1 ),
     .voice_on           ( ),
     .ce_pix             ( ce_pix ),
     .hcnt               ( hcnt ),

@@ -220,7 +220,7 @@ module tb_savestate;
         .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .ecs_full(ecs_full),
-        .voice_override(voice_ovr), .voice_dac7(1'b0), .voice_level(3'd4), .voice_on(voice_on),
+        .voice_override(voice_ovr), .voice_dac7(1'b0), .voice_level(3'd4), .voice_on(voice_on), .ecs_level(3'd2),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),
@@ -481,7 +481,10 @@ module tb_savestate;
             "midinst":  return ce_fired && !core.machine.fetch && !hold && phase != 3'd4;
             "busrq":    return core.machine.busak;
             "rowfetch": return core.machine.stic.cp_on && !cp_q;
-            "voice":    return core.machine.voice_busy;
+            // in VBlank (the quiet point's vcnt < V_QUIET, with a margin): the request reaches
+            // intv_ss_ctl within a few clk, while the sample is still in the making, so a quiet
+            // point that does not wait for the voice freezes inside it (ss_voice_busy_ignored)
+            "voice":    return core.machine.voice_busy && core.ssc.vcnt < 9'd56;
             "voicewin": return core.machine.voice.win != 4'd0;
             "sound":    return tick_fired && (core.machine.psg.lv[0] != 4'd0
                                || core.machine.psg.lv[1] != 4'd0 || core.machine.psg.lv[2] != 4'd0);

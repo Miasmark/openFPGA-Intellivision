@@ -100,6 +100,7 @@ module intv_machine #(
     input  wire logic        voice_mode,      // the Intellivoice: 0 off, 1 on (taken at reset)
     input  wire logic        voice_dac7,      // its 7-bit DAC sound instead of the clean one
     input  wire logic [2:0]  voice_level,     // 0 off, 1-4: x 1/2, 1, 3/2, 2
+    input  wire logic [2:0]  ecs_level,       // PSG #2 only: 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: as before)
     output logic             voice_on,
     output logic             voice_busy,      // a voice sample in the making (intv_ss_ctl waits)
     output logic             voice_late,      // a sample outlasted its window (sticky; benches)
@@ -220,16 +221,27 @@ module intv_machine #(
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_voice));
 
     // the two PSGs' samples come together (same reset, same steps); PSG #2 is
-    // silent (0) unless the ECS is attached. While the ECS is attached or on
-    // the sum is scaled to 3/4 (floor), so the loudest six-channel music
-    // measured (WSMLB: PSG #1 + PSG #2 up to 43,278) stays under 32,767
-    // (ECS_NOTES 3); the saturation stays for the rest (up to 49,149)
-    wire logic [16:0] mix = 17'(audio1) + 17'(audio2);
+    // silent (0) unless the ECS is attached. PSG #2 first at the ECS's own level
+    // (the menu's ECS Level: the module has its own knob; 2 = x1, the sound of
+    // 0.0.9-0.0.15). While the ECS is attached or on the sum is scaled to 3/4
+    // (floor), so the loudest six-channel music measured (WSMLB: PSG #1 + PSG #2
+    // up to 43,278) stays under 32,767 at the default level (ECS_NOTES 3); the
+    // saturation stays for the rest (up to 73,722 at x2)
+    logic [17:0] a2s;
+    always_comb
+        case (ecs_level)
+            3'd0:    a2s = 18'd0;
+            3'd1:    a2s = 18'(audio2[15:1]);
+            3'd3:    a2s = 18'(audio2) + 18'(audio2[15:1]);
+            3'd4:    a2s = {1'b0, audio2, 1'b0};
+            default: a2s = 18'(audio2);
+        endcase
+    wire logic [18:0] mix = 19'(audio1) + 19'(a2s);
     /* verilator lint_off UNUSEDSIGNAL */
-    wire logic [18:0] mix3 = 19'(mix) + {1'b0, mix, 1'b0};      // 3 x mix; [1:0] dropped (floor)
+    wire logic [20:0] mix3 = 21'(mix) + {1'b0, mix, 1'b0};      // 3 x mix; [1:0] dropped (floor)
     /* verilator lint_on UNUSEDSIGNAL */
-    wire logic [16:0] mixs = ecs_on ? mix3[18:2] : mix;
-    wire logic [15:0] psgs = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];
+    wire logic [18:0] mixs = ecs_on ? mix3[20:2] : mix;
+    wire logic [15:0] psgs = mixs[18:15] != 4'd0 ? 16'h7FFF : mixs[15:0];
     // the voice (0 when off) on top, saturated to 16 bits signed
     wire logic signed [17:0] vsum = $signed({2'b00, psgs}) + 18'(v_out);
     assign audio     = vsum > 18'sd32767 ? 16'h7FFF : vsum < -18'sd32768 ? 16'h8000 : vsum[15:0];

@@ -145,6 +145,7 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('ecsboot', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('ecsastro', 'Astrosmash (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
           ('ecssound', ('step9', 'ecssound'), None, 30, (0xFF, 0xFF), 'stic'),
+          ('ecssound_l4', ('step9', 'ecssound'), None, 30, (0xFF, 0xFF), 'stic'),
           ('ecshook', ('step9', 'ecshook'), None, 30, (0xFF, 0xFF), 'stic'),
           ('ecsavail', ('step9', 'ecsavail'), None, 30, (0xFF, 0xFF), 'stic'),
           ('cart4000', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic'),
@@ -162,7 +163,8 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           # voice on (clean sound at the default level; the 7-bit DAC sound at 3/2) and forced off
           ('voicetest', None, 'voicetest.py', 30, (0xFF, 0xFF), 'stic'),
           ('voicedac', None, 'voicetest.py', 16, (0xFF, 0xFF), 'stic'),
-          ('voice_off', None, 'voicetest.py', 10, (0xFF, 0xFF), 'stic')]
+          ('voice_off', None, 'voicetest.py', 10, (0xFF, 0xFF), 'stic'),
+          ('voicemix', None, 'voicemix.asm', 24, (0xFF, 0xFF), 'stic')]
 # the hardware measurement cartridges (sim/testroms/hw/build_hw.py, docs/HW_TESTS.md): RTL = model on
 # the owner's test programs before they go to his console. Long runs (hundreds of frames, to their
 # results screens), so only by name (--only hw_steal,...), never in --all
@@ -175,7 +177,8 @@ HW_IMAGES = [('hw_steal', ('hw', 'hw_steal'), None, 460, (0xFF, 0xFF), 'stic'),
 # not listed run with it Off (the RTL's override 2; the model without one)
 VOICE_OF = {'voicetest': dict(ovr='on', level=4, dac=False),
             'voicedac': dict(ovr='on', level=3, dac=True),
-            'voice_off': dict(ovr='off', level=4, dac=False)}
+            'voice_off': dict(ovr='off', level=4, dac=False),
+            'voicemix': dict(ovr='on', level=4, dac=False)}
 
 
 def ivoice_rom():
@@ -203,6 +206,10 @@ ECS_OF = {
     'ecsboot': dict(ovr='auto', auto=1),
     'ecsastro': dict(ovr='auto', auto=2),
     'ecssound': dict(ovr='auto', auto=1, passes=(2, 3)),
+    'ecssound_l4': dict(ovr='auto', auto=1, passes=(2, 3), level=4),   # the ECS level at Loudest (x2)
+    # voicemix (sim/testroms/voicemix.asm, the EXEC slot, no cartridge: Auto would be on): both PSGs
+    # at full volume and the voice at Loudest, so the sum is clipped at 32,767 (intv_machine)
+    'voicemix': dict(ovr='on', auto=1),
     # hw_ecskeys (attached under Auto): one key, a row pair, three corners, Shift + a key; its
     # results are on screen, not in ecstest's scan table (scans=False)
     'hw_ecskeys': dict(ovr='auto', auto=2, scans=False, presses='20-28:ecs:W,28-36:ecs:W+Q,36-44:ecs:W+Q+1,'
@@ -607,7 +614,7 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
 
     bus.read, bus.write = rd, wr
     audio = psg_hooks(bus)
-    ecs_audio = psg2_hooks(bus)
+    ecs_audio = psg2_hooks(bus, (ecs or {}).get('level', 2))
     steps = []
     prev = (list(cpu.r), cpu.flags << 2 | cpu.I << 1 | cpu.D)
     while cpu.cycle < ncyc:
@@ -680,8 +687,9 @@ class psg2_hooks:
     step at the same cycles (tools/psg.py); done() collects them once the
     run has advanced both."""
 
-    def __init__(self, bus):
+    def __init__(self, bus, level=2):
         self.bus = bus
+        self.level = level              # the ECS level (ECS_OF's 'level', default 2)
         self.a2 = {}
         self.s1, self.s2 = [], {}
         prev1 = bus.snd.on_sample
@@ -719,16 +727,22 @@ class psg2_hooks:
         for t, v1, on in self.s1:
             k = (4 * (t - 1) + 1) // FRAME
             e = out.setdefault(k, list(self.a2.get(k, [FNV0, 0, FNV0, 0])) + [FNV0])
-            e[4] = fnv(e[4], mix_sample(v1, self.s2.get(t, 0), on))
+            e[4] = fnv(e[4], mix_sample(v1, self.s2.get(t, 0), on, self.level))
         for k, a in self.a2.items():
             out.setdefault(k, list(a) + [FNV0])
         return out
 
 
-def mix_sample(v1, v2, ecs_on):
-    """The machine's sound sample (intv_machine.sv): PSG #1 + PSG #2, scaled to 3/4 (floor)
-    while the ECS is attached or on (ECS_NOTES 3), at most 32,767."""
-    m = v1 + v2
+def ecs_scale(v2, level=2):
+    """PSG #2 at the ECS level (intv_machine.sv a2s; the menu's ECS Level, the module's own
+    knob): 0 off, 1-4: x 1/2, 1, 3/2, 2 (floor), 2 the default."""
+    return (0, v2 >> 1, v2, v2 + (v2 >> 1), v2 << 1)[level] if 0 <= level <= 4 else v2
+
+
+def mix_sample(v1, v2, ecs_on, level=2):
+    """The machine's sound sample (intv_machine.sv): PSG #1 + PSG #2 at the ECS level, scaled
+    to 3/4 (floor) while the ECS is attached or on (ECS_NOTES 3), at most 32,767."""
+    m = v1 + ecs_scale(v2, level)
     if ecs_on:
         m = (3 * m) >> 2
     return min(32767, m)
@@ -757,7 +771,7 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
     cpu = isys.CP1610(bus=bus, buslog=True)
     pics, sinfo = capture(bus)
     audio = psg_hooks(bus)
-    ecs_audio = psg2_hooks(bus)
+    ecs_audio = psg2_hooks(bus, (ecs or {}).get('level', 2))
     ncyc = (npics + 1) * FRAME
     hashes = {}
     acc = {'k': 0, 'hb': FNV0, 'nb': 0, 'hs': FNV0, 'ns': 0}
@@ -969,7 +983,7 @@ def voice_mix(got, exp):
         while j < len(vis) and j < len(vals) and vis[j] <= i:
             vo.sample(vals[j])
             j += 1
-        m = max(-32768, min(32767, mix_sample(v1, exp.mix_raw.s2.get(t, 0), on) + vo.strobe()))
+        m = max(-32768, min(32767, mix_sample(v1, exp.mix_raw.s2.get(t, 0), on, exp.mix_raw.level) + vo.strobe()))
         k = (4 * (t - 1) + 1) // FRAME
         hm[k] = fnv(hm.get(k, FNV0), m & 0xFFFF)
     for k, h in hm.items():
@@ -1223,6 +1237,8 @@ def ecs_args(work, tag, ecs, nframes):
         args.append('+ecsrom=' + rom)
     if ecs.get('synth'):
         args.append('+synth=1')
+    if ecs.get('level', 2) != 2:
+        args.append('+elevel=%d' % ecs['level'])
     if ecs.get('presses'):
         kf = os.path.join(work, 'ekeys_%s.txt' % tag)
         with open(kf, 'w') as f:
@@ -1892,8 +1908,15 @@ PLANTS = [
                                                "wire logic signed [17:0] vsum = $signed({2'b00, psgs}) + $signed({2'b00, v_out});")],
      'voicedac', None),
     ('voice_dac_bits', 'intv_voice.sv', [("($signed(c_sample) >>> 7) <<< 9", "($signed(c_sample) >>> 6) <<< 8")], 'voicedac', None),
-    ('ecs_mix_wraps', 'intv_machine.sv', [("assign audio     = mixs[16:15] != 2'd0 ? 16'h7FFF : mixs[15:0];",
-                                          "assign audio     = mixs[15:0];")], 'ecstest', None),
+    # the PSG sum's saturation dropped: voicemix (both PSGs at full volume, the ECS on) takes the
+    # 3/4 sum past 32,767 (ecstest, its image until step 10, never reaches it)
+    ('ecs_mix_wraps', 'intv_machine.sv', [("wire logic [15:0] psgs = mixs[18:15] != 4'd0 ? 16'h7FFF : mixs[15:0];",
+                                          "wire logic [15:0] psgs = mixs[15:0];")], 'voicemix', None),
+    # the ECS level (the module's own knob): ignored, PSG #2 always x1 (ecssound_l4: Loudest)
+    ('ecs_level_ignored', 'intv_machine.sv', [("        case (ecs_level)", "        case (3'd2)")], 'ecssound_l4', None),
+    # the final saturation (the voice on top of the PSGs' sum) dropped: voicemix drives it past 32,767
+    ('voice_mix_unsat', 'intv_machine.sv', [("assign audio     = vsum > 18'sd32767 ? 16'h7FFF : vsum < -18'sd32768 ? 16'h8000 : vsum[15:0];",
+                                            "assign audio     = vsum[15:0];")], 'voicemix', None),
     # the step-9 review: the sum not scaled to 3/4 with the ECS attached (ecsastro: Auto, attached)
     # or on (ecstest), or scaled with the ECS off too (psgtest: PSG #1 alone at full volume)
     ('ecs_mix_unscaled', 'intv_machine.sv', [("ecs_on ? mix3[18:2] : mix;", "mix;")], 'ecstest', None),

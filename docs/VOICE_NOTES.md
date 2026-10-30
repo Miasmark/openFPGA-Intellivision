@@ -119,6 +119,17 @@ Per sample (G81 sheet 12; M lpc12 update, sp0256:197-312):
   "1.56MHz clock input from SP0256"); and the resident ROM's five pauses (commands 1-5) last
   10,011, 5,006, 2,016, 976 and 456 samples (meas): 1.0 s, 0.5 s, 0.2 s, 0.1 s and 0.05 s at
   10 kHz, the AL2's pause scheme (PA1-PA5, AL2 Table 6). MAME runs it at 9,285 Hz (row 1).
+  **Measured** (the owner's real-console recordings, 2026-10-29; YouTube e7XtAR26F6k B-17
+  Bomber, DhR_elQIojM TRON Solar Sailer twice, M6hnDS-zVAU Bomb Squad twice; the analysis and
+  the files in the planning folder's research/voice-rec/): the chip's exact sample stream for
+  each title phrase (the model = MAME's samples) played at every rate from 9,000 to 10,600 Hz,
+  its 5 ms log envelope correlated with the recording's at the best offset: every take peaks
+  between 9,950 and 10,500 Hz (B-17 0.622 at 10,000-10,050; TRON 0.729 at 10,100; Bomb Squad
+  0.738 at 10,050), and MAME's rate scores far lower (B-17 0.33, TRON 0.49, Bomb Squad 0.55).
+  The rate is settled: 10 kHz.
+- **Power-on pop** (meas, the TRON recording): one transient at power-on (17.5 times the median
+  5 ms step, decaying in about 20 ms) before the first phrase only: the module's analog output
+  (its coupling capacitors) settling. The core's output starts at 0 and has none, on purpose.
 - **Analog chain** (SM p.3 and schematic): PWM → C3 high-pass (~150 Hz) → two LM324 active
   low-passes (above 5 kHz) → C8 low-pass ("hash") → volume R22 (200K thumbwheel) → U5A buffer with
   C14 low-pass (above 5 kHz) → C9 + R25 high-pass (150 Hz; 430 Ω) → J1 pin 6, EXT AUDIO, into the
@@ -145,11 +156,11 @@ Per sample (G81 sheet 12; M lpc12 update, sp0256:197-312):
 
 | # | What | Sources | The model | The core |
 |---|---|---|---|---|
-| 1 | Sample rate | 10 kHz: SM Y1 3.12 MHz, AL2 p.1, G81 DAC passage, the resident pauses (section 3). M: 3.12 MHz / 336 = 9,285 Hz (sp0256:34) | rate-free; compared with M at 9,285 Hz | 10 kHz (section 8.2): speech 7.7 % higher and shorter than MAME's, as the evidence says the chip is |
+| 1 | Sample rate | 10 kHz: SM Y1 3.12 MHz, AL2 p.1, G81 DAC passage, the resident pauses (section 3); **measured 10 kHz** on five real-console takes of three titles (section 3). M: 3.12 MHz / 336 = 9,285 Hz (sp0256:34) | rate-free; compared with M at 9,285 Hz | 10 kHz (section 8.2): speech 7.7 % higher and shorter than MAME's, as on the console. Settled |
 | 2 | Clock | wiki SP0256-012 "1.6Mhz"; SM Y1 3.12 MHz; S2: the ROM clock is 1.56 MHz | — | the wiki's figure is the ROM clock, rounded |
 | 3 | Negative coefficients | G81: sign and magnitude; M: two's complement (`qtbl[0x7F & -x]`, sp0256:361) | M | M. Settled by the data: decoding the games' streams as sign and magnitude makes every title's filter blow up (meas, `variants.py`: TRON 20,603 of 200,000 samples at the clip level, SNR -27 dB against M; B-17 likewise) |
 | 4 | SETMSB_3 pitch field | IS's format has none (its title says "Load Pitch"); M reads 8 bits of P as for SETMSB_5 | M | M. Moot for the library: no title's stream and no resident phrase uses SETMSB_3 (meas, coverage). DESIGN 10's risk row is closed by this |
-| 5 | DELTA_9 B4 in MODE 0x | IS "B4 6 MSBs" (4 bits at bit 2); M 7 MSBs (bit 1), as IS gives for DELTA_D | M | M; open (section 9): B-17, TRON and WSMLB use DELTA_9 in MODE 00; IS's reading moves their output 12-24 dB SNR from M's (meas) |
+| 5 | DELTA_9 B4 in MODE 0x | IS "B4 6 MSBs" (4 bits at bit 2); M 7 MSBs (bit 1), as IS gives for DELTA_D | M | M; **closed as inaudible**: B-17, TRON and WSMLB use DELTA_9 in MODE 00; IS's reading changes their samples by 12-24 dB SNR (meas), but against the owner's recordings (section 3) the two readings differ by only 0.3-0.6 dB in the 3-4.8 kHz band and 0.1 dB in level in the frames concerned (B-17: 70 frames, 0.56 dB; TRON's title: 17 frames, 0.34 dB), far below the recordings' colouring (about 9-12 dB); neither fits better. B4 is the fifth formant's bandwidth |
 | 6 | Output resolution | G81: 7-bit PWM; M HIGH_QUALITY: 14 bits (sp0256:184-186); M's "original" path keeps 8 bits (`limit(samp >> 4)`, sp0256:187-189, :307) | M (14 bits) | open (section 9); default 14 bits |
 | 7 | MODE across a halt | IS: MODE holds "until ... SETMODE or the sequencer halts"; M keeps it until SETMODE or reset | M | M; moot: every phrase in the references sets MODE before its first data opcode (meas) |
 | 8 | Where the voice goes | M: its own speaker, "mono_voice" (voice.cpp:74); SM: R25 to J1 pin 6 (EXT AUDIO), heard through the TV | — | mixed into the machine's sound (section 8.5) |
@@ -297,6 +308,14 @@ the coupling capacitors) and two one-pole low-passes at about 5 kHz (alpha 1/2 e
 the LM324 stages), in 1/256ths, then times the level, added to the PSG sum (PSG #1, or the ECS's
 3/4 sum; 0 to 32,767) and saturated to signed 16 bits. The model is `sp0256.VoiceOut`.
 
+ECS level (menu "ECS Level", 0x228; the owner: the ECS and the Intellivoice have separate volume
+knobs): PSG #2 alone, before the ECS's 3/4 sum, times Off, Half, Normal, Loud, Loudest = x0, x1/2,
+x1, x3/2, x2 (floor); default Normal (x1: the sound of 0.0.9-0.0.15). The sum is widened to 19
+bits and saturated at 32,767 as before (`intv_machine` a2s / psgs; the benches' `mix_sample`).
+`tb_system` image `ecssound_l4` (Loudest) and plant `ecs_level_ignored`; image `voicemix`
+(`sim/testroms/voicemix.asm`: both PSGs' three tones at full volume and the voice at Loudest
+saying the resident phrases 6-42) drives the final sum past 32,767, plant `voice_mix_unsat`.
+
 Level (menu "Voice Level", 0x220): Off, Half, Normal, Loud, Loudest = x0, x1/2, x1, x3/2, x2;
 default Loudest (x2). How it was chosen: the speech's peak over the five titles' MAME references
 is 13,480 (of 32,767, in the clean scale), one PSG's measured peak is 25,967 (WSMLB): x2 puts the
@@ -329,7 +348,13 @@ machine reset, as the ECS's. The expansion bus `$0700-$0CFF` stays unmapped (DES
   read (with the sequencer's state at each read) and through save / reset / restore every 50,000
   samples, on the six MAME references at 9,285 Hz (`ref:`), 24 random streams (`rnd:`), and on
   the bus level 24 random programs at 10 kHz (`bus:`) and 12 at MAME's rate (`bmame:`), comparing
-  read values, sample cycles and values, and `late` = 0. Plants (20, each must be caught):
+  read values, sample cycles and values, and `late` = 0. `bus:0` is directed: a reset, a command
+  into the idle chip at a random phase, then a save-restore every few cycles with reads after
+  each, so many saves land in the busy window of the step that raises LRQ (snap 0, live 1:
+  `ss_window`). Between the save and the restore both benches fill the FIFO RAM with other
+  words (a reset does not clear it; a load lands in a machine that ran something else), so a
+  FIFO not saved shows (`ss_fifo`). A run that does not end in time (a hung chip:
+  `halted_decode`) is a FAIL. Plants (20, each must be caught):
   `loadall_amp6`, `fifo_jump_keep`, `lrq_at_write`, `prefix_two`, `sign_magnitude`,
   `no_interp`, `lfsr_tap`, `fifo_full_63`, `cmd_while_busy`, `no_z_clear`, `halted_decode`,
   `ss_word5`, `ss_fifo`, `rom_range`, `mac_shift`, `win_short`, `snap_live`, `held_lost`,
@@ -350,16 +375,14 @@ machine reset, as the ECS's. The expansion bus `$0700-$0CFF` stays unmapped (DES
 
 ## 9 Open questions for the owner
 
-1. **Rate** (built: 10 kHz; MAME's 9,285 Hz is a parameter): run the voice at 10 kHz as the
-   evidence says (speech sounds 7.7 % higher and quicker than in MAME), or at MAME's 9,285 Hz? A recording of the console with the Intellivoice
-   ("Mattel Electronics Presents" at a B-17 power-up, through the RF or A/V output) settles it:
-   the phrase lasts 1.88 s at 10 kHz and 2.03 s at 9,285 Hz.
+1. **Rate**: settled at 10 kHz by the owner's recordings (section 3). MAME's 9,285 Hz stays a
+   bench parameter only.
 2. **DAC** (built: Clean by default, "Chip DAC (7-bit)" in the menu): the chip has a 7-bit PWM;
    MAME outputs 14 bits. The same recording would show the 7-bit hiss between words.
 3. **Level** (built: x2 by default, 8.5): the default voice level against game sounds (the module's thumbwheel); the
-   recording at a known thumbwheel position gives a starting point.
-4. **DELTA_9 B4** (row 5): the recording of B-17's title would show which reading is right
-   (MAME's or the instruction-set document's), as the two differ there.
+   recording at a known thumbwheel position gives a starting point. The ECS's second PSG has its
+   own level now (8.5), default x1.
+4. **DELTA_9 B4** (row 5): closed as inaudible; MAME's reading kept.
 5. With the flash cart, a cartridge build of `voicetest` played on the console with the
    Intellivoice would measure the rate, the FIFO's behaviour past its head (row 10) and the
    resident pauses directly.

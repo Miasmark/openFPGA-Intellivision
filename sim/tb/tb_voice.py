@@ -8,7 +8,8 @@ tools/sp0256.py, sample by sample, read by read and state by state.
   python3 -I sim/tb/tb_voice.py [--only NAMES] [--plant NAMES] [--plants-only] [--no-build]
 
 Runs (each a command file for sim/tb/tb_voice.sv: N k samples, W a d writes, R a reads, X a save
-of every state word, a reset and a restore):
+of every state word, a reset, the FIFO RAM filled with other words (a reset does not clear it)
+and a restore):
   ref:NAME    a MAME reference's bus log (tools/refs/mame_voice.sh: voice_t.log in INTV_VOICE_REFS,
               default ~/daria_work/intv/step10/refs), each access after the sample its MAME time falls
               in (the model's compare rule, sp0256.run_log), the whole run; a save-restore every
@@ -22,7 +23,8 @@ of every state word, a reset and a restore):
   bus:N       seed N, bus level: intv_voice.sv (sim/tb/tb_voicebus.sv) on CPU cycles against
               sp0256.VoiceBus at 10 kHz: random accesses, many of them in the cycles around a
               sample (the busy window: reads of the values at the sample, a held write),
-              save-restores of every state word (the window's included).
+              save-restores of every state word (the window's included). bus:0 is directed:
+              a save-restore every few cycles across short phrases, so many land in the window.
   bmame:N     the same at MAME's rate (3,120,000 / 336 Hz).
 Every line of the RTL's output must equal the model's: VOICE_RTL pass. At the bus level the reads
 and the samples are compared as two sequences (the RTL makes a sample a few cycles after it
@@ -161,7 +163,28 @@ def rnd_cmds(seed):
     return cmds
 
 
+def win_cmds():
+    """bus:0, directed: a reset, a command into the idle chip at a random phase, then a
+    save-restore every few cycles, each followed by reads (now and then a write): LRQ rises at
+    the step that takes the command, so the reads in that window must give the value at the
+    sample (snap_lrq 0, the live LRQ 1), and many saves land in it. A window not restored reads
+    the live value."""
+    r = random.Random(77)
+    cmds = []
+    for _ in range(300):
+        cmds += ['W 1 0400', 'C %d' % r.randint(0, 120), 'W 0 %04x' % r.randint(1, 5)]
+        for _ in range(r.randint(30, 50)):
+            cmds += ['C %d' % r.randint(0, 3), 'X']
+            for _ in range(r.randint(1, 2)):
+                x = r.random()
+                cmds.append('R %d' % r.randint(0, 1) if x < 0.85 else 'W 0 %04x' % r.randint(1, 5))
+    cmds.append('C 4000')
+    return cmds
+
+
 def bus_cmds(seed):
+    if seed == 0:
+        return win_cmds()
     r = random.Random(1000 + seed)
     cmds = []
     for _ in range(r.randint(150, 300)):
@@ -266,7 +289,7 @@ PLANTS = [
                                      "if (ss_w21) {started, late, held, held_a, mode_q} <= ss_wdata[10:6];")],
      'the window not restored'),
 ]
-PLANT_RUNS = ['ref:sspartan_p', 'ref:voicetest'] + ['rnd:%d' % i for i in range(1, 9)] + ['bus:%d' % i for i in range(1, 5)]
+PLANT_RUNS = ['ref:sspartan_p', 'ref:voicetest'] + ['rnd:%d' % i for i in range(1, 9)] + ['bus:%d' % i for i in range(0, 5)]
 
 
 # ------------------------------------------------------------------ running
@@ -302,6 +325,19 @@ def rom_hex(rom, work):
     return p
 
 
+RUN_TIMEOUT = 7200     # seconds a run may take; the plant pass lowers it (PLANT_TIMEOUT)
+PLANT_TIMEOUT = 300    # a planted chip that hangs (halted_decode) never ends its run: a FAIL
+
+
+def run_sim(cmd):
+    """The bench binary; False when it does not end within RUN_TIMEOUT (a hang)."""
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, timeout=RUN_TIMEOUT)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+
+
 def run_bus(binary, rom, romhex, work, name):
     kind, arg = name.split(':')
     cmds = bus_cmds(int(arg))
@@ -314,8 +350,11 @@ def run_bus(binary, rom, romhex, work, name):
     with open(cf, 'w') as f:
         f.write('\n'.join(cmds) + '\n')
     t0 = time.time()
-    subprocess.run([binary, '+rom=' + romhex, '+cmd=' + cf, '+out=' + of], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.STDOUT, timeout=7200)
+    if not run_sim([binary, '+rom=' + romhex, '+cmd=' + cf, '+out=' + of]):
+        for f_ in (cf, of):
+            if os.path.exists(f_):
+                os.remove(f_)
+        return 'FAIL', 'no end within %d s (a hang)' % RUN_TIMEOUT, time.time() - t0
     got = open(of).read().split('\n') if os.path.exists(of) else []
     for f_ in (cf, of):
         os.remove(f_)
@@ -347,8 +386,11 @@ def run_one(binary, rom, romhex, work, name):
     with open(cf, 'w') as f:
         f.write('\n'.join(cmds) + '\n')
     t0 = time.time()
-    subprocess.run([binary, '+rom=' + romhex, '+cmd=' + cf, '+out=' + of], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.STDOUT, timeout=7200)
+    if not run_sim([binary, '+rom=' + romhex, '+cmd=' + cf, '+out=' + of]):
+        for f_ in (cf, of):
+            if os.path.exists(f_):
+                os.remove(f_)              # derived from ivoice.bin
+        return 'FAIL', 'no end within %d s (a hang)' % RUN_TIMEOUT, time.time() - t0
     got = open(of).read().split('\n') if os.path.exists(of) else []
     tail = [g for g in got if g.startswith('E ')]
     got = [g if not g.startswith('X') else 'X' for g in got if g and not g.startswith('E ')]
@@ -383,7 +425,7 @@ def main():
     os.makedirs(work, exist_ok=True)
     romhex = rom_hex(rom, work)
     runs = a.only.split(',') if a.only else (['ref:' + n for n in REF_RUNS] + ['rnd:%d' % i for i in range(1, RND_SEEDS + 1)]
-                                              + ['bus:%d' % i for i in range(1, BUS_SEEDS + 1)]
+                                              + ['bus:%d' % i for i in range(0, BUS_SEEDS + 1)]
                                               + ['bmame:%d' % i for i in range(1, BUS_SEEDS // 2 + 1)])
     fails = []
     t0 = time.time()
@@ -426,6 +468,8 @@ def main():
                 fails.append('plant ' + name)
                 continue
             caught = []
+            global RUN_TIMEOUT
+            RUN_TIMEOUT = PLANT_TIMEOUT
             for n in PLANT_RUNS:
                 k = n.split(':')[0]
                 res, _, _ = run_one(bins['chip' if k in ('ref', 'rnd') else k], rom, romhex, pw, n)

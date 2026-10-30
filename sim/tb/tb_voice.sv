@@ -71,6 +71,9 @@ module tb_voice;
         ss_en = 1'b0;
         @(negedge clk); reset = 1'b1;
         @(negedge clk); reset = 1'b0;
+        // a load lands in a machine whose FIFO RAM holds what ran before (reset
+        // does not clear it): fill it with other words, so a FIFO not restored shows
+        for (int i = 0; i < 64; i++) dut.fifo.mem[i] = 10'(i * 157 + 291);
         @(negedge clk); ss_en = 1'b1;
         @(negedge clk);
         for (int i = 0; i < NW; i++) begin

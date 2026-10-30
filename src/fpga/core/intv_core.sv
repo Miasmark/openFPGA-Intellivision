@@ -60,6 +60,8 @@ module intv_core #(
     input  wire logic        voice_dac7,
     input  wire logic [2:0]  voice_level,
     output logic             voice_on,
+    // the ECS's own volume (the module has its own knob): PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2
+    input  wire logic [2:0]  ecs_level,
 
     // raster and picture
     output logic             ce_pix,
@@ -221,7 +223,7 @@ module intv_core #(
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1),
         .pad_r(pad_r), .pad_l(pad_l),
         .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
-        .voice_mode(voice_mode), .voice_dac7(voice_dac7), .voice_level(voice_level), .voice_on(voice_on),
+        .voice_mode(voice_mode), .voice_dac7(voice_dac7), .voice_level(voice_level), .voice_on(voice_on), .ecs_level(ecs_level),
         .voice_busy(voice_busy), .voice_late(voice_late), .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),

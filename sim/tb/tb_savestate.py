@@ -863,7 +863,9 @@ PLANTS = [
      'voicetest', 'psgtest', r' (V: (FAIL load|loads |state set)|S: blob \S+: \[.header flags = \$00000000, want \$00000002)'),
     ('ss_voice_acc_lost', 'intv_voice.sv', [("if (ss_w20) acc <= ss_wdata;", "if (ss_w20) acc <= 32'd0;")],
      'voicetest', 'psgtest', AFTER),
-    ('ss_voice_busy_ignored', 'intv_voice.sv', [("assign busy = c_busy || fire_d;", "assign busy = 1'b0;")],
+    # (planted in the quiet point, not in intv_voice's busy: the bench asks for its "voice" saves
+    # when busy is up, so a busy forced to 0 would never ask for the save it should catch)
+    ('ss_voice_busy_ignored', 'intv_ss_ctl.sv', [("&& !ce_cpu && !voice_busy", "&& !ce_cpu")],
      'voicetest', 'psgtest', AFTER),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame

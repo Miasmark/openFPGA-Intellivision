@@ -672,7 +672,8 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
                 'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT',
-                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL')
+                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL',
+                'VOICECFG', 'VOICECMP', 'VOICEROM', 'NOIVOICE')
 
 
 def main():

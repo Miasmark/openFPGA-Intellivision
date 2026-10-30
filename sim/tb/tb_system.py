@@ -1919,8 +1919,8 @@ PLANTS = [
                                             "assign audio     = vsum[15:0];")], 'voicemix', None),
     # the step-9 review: the sum not scaled to 3/4 with the ECS attached (ecsastro: Auto, attached)
     # or on (ecstest), or scaled with the ECS off too (psgtest: PSG #1 alone at full volume)
-    ('ecs_mix_unscaled', 'intv_machine.sv', [("ecs_on ? mix3[18:2] : mix;", "mix;")], 'ecstest', None),
-    ('ecs_mix_scaled_off', 'intv_machine.sv', [("ecs_on ? mix3[18:2] : mix;", "mix3[18:2];")], 'psgtest', None),
+    ('ecs_mix_unscaled', 'intv_machine.sv', [("ecs_on ? mix3[20:2] : mix;", "mix;")], 'ecstest', None),
+    ('ecs_mix_scaled_off', 'intv_machine.sv', [("ecs_on ? mix3[20:2] : mix;", "mix3[20:2];")], 'psgtest', None),
     ('ecs_latch_when_off', 'intv_ecs.sv', [("        end else if (on) begin\n", "        end else begin\n")],
      'ecstest_off', None),
     # the step-9 review: the ECS ROMs answering with no ECS ROM slot (uninitialised SRAM at

@@ -10,7 +10,7 @@ Everything else is generated from LAYOUT below or checked against it:
   docs/SAVESTATE.md              the table between the GENERATED markers
   the SS_ID defaults of the RTL modules and intv_machine's parameters (checked only)
 
-The blob (format version 3, build step 9; version 2 was step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
+The blob (format version 4, build step 10; 3 was step 9's, 2 step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
 32-bit words stored big-endian (the Pocket's bridge byte order):
   bytes 0-63        header, 16 words (HEADER below)
   bytes 64-8191     the modules' state words in id order (1,853 used; the rest zero)
@@ -22,6 +22,7 @@ CRC-32, the same as the cartridge CRC) is in the header. A blob is refused unles
 magic, version, size, length, cartridge CRC and length, the CFG's CRC, flags, word
 counts and the EXEC and GROM CRCs match this core, its cartridge (and CFG) and its system
 ROMs, the ECS flag and ECS ROM CRC (version 3: the ECS attached or not, and with which ROM),
+the Intellivoice flag (version 4: on or off),
 the reserved header words and the reserved area are
 zero, and the payload CRC is right.
 
@@ -73,18 +74,21 @@ LAYOUT = [
      'PSG #2 (ECS, AY-3-8917): as psg'),
     (0x10, 'ecsram', 512, 'intv_ecs.sv', None,
      'ECS RAM 2,048 x 8, four cells a word (ids $10-$11)'),
+    (0x18, 'voice', 24, 'intv_voice.sv', 'SS_ID',
+     'Intellivoice: SP0256 sequencer, parameters, decoded copy, filter, the sample enable and busy window (step 10)'),
+    (0x19, 'voicefifo', 64, 'intv_ram.sv', None,
+     "the SPB640's FIFO 64 x 10 (step 10)"),
 ]
 # Ids kept for later build steps (not in version 1's blob).
 RESERVED_IDS = [
-    (0x18, 'Intellivoice FIFO and SP0256 (step 10)'),
     (0x20, 'JLP registers (step 11)'),
 ]
 # intv_machine's id parameters (the rest are in core_top / intv_core)
 MACHINE_PARAMS = {'SS_CPU': 0x02, 'SS_BUS': 0x03, 'SS_STIC': 0x04, 'SS_PSG': 0x05, 'SS_SCR': 0x06,
                   'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D,
-                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10}
+                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10, 'SS_VOICE': 0x18}
 
-VERSION = 3
+VERSION = 4
 MAGIC = 0x494E5456                 # "INTV"
 BLOB_BYTES = 153600                # DESIGN 4.4, decision 6
 HDR_WORDS = 16
@@ -94,7 +98,7 @@ CRAM_BYTE = 8192
 CRAM_CELLS = 16384                 # the SRAM's cart RAM area (intv_media.sv)
 LIVE_END = CRAM_BYTE + 2 * CRAM_CELLS        # 40960: the end of what versions 1-3 use
 PAYLOAD_BYTES = LIVE_END - MOD_BYTE          # 40896
-MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1853
+MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1941
 
 # header words
 (H_MAGIC, H_VERSION, H_SIZE, H_LENGTH, H_CART_CRC, H_CART_WORDS, H_FLAGS, H_CRC, H_NMOD, H_NCRAM,
@@ -106,7 +110,7 @@ HEADER = [
     (H_LENGTH, 'length', 'payload bytes from byte 64 (%d)' % PAYLOAD_BYTES),
     (H_CART_CRC, 'cart_crc', "the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge)"),
     (H_CART_WORDS, 'cart_words', 'the cartridge image length in 16-bit words'),
-    (H_FLAGS, 'flags', 'bit 0 ECS attached (version 3), bit 1 Intellivoice attached, bit 8 PAL (0 in this core)'),
+    (H_FLAGS, 'flags', 'bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core)'),
     (H_CRC, 'crc', 'CRC32 of the payload (bytes 64 .. 64 + length - 1)'),
     (H_NMOD, 'mod_words', 'module state words (%d)' % MOD_WORDS),
     (H_NCRAM, 'cram_cells', 'cart RAM cells (%d)' % CRAM_CELLS),

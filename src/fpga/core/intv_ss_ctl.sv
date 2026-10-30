@@ -35,7 +35,8 @@
 // enables; the raster runs on, so the Pocket's video keeps its sync, and
 // the machine resumes when the raster comes round to its position (mpos).
 // The freeze lands at a quiet point: the machine live and out of reset, in
-// VBlank (its vcnt < V_QUIET, before the frame's first BUSRQ), and the CPU
+// VBlank (its vcnt < V_QUIET, before the frame's first BUSRQ), no voice
+// sample in the making (step 10: intv_voice busy), and the CPU
 // at an instruction boundary (inside an opcode fetch's BAR cycle, not on
 // its last clk: no bus access in flight) or halted or held. A save or load
 // that finds none within TIMEOUT_FRAMES frames (counted while the machine
@@ -50,7 +51,8 @@
 //   load   freeze; check the header (magic, version, size, length, the
 //          cartridge's CRC and length, the CFG's CRC (version 2, step 8),
 //          the EXEC's and GROM's CRCs, flags (bit 0: the ECS attached;
-//          version 3, step 9), the ECS ROM's CRC,
+//          version 3, step 9; bit 1: the Intellivoice on, version 4,
+//          step 10), the ECS ROM's CRC,
 //          word counts, reserved words 0) and the payload (CRC32, the
 //          unused module area 0, nothing written beyond the live part): a
 //          foreign or corrupt blob ends with err and the machine resumes
@@ -127,6 +129,8 @@ module intv_ss_ctl #(
     input  wire logic [31:0] exec_crc,           // the system ROM slots' CRC32s (intv_core)
     input  wire logic [31:0] grom_crc,
     input  wire logic        ecs_flag,           // the ECS attached (step 9: header flags bit 0)
+    input  wire logic        voice_flag,         // the Intellivoice on (step 10: header flags bit 1)
+    input  wire logic        voice_busy,         // a voice sample in the making: not a quiet point
     input  wire logic [31:0] ecs_crc,            // its ROM slot's CRC32 (0 when not attached)
 
     output logic             run,
@@ -296,7 +300,7 @@ module intv_ss_ctl #(
     // ---------------------------------------------- freeze
     logic op = 1'b0;                                      // a save or load holds the freeze
     wire logic want = op || menu_hold;
-    wire logic quiet = live && !mreset && vcnt < 9'(V_QUIET) && !ce_cpu
+    wire logic quiet = live && !mreset && vcnt < 9'(V_QUIET) && !ce_cpu && !voice_busy
                     && (cpu_fetch || cpu_halted || cpu_hold);
     typedef enum logic [1:0] {F_RUN, F_SETTLE, F_FROZEN, F_RESUME} fst_t;
     fst_t       fst = F_RUN;
@@ -384,7 +388,7 @@ module intv_ss_ctl #(
             4'(SS_H_LENGTH):     hdr_exp = 32'(SS_PAYLOAD);
             4'(SS_H_CART_CRC):   hdr_exp = ccrc;
             4'(SS_H_CART_WORDS): hdr_exp = {15'd0, cwords};
-            4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};
+            4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, ecs_flag};
             4'(SS_H_CRC):        hdr_exp = c;
             4'(SS_H_MOD_WORDS):  hdr_exp = 32'(SS_MOD_WORDS);
             4'(SS_H_CRAM_CELLS): hdr_exp = 32'(SS_CRAM_CELLS);

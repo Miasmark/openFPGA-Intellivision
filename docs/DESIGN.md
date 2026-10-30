@@ -402,6 +402,7 @@ File sizes are the owner's files [measured]. They match MAME's expected CRCs: EX
 - Output: 48 kHz I2S through agg23's MIT `sound_i2s.sv` [from L-PSS].
 - Volume curve: the AY 16-level DAC curve from the datasheet, cross-checked with MAME's table [from S4; MAME ay8910.cpp].
 - Speech level against the PSG is unknown (no Intellivoice schematic) [from L-PSS].
+- **(build step 10)** As built (`sp0256.sv`, `intv_voice.sv`; model `tools/sp0256.py`; docs/VOICE_NOTES.md 8): the SP0256 at 10 kHz exactly (88 / 7,875 per CPU cycle on NTSC clk_sys; MAME's 9,285 Hz is a bench parameter), each sample held, a high-pass at about 150 Hz and two low-passes at about 5 kHz at the 48 kHz strobe, times the menu's level (default x2: the speech's peak near one PSG's), added to the PSG sum and saturated. Menu: Intellivoice Auto / On / Off, Voice Level, Voice Sound (Clean or the chip's 7-bit DAC). Save state ids $18 and $19, format version 4.
 - **Noise LFSR:** use bit0 ^ bit3 (maximal, period 131,071), as MAME does for the AY-3-8910 and YM2149 [from MAME ay8910.h:263-272]. The wiki's formula is bit0 ^ bit2 with period 114,681, which is not maximal [measured, L-WIKI, L-DSL]. GI datasheets say only "pseudo random" [from S4 p.7-101; S2 p.302]. Nothing verifies the taps on the 8914 die itself. This stays a decision until there is a hardware recording (section 11).
 - **(build step 6)** As built (`intv_psg.sv`, model `tools/psg.py`; facts, sources and the differences from MAME in docs/PSG_NOTES.md): the generators step once every 4 CPU cycles (master / 16), counted from the CPU's first cycle, and a write lands at the end of its DW cycle. The 48 kHz output is two one-pole low passes at the step rate (-3 dB near 16.5 kHz), the box filter and an exact 48 kHz phase accumulator; the DAC is MAME's AY-3-8910 curve for fixed and envelope volumes alike; no DC: silence is 0. Register logs equal MAME's for eight games, and with MAME's tone counter and step grid every PSG step equals MAME's own stream; the core's tone counter restarts at 0 when a smaller period is written, as MAME's notes describe the chip, where MAME keeps the remainder (PSG_NOTES P1).
 
@@ -550,7 +551,7 @@ Each step adds its module's `ss` port and passes the round-trip test (8.4) befor
 | Noise taps unverified on the 8914 | wrong noise sound | default bit0^bit3, recording later | L-DSL |
 | Palette hue undecided | wrong colours | MAME palette first, capture later | L-SM; L-DSL |
 | PAL timing undocumented | no PAL support | defer to step 12; ask the owner for hardware | L-WIKI; L-PSS |
-| SP0256 SETMSB_3 differs (MAME loads 8-bit pitch; GI spec does not) | speech desync | walk the IVOICE ROM and game streams with a script | L-DSL |
+| SP0256 SETMSB_3 differs (MAME loads 8-bit pitch; GI spec does not) | speech desync | walk the IVOICE ROM and game streams with a script | L-DSL **(build step 10)** moot: no title's stream and no resident phrase uses SETMSB_3 (docs/VOICE_NOTES.md 5 row 4) |
 | 26 images without proven layout; 6 only estimated | some games will not map | user .cfg; owner checks; menu message | L-TA |
 | Pocket save-state behaviour undocumented (timing, size limit, size changing per game) | save or sleep fails | fixed 150 KiB blob; test on the Pocket early (step 7) | L-PSS |
 | Clean-room slip (reading Intv_MiSTer, copying jzIntv code) | licence problem | keep a reference list per module with page or sheet; review notes before commit | PJ |
@@ -656,6 +657,8 @@ The lanes' reports and supporting files are under `research/<lane>/` in the proj
 - MAME STIC constants are derived from jzIntv documents (stic.h:45), so "MAME and wiki agree" counts as one source.
 
 ## 14 Addendum: Intellivoice Service Manual (owner, 2026-10-24)
+**(build step 10)** The facts, the sources' disagreements (MAME's 9,285 Hz against the chip's 10 kHz
+among them), the model's results against MAME and the RTL plan are in docs/VOICE_NOTES.md.
 See research/intellivoice-manual/REPORT.md (docs/Intellivoice_Service_Manual.pdf, Model 3330). It confirms the
 3.12 MHz resonator (Y1) and the chip set (74LS12, SPB640, SP0256, LM324, LM358), shows the module passes the
 cartridge bus through unchanged, and gives the full analog chain (PWM -> ~150 Hz high-pass -> two 5 kHz active

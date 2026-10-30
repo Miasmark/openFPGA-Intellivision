@@ -123,14 +123,14 @@ Header (bytes 0-63, 32-bit words, big-endian):
 | Word | Byte | Field | Value |
 |---|---|---|---|
 | 0 | 0 | magic | $494E5456 "INTV" |
-| 1 | 4 | version | format version (3) |
+| 1 | 4 | version | format version (4) |
 | 2 | 8 | size | blob size in bytes (153600) |
 | 3 | 12 | length | payload bytes from byte 64 (40896) |
 | 4 | 16 | cart_crc | the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge) |
 | 5 | 20 | cart_words | the cartridge image length in 16-bit words |
-| 6 | 24 | flags | bit 0 ECS attached (version 3), bit 1 Intellivoice attached, bit 8 PAL (0 in this core) |
+| 6 | 24 | flags | bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core) |
 | 7 | 28 | crc | CRC32 of the payload (bytes 64 .. 64 + length - 1) |
-| 8 | 32 | mod_words | module state words (1853) |
+| 8 | 32 | mod_words | module state words (1941) |
 | 9 | 36 | cram_cells | cart RAM cells (16384) |
 | 10 | 40 | exec_crc | the EXEC slot's CRC32 (the bytes the loader took) |
 | 11 | 44 | grom_crc | the GROM slot's CRC32 |
@@ -156,7 +156,9 @@ Modules (state words in id order; one 32-bit word per state word):
 | $0E | ecs | 1 | 5340-5343 | intv_ecs.sv | ECS page latches $2/$7/$E, port latches, mode (step 9) |
 | $0F | psg2 | 21 | 5344-5427 | intv_psg.sv | PSG #2 (ECS, AY-3-8917): as psg |
 | $10-$11 | ecsram | 512 | 5428-7475 | intv_ecs.sv | ECS RAM 2,048 x 8, four cells a word (ids $10-$11) |
-| | (unused, zero) | | 7476-8191 | | |
+| $18 | voice | 24 | 7476-7571 | intv_voice.sv | Intellivoice: SP0256 sequencer, parameters, decoded copy, filter, the sample enable and busy window (step 10) |
+| $19 | voicefifo | 64 | 7572-7827 | intv_ram.sv | the SPB640's FIFO 64 x 10 (step 10) |
+| | (unused, zero) | | 7828-8191 | | |
 
 Then:
 
@@ -169,10 +171,9 @@ Ids kept for later steps:
 
 | Id | For |
 |---|---|
-| $18 | Intellivoice FIFO and SP0256 (step 10) |
 | $20 | JLP registers (step 11) |
 
-Module words: 1853 (7412 bytes); payload 40896 bytes (bytes 64-40959); blob 153600 bytes.
+Module words: 1941 (7764 bytes); payload 40896 bytes (bytes 64-40959); blob 153600 bytes.
 
 <!-- END GENERATED -->
 

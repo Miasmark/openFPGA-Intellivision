@@ -54,6 +54,14 @@ module intv_core #(
     input  wire logic [63:0] ecs_keys,
     input  wire logic        ecs_synth,
     output logic             ecs_full,        // the ECS fully on, mode on (intv_input's key routing)
+    // the Intellivoice (build step 10): the menu's override (0 Auto, 1 On, 2 Off; taken at the next
+    // machine reset), its sound (7-bit DAC or clean) and level
+    input  wire logic [1:0]  voice_override,
+    input  wire logic        voice_dac7,
+    input  wire logic [2:0]  voice_level,
+    output logic             voice_on,
+    // the ECS's own volume (the module has its own knob): PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2
+    input  wire logic [2:0]  ecs_level,
 
     // raster and picture
     output logic             ce_pix,
@@ -115,6 +123,17 @@ module intv_core #(
     assign ecs_mode = ecs_override == 2'd1 ? 2'd1 : ecs_override == 2'd2 ? 2'd0 : ecs_auto;
     logic [16:0] cart_words;
     logic [7:0]  cart_layout, cart_flags;
+    // the Intellivoice at machine reset: On, or Auto and the cartridge's flags say so (the CRC
+    // table, a CFG's voice var, a .rom's tag: intv_loader FLAG_VOICE); never without ivoice.bin
+    // (data slot 5 loaded with its 2,048 bytes)
+    logic        voice_mode, voice_busy;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        voice_late;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic [10:0] ivoice_addr;
+    wire  logic  ivoice_ok = slot_st[11:10] == 2'd2;
+    logic        voice_auto;                     // intv_media: the flag and the ROM
+    assign voice_mode = voice_override == 2'd1 ? ivoice_ok : voice_override == 2'd0 && voice_auto;
     logic        cbus_ack, cbus_hit, cbus_paged, cbus_req, cbus_we;
     logic [15:0] cbus_addr, cbus_wdata, cbus_rdata;
     logic [3:0]  cbus_attr;
@@ -125,8 +144,8 @@ module intv_core #(
     logic [10:0] grom_addr, vgrom_addr;
     logic [9:0]  exec_q;
     logic [7:0]  grom_q, vgrom_q;
-    /* verilator lint_off UNUSEDSIGNAL */
     logic [7:0]  ivoice_q;
+    /* verilator lint_off UNUSEDSIGNAL */
     logic        m_audio_stb;
     logic [2:0]  m_phase;
     logic [15:0] m_dout, m_din, m_addr;
@@ -165,11 +184,11 @@ module intv_core #(
         .bus_req(cbus_req), .bus_we(cbus_we), .bus_addr(cbus_addr), .bus_wdata(cbus_wdata),
         .bus_ack(cbus_ack), .bus_rdata(cbus_rdata), .bus_hit(cbus_hit), .bus_attr(cbus_attr),
         .bus_paged(cbus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
-        .ecs_on(ecs_on), .ecs_pg(ecs_pg), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok),
+        .ecs_on(ecs_on), .ecs_pg(ecs_pg), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok), .voice_auto(voice_auto),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
         .aux_be(2'b11), .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
-        .vgrom_addr(vgrom_addr), .vgrom_q(vgrom_q), .ivoice_addr(11'd0), .ivoice_q(ivoice_q),
+        .vgrom_addr(vgrom_addr), .vgrom_q(vgrom_q), .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
         .ready(cart_ready), .busy(cart_busy), .err(cart_err), .fmt_err(cart_fmt_err), .len_st(len_st),
         .slot_st(slot_st),
         .crc(cart_crc), .words(cart_words), .layout(cart_layout), .flags(cart_flags), .hit(cart_hit),
@@ -197,13 +216,15 @@ module intv_core #(
     intv_machine #(
         .SS_CPU(SS_CPU), .SS_BUS(SS_BUS), .SS_STIC(SS_STIC), .SS_PSG(SS_PSG),
         .SS_SCR(SS_SCRATCH), .SS_SYS(SS_SYSRAM), .SS_GRAM(SS_GRAM), .SS_ROW(SS_ROW),
-        .SS_LINE(SS_LINE), .SS_ECS(SS_ECS), .SS_PSG2(SS_PSG2), .SS_ERAM(SS_ECSRAM)
+        .SS_LINE(SS_LINE), .SS_ECS(SS_ECS), .SS_PSG2(SS_PSG2), .SS_ERAM(SS_ECSRAM), .SS_VOICE(SS_VOICE)
     ) machine (
         .clk(clk), .mreset(machine_reset), .ce(ce_cpu), .ce_pix(ce_stic), .live(live),
         .hcnt(hcnt), .vcnt(vcnt),
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1),
         .pad_r(pad_r), .pad_l(pad_l),
         .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
+        .voice_mode(voice_mode), .voice_dac7(voice_dac7), .voice_level(voice_level), .voice_on(voice_on), .ecs_level(ecs_level),
+        .voice_busy(voice_busy), .voice_late(voice_late), .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -230,14 +251,15 @@ module intv_core #(
         .cpu_fetch(m_fetch), .cpu_halted(m_halted), .cpu_hold(m_hold),
         .cart_crc(cart_crc), .cart_words(cart_words), .cfg_crc(cart_cfg_crc), .cart_noss(cart_noss),
         .exec_crc(~ex_c), .grom_crc(~gr_c),
-        .ecs_flag(ecs_on), .ecs_crc(ecs_on ? ~es_c : 32'd0),
+        .ecs_flag(ecs_on), .ecs_crc(ecs_on ? ~es_c : 32'd0), .voice_flag(voice_on), .voice_busy(voice_busy),
         .run(run), .frozen(frozen), .ss_en(ss_en), .ss_addr(ss_addr), .ss_we(ss_we),
         .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
         .aux_ack(aux_ack), .aux_rdata(aux_rdata));
 
-    // sound: the PSG's while the machine runs; otherwise down to 0 by 1/16
-    // (and 1) every 1,024 clk_sys (42 kHz), from full scale in about 4 ms
+    // sound: the machine's while it runs; otherwise toward 0 by 1/16 (and 1)
+    // every 1,024 clk_sys (42 kHz), from full scale in about 4 ms (signed:
+    // the voice can make it negative, step 10)
     logic [9:0] dk = 10'd0;
     initial audio = 16'd0;
     always_ff @(posedge clk) begin
@@ -245,7 +267,7 @@ module intv_core #(
         if (live)
             audio <= psg_audio;
         else if (dk == 10'd0 && audio != 16'd0)
-            audio <= audio - (audio >> 4) - 16'd1;
+            audio <= audio[15] ? audio - 16'($signed(audio) >>> 4) + 16'd1 : audio - (audio >> 4) - 16'd1;
     end
 
     /* verilator lint_off UNUSEDSIGNAL */

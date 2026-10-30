@@ -34,6 +34,9 @@ the RTL:
                ROMs at $2000 / $7000 / $E000 on their pages. Where the ECS
                answers, the cartridge does not (its page selects and bank
                registers still see the write).
+  Intellivoice tools/sp0256.py VoiceBus (build step 10), when on: $0080-$0081
+               on the CPU's cycle count (the sample enable, the busy window);
+               off (or None) leaves them unmapped.
   anything else reads $FFFF (pull-ups, DESIGN 2.5). Devices that answer
   together give the AND of their words (the pulled-up bus).
 
@@ -323,7 +326,8 @@ class MameTiming(ListTiming):
 class SystemBus:
     """The step-3 system around the CPU model (see the module docstring)."""
 
-    def __init__(self, exec_words, grom_bytes, cart=None, timing=None, stic_mode="none", ecs=None):
+    def __init__(self, exec_words, grom_bytes, cart=None, timing=None, stic_mode="none", ecs=None,
+                 voice=None):
         if len(exec_words) != 4096 or len(grom_bytes) != 2048:
             raise ValueError("EXEC must be 4096 words, GROM 2048 bytes")
         self.exec = [w & 0x3FF for w in exec_words]
@@ -341,6 +345,7 @@ class SystemBus:
         self.zero = ()                  # MAME mode: unmapped ranges MAME reads as 0
         self.mame_map = False           # MAME's memory map (MAME_MAP_ZERO, no aliases)
         self.ecs = ecs                  # tools/ecs.py Ecs, or None (no ECS at all)
+        self.voice = voice              # tools/sp0256.py VoiceBus (on or off), or None (step 10)
         self.replay = None              # MAME check: {addr: value} reads taken from the trace
         self.bank0 = _bank0()           # no cartridge: intv_cart's bank registers (kept over resets)
         self.reset()
@@ -357,6 +362,8 @@ class SystemBus:
         self.sel0 = [0] * 16            # no cartridge: intv_cart's page selects still take writes
         if self.ecs is not None:
             self.ecs.reset()
+        if self.voice is not None:
+            self.voice.reset()
 
     # -- the PSG's registers ----------------------------------------------
     @property
@@ -441,6 +448,8 @@ class SystemBus:
             v &= 0xFF00 | self.grom[a - 0x3000]
         elif 0x3800 <= a <= (0x3BFF if self.mame_map else 0x3FFF):
             v &= self.gram[a & 0x1FF] if self.stic_open(cycle) else a & 0x1FF
+        if self.voice is not None and self.voice.on and 0x80 <= a <= 0x81:
+            v &= self.voice.access(self._t(cycle), ('R', a))
         if self.ecs is not None and self.ecs.owns(a):
             if self.ecs.keys_at is None and self.presses is not None:
                 self.ecs.keys_at = lambda f: press_keys(self.presses, f - 1)
@@ -474,6 +483,8 @@ class SystemBus:
         if a & 0x3800 == 0x3800 and (0x3800 <= a <= 0x3BFF or not self.mame_map):
             if self.stic_open(cycle):  # $3800, $7800, $B800, $F800 (+ $7FF)
                 self.gram[a & 0x1FF] = value & 0xFF
+        if self.voice is not None and self.voice.on and 0x80 <= a <= 0x81:
+            self.voice.access(self._t(cycle), ('W', a, value))
         own = self.ecs is not None and self.ecs.owns(a)
         if self.ecs is not None:
             self.ecs.write(a, value, self._t(cycle))
@@ -509,7 +520,15 @@ class SystemBus:
                 "ecs": self.ecs.state() if self.ecs is not None else [0],
                 "psg2": list(self.ecs.psg.regs) if self.ecs is not None else [0] * 14,
                 "psg2x": self._psg2x(cycle),
-                "ecsram": self.ecs.ram_words() if self.ecs is not None else [0] * 512}
+                "ecsram": self.ecs.ram_words() if self.ecs is not None else [0] * 512,
+                "voice": self._voice_words(cycle)}
+
+    def _voice_words(self, cycle):
+        """intv_voice.sv's words 20-22 at the start of cycle `cycle` (step 10)."""
+        if self.voice is None or not self.voice.on:
+            return [0, 1, 0]                    # reset: snap_lrq 1, mode off
+        self.voice.run_to(self._t(cycle))
+        return self.voice.state_words()
 
     def _psg2x(self, cycle):
         if self.ecs is None or not self.ecs.on:

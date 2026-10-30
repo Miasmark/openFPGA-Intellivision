@@ -462,6 +462,17 @@ def main():
           and re.search(r"12'h204:\s*set_border\s*<=\s*bridge_wr_data\[0\];", core_top) is not None
           and int(border[0]["address"], 16) & 0xFFF == 0x204,
           "Border: core_top's set_border at 0x204, power-up value = the menu default")
+    # the Intellivoice's three settings (step 10) and the ECS level: core_top's registers and power-up values
+    for nm, off, reg, width in (("Intellivoice", 0x21C, "set_voice", 2), ("Voice Level", 0x220, "set_vlevel", 3),
+                                ("Voice Sound", 0x224, "set_vdac", 1),
+                                ("ECS Level", 0x228, "set_elevel", 3)):
+        it = [v for v in var if v["name"] == nm]
+        pat = (r"reg\s+\[%d:0\]\s+%s\s*=\s*%d'd(\d);" % (width - 1, reg, width)) if width > 1 else (r"reg\s+%s\s*=\s*1'b([01]);" % reg)
+        pw = re.search(pat, core_top)
+        sl = "[%d:0]" % (width - 1) if width > 1 else "[0]"
+        check(len(it) == 1 and pw and int(it[0]["address"], 16) & 0xFFF == off and it[0]["defaultval"] == int(pw.group(1))
+              and re.search(r"12'h%03X:\s*%s\s*<=\s*bridge_wr_data\%s;" % (off, reg, sl.replace(']', '\\]')), core_top) is not None,
+              f"{nm}: core_top's {reg} at 0x{off:03X}, power-up value = the menu default")
     check(re.search(r"12'h200:\s*menu_reset_cnt", core_top) is not None and
           any(v["name"] == "Reset" and int(v["address"], 16) & 0xFFF == 0x200 for v in var), "Reset action at 0x200")
     # Keypad Mode and Swap Controllers (DESIGN.md 7.2): core_top's registers,

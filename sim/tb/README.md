@@ -10,6 +10,7 @@ to `sim/work*`.
 | `tb_cpu.sv` | 3: the CP1610 RTL in lockstep with the Python model | `sim/tb/run_tb_cpu.sh --all` |
 | `tb_system.sv` | 3-6: the machine (CPU, bus fabric, RAMs, STIC, PSG) with timing and loader, against the system model | `python3 -I sim/tb/tb_system.py --all`; the frame gate (steps 4-6) `--screens` |
 | `tb_input.sv` | 6: the input module against the input model and MAME's hand-controller tables | `python3 -I sim/tb/tb_input.py --all` |
+| `tb_voice.sv`, `tb_voicebus.sv` | 10: the Intellivoice (`sp0256.sv` alone; `intv_voice.sv` on CPU cycles) against `tools/sp0256.py` | `python3 -I sim/tb/tb_voice.py --all --plants` (needs the MAME references, INTV_VOICE_REFS) |
 
 `tb_loader.py` builds `tb_loader.sv` with the real `core_bridge_cmd.v`,
 agg23's `data_loader.sv`, `apf_datatable.sv` and `intv_media.sv`, plus our
@@ -340,3 +341,17 @@ the images ecsoffcfg and ecsoffrom (ECS incompatible: Auto off), plant
 auto_ecs_off_ignored. `tb_savestate.py`: Atlantis under Auto and Super NFL
 Football (SS_ECS, attached), and the X runs (the own state into a core whose
 ECS ROM file differs by one byte: refused; plant ss_ecs_crc_unchecked).
+
+Step 10 (the Intellivoice, docs/VOICE_NOTES.md 8.7). `tb_voice.py`: `sp0256.sv` = `Voice` sample
+by sample on the six MAME references at 9,285 Hz and 24 random streams, with a save / reset /
+restore every 50,000 samples; `intv_voice.sv` = `VoiceBus` on 24 random bus programs at 10 kHz
+and 12 at MAME's rate (read values, sample cycles, `late` 0); 20 plants. `tb_system.py`: images
+voicetest, voicedac and voice_off (VOICE_OF: sim/testroms/voicetest.py in the EXEC slot), V lines
+(every voice sample's cycle and value), the mix's hash with the voice (`voice_mix`,
+`sp0256.VoiceOut`), intv_voice's words in the dumps; plants voice_mapped_off, voice_level2_lost,
+voice_mix_unsigned, voice_dac_bits. `tb_loader.py`: a `voice auto` line on every image, and the
+images "voice: CFG voice = 1", "voice: CFG voice_compat = 2", "voice: .rom tag (requires)" and
+"voice: flagged title, no ivoice.bin". `tb_savestate.py`: voicetest (On) and B-17 Bomber (Auto)
+in SS_VOICE, save kinds voice and voicewin, the voice's samples in the A lines, the V runs (the
+own state into a core with the voice off: refused); plants ss_voice_unchecked,
+ss_voice_acc_lost, ss_voice_busy_ignored.

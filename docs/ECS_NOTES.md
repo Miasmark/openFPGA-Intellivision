@@ -109,6 +109,12 @@ The 3/4 sum can still reach 49,149 in theory (both PSGs at full volume on all ch
 saturation stays. tb_system's E lines hash the mix (the model in `mix_sample`); plants
 ecs_mix_unscaled and ecs_mix_scaled_off.
 
+**ECS Level** (build step 10; the owner: the ECS module has its own volume knob, as the Intellivoice
+has): the menu's ECS Level (0x228) scales PSG #2 alone before the 3/4 sum: Off, Half, Normal, Loud,
+Loudest = x0, x1/2, x1, x3/2, x2 (floor), default Normal, so the default sound is the one above. At
+Loudest the sum can reach 73,722 before the saturation. Image ecssound_l4, plant ecs_level_ignored;
+plant ecs_mix_wraps (the PSG sum's saturation dropped) targets the step-10 `psgs` line.
+
 ## 4 Keyboards
 
 The matrix (MAME ecs_ctrl.cpp ROW.n, the wiki's table): port A's lines are rows 0-7, port B's

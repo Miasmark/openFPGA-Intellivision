@@ -99,10 +99,10 @@ import sp0256               # noqa: E402
 import intvcart as m        # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
-RTL = ['cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
+RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
-       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
@@ -165,6 +165,13 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('voicedac', None, 'voicetest.py', 16, (0xFF, 0xFF), 'stic'),
           ('voice_off', None, 'voicetest.py', 10, (0xFF, 0xFF), 'stic'),
           ('voicemix', None, 'voicemix.asm', 24, (0xFF, 0xFF), 'stic')]
+# step 11: the JLP measurement cartridges (sim/testroms/jlp/build_jlp.py, docs/JLP_NOTES.md 4): each
+# runs its table of JLP reads, writes and flash commands at start-up and keeps the results in
+# System RAM ($0300 on), which the state dumps compare (RTL = model); the model = jzIntv on
+# every data word (JLP_NOTES 4.1)
+JLP_IMAGES = [(n, ('jlp', n), None, 40, (0xFF, 0xFF), 'stic')
+              for n in ('jlpmap', 'jlpmul', 'jlpdiv', 'jlpfls', 'jlpena', 'jlpf1', 'jlpm1', 'jlpfz')]
+IMAGES += JLP_IMAGES
 # the hardware measurement cartridges (sim/testroms/hw/build_hw.py, docs/HW_TESTS.md): RTL = model on
 # the owner's test programs before they go to his console. Long runs (hundreds of frames, to their
 # results screens), so only by name (--only hw_steal,...), never in --all
@@ -299,6 +306,23 @@ def hw_image(name, work):
     bh = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bh)
     _, image, cfg = bh.build_one(name)
+    path, cpath = os.path.join(work, name + '.bin'), os.path.join(work, name + '.cfg')
+    with open(path, 'wb') as f:
+        f.write(image)
+    with open(cpath, 'w') as f:
+        f.write(cfg)
+    CFG_OF[path] = cpath
+    return path
+
+
+def jlp_image(name, work):
+    """The image path of a JLP measurement cartridge (sim/testroms/jlp/build_jlp.py), built
+    into work with its CFG (CFG_OF)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('build_jlp', os.path.join(TESTROMS, 'jlp', 'build_jlp.py'))
+    bj = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bj)
+    _, image, cfg = bj.build_one(name)
     path, cpath = os.path.join(work, name + '.bin'), os.path.join(work, name + '.cfg')
     with open(path, 'wb') as f:
         f.write(image)
@@ -564,7 +588,8 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
     if voice:
         vdev = sp0256.VoiceBus(open(ivoice_rom(), 'rb').read(), on=voice['ovr'] == 'on')
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
-                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs), voice=vdev)
+                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs), voice=vdev,
+                         jlp=isys.make_jlp(cart[0] if cart else None))
     bus.vid.mobs = STIC_MOBS
     bus.pad = tuple(pads)
     if ecs and ecs.get('presses'):
@@ -764,7 +789,8 @@ def model_stream(exec_path, grom_path, cart_path, npics, mode='stic', presses=No
     model_stream.peeked (a dict)."""
     cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
-                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs))
+                         cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs),
+                         jlp=isys.make_jlp(cart[0] if cart else None))
     bus.vid.mobs = STIC_MOBS
     if presses:
         bus.presses = presses
@@ -1981,6 +2007,8 @@ def main():
                 cart = step9_image(zipname[1], work)
             elif isinstance(zipname, tuple) and zipname[0] == 'hw':
                 cart = hw_image(zipname[1], work)
+            elif isinstance(zipname, tuple) and zipname[0] == 'jlp':
+                cart = jlp_image(zipname[1], work)
             elif isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
                 cart = os.path.join(work, name + '.bin')
                 with open(cart, 'wb') as f:

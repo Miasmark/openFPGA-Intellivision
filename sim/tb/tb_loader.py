@@ -50,7 +50,7 @@ import intvcart as m      # noqa: E402
 import cartfmt as cf      # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
-RTL = ['intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
+RTL = ['intv_jlp_pkg.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
        'apf_datatable.sv', 'apf_cfgfetch.sv']
 OTHER = [os.path.join(CORE, 'core_bridge_cmd.v'),
          os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),

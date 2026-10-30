@@ -119,6 +119,8 @@ module intv_loader #(
     output logic             res_noss,
     output logic [15:0]      res_paged,
     output logic [16:0]      res_limit,
+    output logic [1:0]       res_jlp_mode,    // build step 11: jlp_accel 0-3 (docs/JLP_NOTES.md 1)
+    output logic [4:0]       res_jlp_sect,    // flash sectors, 0-16
 
     output logic             busy,            // owns the SRAM
     output logic             ready,           // cartridge mapped (or refused: err)
@@ -237,11 +239,14 @@ module intv_loader #(
     logic [58:0] cp_d;
     logic [5:0]  nrng;
     logic [7:0]  cp_err;
-    logic        cp_ecs, cp_ecs_off, cp_voice, cp_jlp;
+    logic        cp_ecs, cp_ecs_off, cp_voice, cp_jlp, cp_jmset, cp_jfset;
+    logic [1:0]  cp_jmode;
+    logic [7:0]  cp_jflash;
     intv_cfgparse cfgparse (
         .clk(clk), .clr(cfg_clr), .in_v(cp_in_v), .in_c(cp_in_c), .in_end(cp_end),
         .rng_we(cp_we), .rng_idx(cp_idx), .rng_d(cp_d), .nrng(nrng), .err(cp_err),
-        .f_ecs(cp_ecs), .f_ecs_off(cp_ecs_off), .f_voice(cp_voice), .f_jlp(cp_jlp)
+        .f_ecs(cp_ecs), .f_ecs_off(cp_ecs_off), .f_voice(cp_voice), .f_jlp(cp_jlp),
+        .f_jlp_mode(cp_jmode), .f_jlp_mset(cp_jmset), .f_jlp_flash(cp_jflash), .f_jlp_fset(cp_jfset)
     );
     logic [58:0] rng [32];
     logic [4:0]  rng_ra;
@@ -362,6 +367,7 @@ module intv_loader #(
         rom_we = 1'b0; rom_wsel = 2'd0; rom_waddr = 12'd0; rom_wdata = 10'd0;
         tab_we = 1'b0; tab_idx = 12'd0; tab_d = 38'd0;
         res_we = 1'b0; res_crc = 32'd0; res_words = 17'd0; res_layout = 8'd0; res_flags = 8'd0;
+        res_jlp_mode = 2'd0; res_jlp_sect = 5'd0;
         res_hit = 1'b0; res_cfg_crc = 32'd0; res_fmt = 2'd0; res_noss = 1'b0; res_paged = 16'd0;
         res_limit = 17'd0; ready = 1'b0; err = 6'd0; fmt_err = 8'd0; len_st = 2'd0;
     end
@@ -415,6 +421,18 @@ module intv_loader #(
                                (rp_cmp[39:38] == 2'b11 ? FLAG_ECS_OFF : 8'd0) |
                                (rp_cmp[35:34] == 2'b01 || rp_cmp[35:34] == 2'b10 ? FLAG_VOICE : 8'd0) |
                                (rp_cmp[15:14] != 2'b00 ? FLAG_JLP : 8'd0);
+
+    // the JLP (build step 11; tools/mapper/cartfmt.py jlp_config): flash sectors 4 when mode
+    // >= 2 and no size is given, none for modes 0 and 1, at most 16 (the flash store)
+    function automatic logic [4:0] jlp_sect(input logic [1:0] m, input logic given, input logic [9:0] f);
+        if (m < 2'd2) return 5'd0;
+        if (!given) return 5'd4;
+        return f > 10'd16 ? 5'd16 : f[4:0];
+    endfunction
+    wire logic [1:0] cfg_jm = cp_jmset ? cp_jmode : 2'd0;
+    wire logic [4:0] cfg_js = jlp_sect(cfg_jm, cp_jfset, {2'd0, cp_jflash});
+    wire logic [1:0] rom_jm = cmp_in ? rp_cmp[15:14] : 2'd0;
+    wire logic [4:0] rom_js = jlp_sect(rom_jm, 1'b1, {rp_cmp[9:8], rp_cmp[7:0]});
 
     always_ff @(posedge clk) begin
         rom_we  <= 1'b0;
@@ -926,6 +944,8 @@ module intv_loader #(
                 res_noss    <= src != 2'd0 && noss;
                 res_paged   <= src == 2'd0 ? 16'd0 : paged;
                 res_limit   <= src == 2'd0 ? 17'd0 : src == 2'd3 ? 17'h10000 : words;
+                res_jlp_mode <= src == 2'd3 ? rom_jm : (src == 2'd2 || (src == 2'd1 && cfg_on)) ? cfg_jm : 2'd0;
+                res_jlp_sect <= src == 2'd3 ? rom_js : (src == 2'd2 || (src == 2'd1 && cfg_on)) ? cfg_js : 5'd0;
                 if (fmt_err != 8'd0) err[5] <= 1'b1;
                 if (ovr) err[3] <= 1'b1;
                 ready   <= 1'b1;

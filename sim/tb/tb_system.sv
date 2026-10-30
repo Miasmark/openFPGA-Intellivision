@@ -176,6 +176,15 @@ module tb_system;
     wire logic        voice_auto;
     wire logic        voice_mode = voice_ovr == 2'd1 ? slot_st[11:10] == 2'd2 : voice_ovr == 2'd0 && voice_auto;
     wire logic        voice_on, voice_busy, voice_late;
+    // the JLP (build step 11): the loader's mode and sectors, its RAM in the SRAM model
+    wire logic [1:0]  jlp_mode;
+    wire logic [4:0]  jlp_sect;
+    wire logic        jlp_on, jlp_busy, jlp_eng_busy, jm_req, jm_we, jm_ack;
+    wire logic [16:0] jm_addr;
+    wire logic [15:0] jm_wdata, jm_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire logic [15:0] jlp_nv_q;
+    /* verilator lint_on UNUSEDSIGNAL */
 
     intv_media #(.CRC_HEX(`CRC_HEX), .LAYOUT_HEX(`LAYOUT_HEX)) media (
         .clk, .reset, .mreset,
@@ -184,6 +193,7 @@ module tb_system;
         .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_attr(c_attr),
         .bus_paged(c_paged), .pg_rst(64'd0), .pg_sel,
         .ecs_on, .ecs_pg, .ecs_auto, .ecs_rom_ok, .voice_auto,
+        .jlp_mode, .jlp_sect, .jlp_on, .jlp_busy, .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,
         .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q,
@@ -237,6 +247,9 @@ module tb_system;
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .voice_mode, .voice_dac7(vdac), .voice_level(vlevel), .ecs_level(elevel), .voice_on, .voice_busy, .voice_late,
         .ivoice_addr(iv_addr), .ivoice_q,
+        .jlp_mode, .jlp_sect, .jlp_on, .jlp_busy, .jlp_eng_busy,
+        .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,
+        .jlp_nv_addr(14'd0), .jlp_nv_we(1'b0), .jlp_nv_wdata(16'd0), .jlp_nv_q,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
         .phase, .dout, .din, .addr, .fetch, .hold, .halted,
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_m));

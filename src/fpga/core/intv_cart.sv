@@ -50,6 +50,15 @@
 // maps $4000-$47FF on page 0: an entry {4, 0, b < 8} with R, W or B, as
 // the loader last wrote it.
 //
+// The JLP (build step 11; docs/JLP_NOTES.md; intv_jlp_pkg): with a JLP
+// (jlp_mode != 0) and while it is switched on (jlp_on), $8040-$9F7F is its
+// RAM, 8,000 words in SRAM at JLP_BASE (16-bit, read and write), and its
+// registers (intv_jlp answers them) are neither answered nor stored here;
+// writes to its switch ($8033, $8034) are never stored. While a flash
+// command runs (jlp_busy) the whole cartridge port answers nothing and
+// stores nothing (the board's MCU stalls); writes still load the page
+// selects and bank registers. The ECS's ranges stay the ECS's.
+//
 // Bus port: a request (one clk) is answered by ack (one clk) with the data,
 // hit (a read answered), the window's attributes {B, N, W, R} and the
 // range's paged bit. The table is read on the request's clock (the bus's
@@ -63,8 +72,9 @@
 //          [7:0] layout id                   | the load's results: read
 //   2      [16:0] image length in words      | only (a restore leaves them:
 //   3      CFG CRC32 (0: none)               | the header's CRCs say the
-//   4      [18:17] format, [16] no state,    | load is the same)
-//          [15:0] paged ranges               |
+//   4      [25:21] JLP flash sectors,        | load is the same)
+//          [20:19] JLP mode, [18:17] format, |
+//          [16] no state, [15:0] paged ranges|
 //   15     [16:0] limit                      /
 //   5, 6   page selects, 4 bits per range (0-7, then 8-15)
 //   7..14  Intellicart bank registers, four per word (word 7 + k:
@@ -79,7 +89,8 @@
 
 module intv_cart #(
     parameter logic [7:0]  SS_ID    = 8'h0B,
-    parameter logic [16:0] ECS_BASE = 17'h10000
+    parameter logic [16:0] ECS_BASE = 17'h10000,
+    parameter logic [16:0] JLP_BASE = 17'h1C000
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,          // machine reset: page selects to pg_rst
@@ -99,6 +110,8 @@ module intv_cart #(
     input  wire logic        ld_noss,
     input  wire logic [15:0] ld_paged,
     input  wire logic [16:0] ld_limit,
+    input  wire logic [1:0]  ld_jlp_mode,
+    input  wire logic [4:0]  ld_jlp_sect,
 
     output logic [31:0]      crc,
     output logic [16:0]      words,
@@ -108,6 +121,12 @@ module intv_cart #(
     output logic [31:0]      cfg_crc,
     output logic [1:0]       fmt,
     output logic             noss,            // no save state for this image
+    output logic [1:0]       jlp_mode,        // the JLP the image asks for (step 11)
+    output logic [4:0]       jlp_sect,
+
+    // the JLP (step 11)
+    input  wire logic        jlp_on,          // switched on
+    input  wire logic        jlp_busy,        // a flash command runs: the port is silent
 
     // page selects (for the ECS, build step 9)
     input  wire logic [63:0] pg_rst,
@@ -165,7 +184,7 @@ module intv_cart #(
     initial begin
         for (int i = 0; i < 32; i++) bank[i] = {4'(i), i[4], 3'd0};
         crc = 32'd0; words = 17'd0; layout = 8'd0; flags = 8'd0; hit = 1'b0; cfg_crc = 32'd0;
-        fmt = 2'd0; noss = 1'b0;
+        fmt = 2'd0; noss = 1'b0; jlp_mode = 2'd0; jlp_sect = 5'd0;
         bus_ack = 1'b0; bus_rdata = 16'hFFFF; bus_hit = 1'b0; bus_attr = 4'd0; bus_paged = 1'b0;
         m_req = 1'b0; m_we = 1'b0; m_addr = 17'd0; m_wdata = 16'd0; m_be = 2'b11;
     end
@@ -192,6 +211,8 @@ module intv_cart #(
     logic [7:0]  qlo = 8'd0;                   // the word in the Intellicart block (B_T2)
     logic        qown = 1'b0;                  // the ECS owns the access
     logic        qrom = 1'b0;                  // ... and it is an ECS ROM read
+    logic        qjram = 1'b0;                 // JLP RAM
+    logic        qjnot = 1'b0;                 // the JLP's register or switch, or busy: not here
 
     // the ECS's ranges for the address on the bus
     /* verilator lint_off UNUSEDSIGNAL */
@@ -203,6 +224,12 @@ module intv_cart #(
                         (ba[15:12] == 4'hE && ecs_pg[11:8] == 4'd1));
     wire logic e_own = e_rom || (ecs_on && (ba[15:2] == 14'h0038 || ba[15:4] == 12'h00F ||
                                             ba[15:11] == 5'b01000));
+    // the JLP's (step 11)
+    wire logic j_own = intv_jlp_pkg::owns(jlp_mode != 2'd0, jlp_on, bus_we, ba);
+    wire logic j_ram = j_own && intv_jlp_pkg::ram(ba);
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire logic [15:0] j_off = qa - 16'h8040;
+    /* verilator lint_on UNUSEDSIGNAL */
 
     wire logic [3:0]  r_bus = bus_addr[15:12];
     wire logic [3:0]  y_bus = paged[r_bus] ? pg_sel[4*r_bus +: 4] : 4'd0;
@@ -236,6 +263,8 @@ module intv_cart #(
                 qwd <= bus_wdata;
                 qown <= e_own;
                 qrom <= e_rom && !bus_we;
+                qjram <= !e_own && !jlp_busy && j_ram;
+                qjnot <= !e_own && (jlp_busy || (j_own && !j_ram));
                 bus_paged <= paged[r_bus];
                 bst <= B_T1;
             end
@@ -248,6 +277,20 @@ module intv_cart #(
                 m_be      <= 2'b11;
                 m_addr    <= ECS_BASE + {3'd0, qa[15] ? 2'd2 : {1'b0, qa[14]}, qa[11:0]};
                 if (qrom) begin
+                    m_req <= 1'b1;
+                    bst   <= B_MEM;
+                end else
+                    bst   <= B_DONE;
+            end else if (bst == B_T1 && (qjram || qjnot)) begin   // the JLP's
+                bus_attr  <= qjram ? 4'b0011 : 4'd0;
+                bus_rdata <= 16'hFFFF;
+                bus_hit   <= 1'b0;
+                qe        <= 22'd0;
+                m_we      <= qwe;
+                m_be      <= 2'b11;
+                m_wdata   <= qwd;
+                m_addr    <= JLP_BASE + {4'd0, j_off[12:0]};
+                if (qjram) begin
                     m_req <= 1'b1;
                     bst   <= B_MEM;
                 end else
@@ -299,6 +342,7 @@ module intv_cart #(
         if (ld_res_we) begin
             crc <= ld_crc; words <= ld_words; layout <= ld_layout; flags <= ld_flags; hit <= ld_hit;
             cfg_crc <= ld_cfg_crc; fmt <= ld_fmt; noss <= ld_noss; paged <= ld_paged; limit <= ld_limit;
+            jlp_mode <= ld_jlp_mode; jlp_sect <= ld_jlp_sect;
             for (int i = 0; i < 32; i++) bank[i] <= {4'(i), i[4], 3'd0};
         end
         if (ss_hit && ss_addr[7:0] >= 8'd7 && ss_addr[7:0] <= 8'd14)
@@ -316,7 +360,7 @@ module intv_cart #(
             8'd1:  ss_q = {15'd0, hit, flags, layout};
             8'd2:  ss_q = {15'd0, words};
             8'd3:  ss_q = cfg_crc;
-            8'd4:  ss_q = {13'd0, fmt, noss, paged};
+            8'd4:  ss_q = {6'd0, jlp_sect, jlp_mode, fmt, noss, paged};
             8'd5:  ss_q = pg_sel[31:0];
             8'd6:  ss_q = pg_sel[63:32];
             8'd15: ss_q = {15'd0, limit};

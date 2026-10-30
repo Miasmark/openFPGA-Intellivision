@@ -13,8 +13,11 @@
 //   [memattr]    lo - hi = RAM|WOM|ROM [8|16]
 //   [bankswitch] lo - hi                   Intellicart bank windows
 //   [vars]       name = decimal            ecs, ecs_compat, voice,
-//                voice_compat, jlp, jlp_accel, lto_mapper (others and
-//                other values ignored)
+//                voice_compat, jlp, jlp_accel, jlp_flash, jlpflash (sic:
+//                IntyBASIC's), lto_mapper (others and other values ignored;
+//                values saturate at 255). jlp / jlp_accel and jlp_flash /
+//                jlpflash: the first one counts (f_jlp_mode, f_jlp_flash with
+//                their "given" bits; build step 11, docs/JLP_NOTES.md 1.1)
 // Numbers are hex, '$' optional, at most 20 bits. Anything else in the four
 // map sections refuses the CFG (err); lines before the first section, in
 // [macro] and in unknown sections are ignored. At most 32 ranges.
@@ -46,7 +49,11 @@ module intv_cfgparse (
     output logic             f_ecs,
     output logic             f_ecs_off,
     output logic             f_voice,
-    output logic             f_jlp
+    output logic             f_jlp,
+    output logic [1:0]       f_jlp_mode,      // min(value, 3) of the first jlp / jlp_accel
+    output logic             f_jlp_mset,
+    output logic [7:0]       f_jlp_flash,     // the first jlp_flash / jlpflash
+    output logic             f_jlp_fset
 );
 
     localparam logic [7:0] E_SYNTAX = 8'h10, E_MANY = 8'h11, E_RANGE = 8'h12, E_PAGE = 8'h13,
@@ -79,6 +86,7 @@ module intv_cfgparse (
     initial begin
         rng_we = 1'b0; rng_idx = 5'd0; rng_d = 59'd0; nrng = 6'd0; err = 8'd0;
         f_ecs = 1'b0; f_ecs_off = 1'b0; f_voice = 1'b0; f_jlp = 1'b0;
+        f_jlp_mode = 2'd0; f_jlp_mset = 1'b0; f_jlp_flash = 8'd0; f_jlp_fset = 1'b0;
     end
 
     // ------------------------------------------------------- characters
@@ -117,6 +125,8 @@ module intv_cfgparse (
     localparam logic [95:0] N_VOICEC   = {"voice_compat"};
     localparam logic [95:0] N_JLP      = {"jlp", 72'd0};
     localparam logic [95:0] N_JLPA     = {"jlp_accel", 24'd0};
+    localparam logic [95:0] N_JLPF     = {"jlp_flash", 24'd0};
+    localparam logic [95:0] N_JLPF2    = {"jlpflash", 32'd0};
     localparam logic [95:0] N_LTO      = {"lto_mapper", 16'd0};
 
     // the line's range, checked (a commit)
@@ -189,6 +199,14 @@ module intv_cfgparse (
             if (is_name(name, nlen, N_VOICEC, 4'd12) && (val == 8'd2 || val == 8'd3)) f_voice <= 1'b1;
             if ((is_name(name, nlen, N_JLP, 4'd3) || is_name(name, nlen, N_JLPA, 4'd9)) && val != 8'd0)
                 f_jlp <= 1'b1;
+            if ((is_name(name, nlen, N_JLP, 4'd3) || is_name(name, nlen, N_JLPA, 4'd9)) && !f_jlp_mset) begin
+                f_jlp_mset <= 1'b1;
+                f_jlp_mode <= val > 8'd3 ? 2'd3 : val[1:0];
+            end
+            if ((is_name(name, nlen, N_JLPF, 4'd9) || is_name(name, nlen, N_JLPF2, 4'd8)) && !f_jlp_fset) begin
+                f_jlp_fset  <= 1'b1;
+                f_jlp_flash <= val;
+            end
         end
         if (!nover && is_name(name, nlen, N_LTO, 4'd10) && val != 8'd0)
             fail(E_LTO);
@@ -203,6 +221,7 @@ module intv_cfgparse (
         if (clr) begin
             st <= P_BOL; sec <= S_NONE; ended <= 1'b0; err <= 8'd0; nrng <= 6'd0;
             f_ecs <= 1'b0; f_ecs_off <= 1'b0; f_voice <= 1'b0; f_jlp <= 1'b0;
+            f_jlp_mode <= 2'd0; f_jlp_mset <= 1'b0; f_jlp_flash <= 8'd0; f_jlp_fset <= 1'b0;
             has_page <= 1'b0; has_bsw <= 1'b0;
         end else if (in_v && !ended && c == 8'h00 && !in_end) begin
             ended <= 1'b1;

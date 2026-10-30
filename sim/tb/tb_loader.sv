@@ -255,6 +255,8 @@ module tb_loader;
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
         .bus_attr(bus_attr), .bus_paged(bus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
         .ecs_on(1'b0), .ecs_pg(12'd0), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok), .voice_auto(voice_auto),
+        .jlp_mode(), .jlp_sect(), .jlp_on(1'b0), .jlp_busy(1'b0),
+        .jm_req(1'b0), .jm_we(1'b0), .jm_addr(17'd0), .jm_wdata(16'd0), .jm_ack(), .jm_rdata(),
         .aux_req(aux_req), .aux_we(1'b0), .aux_addr(aux_addr), .aux_wdata(16'd0), .aux_be(2'b11),
         .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),

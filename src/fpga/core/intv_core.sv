@@ -138,6 +138,15 @@ module intv_core #(
     logic [15:0] cbus_addr, cbus_wdata, cbus_rdata;
     logic [3:0]  cbus_attr;
     logic        aux_req, aux_we, aux_ack;
+    // the JLP (build step 11)
+    logic [1:0]  jlp_mode;
+    logic [4:0]  jlp_sect;
+    logic        jlp_on, jlp_busy, jlp_eng_busy, jm_req, jm_we, jm_ack;
+    logic [16:0] jm_addr;
+    logic [15:0] jm_wdata, jm_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [15:0] jlp_nv_q;                 // the nonvolatile slot (next pass)
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [16:0] aux_addr;
     logic [15:0] aux_wdata, aux_rdata;
     logic [11:0] exec_addr;
@@ -185,6 +194,8 @@ module intv_core #(
         .bus_ack(cbus_ack), .bus_rdata(cbus_rdata), .bus_hit(cbus_hit), .bus_attr(cbus_attr),
         .bus_paged(cbus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
         .ecs_on(ecs_on), .ecs_pg(ecs_pg), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok), .voice_auto(voice_auto),
+        .jlp_mode(jlp_mode), .jlp_sect(jlp_sect), .jlp_on(jlp_on), .jlp_busy(jlp_busy),
+        .jm_req(jm_req), .jm_we(jm_we), .jm_addr(jm_addr), .jm_wdata(jm_wdata), .jm_ack(jm_ack), .jm_rdata(jm_rdata),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
         .aux_be(2'b11), .aux_ack(aux_ack), .aux_rdata(aux_rdata),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -225,6 +236,9 @@ module intv_core #(
         .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
         .voice_mode(voice_mode), .voice_dac7(voice_dac7), .voice_level(voice_level), .voice_on(voice_on), .ecs_level(ecs_level),
         .voice_busy(voice_busy), .voice_late(voice_late), .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
+        .jlp_mode(jlp_mode), .jlp_sect(jlp_sect), .jlp_on(jlp_on), .jlp_busy(jlp_busy), .jlp_eng_busy(jlp_eng_busy),
+        .jm_req(jm_req), .jm_we(jm_we), .jm_addr(jm_addr), .jm_wdata(jm_wdata), .jm_ack(jm_ack), .jm_rdata(jm_rdata),
+        .jlp_nv_addr(14'd0), .jlp_nv_we(1'b0), .jlp_nv_wdata(16'd0), .jlp_nv_q(jlp_nv_q),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
@@ -251,7 +265,7 @@ module intv_core #(
         .cpu_fetch(m_fetch), .cpu_halted(m_halted), .cpu_hold(m_hold),
         .cart_crc(cart_crc), .cart_words(cart_words), .cfg_crc(cart_cfg_crc), .cart_noss(cart_noss),
         .exec_crc(~ex_c), .grom_crc(~gr_c),
-        .ecs_flag(ecs_on), .ecs_crc(ecs_on ? ~es_c : 32'd0), .voice_flag(voice_on), .voice_busy(voice_busy),
+        .ecs_flag(ecs_on), .ecs_crc(ecs_on ? ~es_c : 32'd0), .voice_flag(voice_on), .voice_busy(voice_busy || jlp_eng_busy),
         .run(run), .frozen(frozen), .ss_en(ss_en), .ss_addr(ss_addr), .ss_we(ss_we),
         .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),

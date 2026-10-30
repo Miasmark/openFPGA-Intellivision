@@ -22,6 +22,9 @@
 //                   read through the cartridge port: ecs_on, ecs_pg to
 //                   intv_media); ecs_mode is taken at machine reset. The
 //                   sound is PSG #1 + PSG #2, at most 32,767.
+//   intv_jlp        the JLP (build step 11): registers, multiply / divide,
+//                   CRC, random, the flash store and its engine; its RAM is
+//                   intv_cart's (jlp_on), the engine an SRAM master (jm_*)
 //   intv_voice      the Intellivoice (build step 10): the SPB640 at
 //                   $0080-$0081 and the SP0256 (sp0256.sv), its ROM read
 //                   from intv_sysrom (ivoice_addr / ivoice_q); voice_mode
@@ -55,6 +58,7 @@
 //   SS_PSG2 ($0F)        PSG #2, 21 words
 //   SS_ERAM ($10, $11)   ECS RAM, 512 words
 //   SS_VOICE ($18)       intv_voice, 24 words; its FIFO ($19), 64 words
+//   SS_JLP  ($20)        intv_jlp, 28 words (build step 11; its RAM is in SRAM)
 // The timing ($01) and the cartridge ($0B) have their own modules.
 //
 // SPDX-License-Identifier: MIT
@@ -77,7 +81,8 @@ module intv_machine #(
     parameter logic [7:0] SS_ECS  = 8'h0E,
     parameter logic [7:0] SS_PSG2 = 8'h0F,
     parameter logic [7:0] SS_ERAM = 8'h10,
-    parameter logic [7:0] SS_VOICE = 8'h18
+    parameter logic [7:0] SS_VOICE = 8'h18,
+    parameter logic [7:0] SS_JLP  = 8'h20
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
@@ -106,6 +111,24 @@ module intv_machine #(
     output logic             voice_late,      // a sample outlasted its window (sticky; benches)
     output logic [10:0]      ivoice_addr,     // the SP0256-012 ROM (intv_sysrom)
     input  wire logic [7:0]  ivoice_q,
+
+    // the JLP (build step 11): mode and flash sectors from the loader; its RAM is
+    // intv_cart's (jlp_on), its flash engine an SRAM master (jm_*)
+    input  wire logic [1:0]  jlp_mode,
+    input  wire logic [4:0]  jlp_sect,
+    output logic             jlp_on,
+    output logic             jlp_busy,
+    output logic             jlp_eng_busy,    // the flash engine works (intv_ss_ctl waits)
+    output logic             jm_req,
+    output logic             jm_we,
+    output logic [16:0]      jm_addr,
+    output logic [15:0]      jm_wdata,
+    input  wire logic        jm_ack,
+    input  wire logic [15:0] jm_rdata,
+    input  wire logic [13:0] jlp_nv_addr,     // the flash store's slot port
+    input  wire logic        jlp_nv_we,
+    input  wire logic [15:0] jlp_nv_wdata,
+    output logic [15:0]      jlp_nv_q,
 
     // cartridge port and system ROMs (intv_media)
     output logic             cart_req,
@@ -159,9 +182,9 @@ module intv_machine #(
     logic        stic_open;
     logic [15:0] stic_q, sys_q;
     logic [7:0]  scr_q, psg_q, gram_q;
-    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs, ssr_voice;
-    logic        ecs_hit, v_hit;
-    logic [15:0] ecs_q, v_q, audio1, audio2;
+    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs, ssr_voice, ssr_jlp;
+    logic        ecs_hit, v_hit, j_hit;
+    logic [15:0] ecs_q, v_q, j_q, audio1, audio2;
     logic signed [15:0] v_out;
     logic        audio1_stb;
     /* verilator lint_off UNUSEDSIGNAL */
@@ -182,8 +205,8 @@ module intv_machine #(
         .a(addr), .rd, .wr, .vb, .scr_we, .psg_we, .sys_we, .gram_we, .stic_we,
         .stic_open, .stic_q, .scr_q, .psg_q, .sys_q, .exec_q, .grom_q, .gram_q,
         .cart_req, .cart_we, .cart_wdata, .cart_ack, .cart_rdata,
-        .cart_hit_in(cart_hit), .ecs_hit(ecs_hit || v_hit),
-        .ecs_q((ecs_hit ? ecs_q : 16'hFFFF) & (v_hit ? v_q : 16'hFFFF)),
+        .cart_hit_in(cart_hit), .ecs_hit(ecs_hit || v_hit || j_hit),
+        .ecs_q((ecs_hit ? ecs_q : 16'hFFFF) & (v_hit ? v_q : 16'hFFFF) & (j_hit ? j_q : 16'hFFFF)),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_bus));
 
     assign cart_addr = addr;
@@ -219,6 +242,14 @@ module intv_machine #(
         .dac7(voice_dac7), .level(voice_level), .audio_stb(audio1_stb), .out(v_out),
         .on(voice_on), .busy(voice_busy), .late(voice_late),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_voice));
+
+    intv_jlp #(.SS_ID(SS_JLP)) jlp (
+        .clk, .mreset, .mode(jlp_mode), .sect(jlp_sect), .ce, .run(!hold),
+        .a(addr), .rd, .wr, .wdata(dout), .hit(j_hit), .q(j_q),
+        .on(jlp_on), .busy(jlp_busy), .eng_busy(jlp_eng_busy),
+        .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,
+        .nv_addr(jlp_nv_addr), .nv_we(jlp_nv_we), .nv_wdata(jlp_nv_wdata), .nv_q(jlp_nv_q),
+        .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_jlp));
 
     // the two PSGs' samples come together (same reset, same steps); PSG #2 is
     // silent (0) unless the ECS is attached. PSG #2 first at the ECS's own level
@@ -262,7 +293,7 @@ module intv_machine #(
         .addr_b(v_gram_addr), .q_b(v_gram_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_gram));
 
-    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs | ssr_voice;
+    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs | ssr_voice | ssr_jlp;
 
 endmodule
 

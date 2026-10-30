@@ -39,10 +39,14 @@
 // .rom's tag) with its ROM slot (5) loaded whole; intv_core takes it, or
 // the menu's On (with the ROM) or Off, at machine reset.
 //
-// Three SRAM masters, fixed priority: the loader (only while loading, when
-// the machine is held in reset), the cartridge port, and an auxiliary port
-// (the ECS module from step 9; the bench reads the stored image with it).
-// Each holds its request until ack.
+// Four SRAM masters, fixed priority: the loader (only while loading, when
+// the machine is held in reset), the cartridge port, the JLP's flash engine
+// (build step 11: JLP RAM to and from its flash store, while the cartridge
+// port is silent) and an auxiliary port (intv_ss_ctl; the bench reads the
+// stored image with it). Each holds its request until ack.
+//
+// The JLP (build step 11): the loader's mode and flash sectors for the
+// image (jlp_mode, jlp_sect); intv_cart maps its RAM at $1C000.
 //
 // SPDX-License-Identifier: MIT
 
@@ -86,6 +90,18 @@ module intv_media #(
     output logic [1:0]       ecs_auto,        // the Auto rule's mode for this image
     output logic             ecs_rom_ok,
     output logic             voice_auto,      // the Intellivoice's Auto rule (step 10)
+
+    // the JLP (step 11)
+    output logic [1:0]       jlp_mode,
+    output logic [4:0]       jlp_sect,
+    input  wire logic        jlp_on,
+    input  wire logic        jlp_busy,
+    input  wire logic        jm_req,          // the flash engine's SRAM port
+    input  wire logic        jm_we,
+    input  wire logic [16:0] jm_addr,
+    input  wire logic [15:0] jm_wdata,
+    output logic             jm_ack,
+    output logic [15:0]      jm_rdata,
 
     // auxiliary SRAM port
     input  wire logic        aux_req,
@@ -159,6 +175,8 @@ module intv_media #(
     logic [37:0] tab_d;
     logic [31:0] res_crc, res_cfg_crc;
     logic [16:0] res_words, res_limit;
+    logic [1:0]  res_jlp_mode;
+    logic [4:0]  res_jlp_sect;
     logic [7:0]  res_layout, res_flags;
     logic [1:0]  res_fmt;
     logic [15:0] res_paged;
@@ -179,7 +197,7 @@ module intv_media #(
         .res_we(res_we), .res_crc(res_crc), .res_words(res_words),
         .res_layout(res_layout), .res_flags(res_flags), .res_hit(res_hit),
         .res_cfg_crc(res_cfg_crc), .res_fmt(res_fmt), .res_noss(res_noss), .res_paged(res_paged),
-        .res_limit(res_limit),
+        .res_limit(res_limit), .res_jlp_mode(res_jlp_mode), .res_jlp_sect(res_jlp_sect),
         .busy(busy), .ready(ld_ready), .err(err), .fmt_err(fmt_err), .len_st(len_st), .slot_st(slot_st)
     );
 
@@ -243,7 +261,9 @@ module intv_media #(
         .ld_res_we(res_we), .ld_crc(res_crc), .ld_words(res_words),
         .ld_layout(res_layout), .ld_flags(res_flags), .ld_hit(res_hit),
         .ld_cfg_crc(res_cfg_crc), .ld_fmt(res_fmt), .ld_noss(res_noss), .ld_paged(res_paged),
-        .ld_limit(res_limit),
+        .ld_limit(res_limit), .ld_jlp_mode(res_jlp_mode), .ld_jlp_sect(res_jlp_sect),
+        .jlp_mode(jlp_mode), .jlp_sect(jlp_sect),
+        .jlp_on(jlp_on && !probing), .jlp_busy(jlp_busy && !probing),
         .crc(crc), .words(words), .layout(layout), .flags(flags), .hit(hit),
         .cfg_crc(cfg_crc), .fmt(c_fmt), .noss(noss),
         .pg_rst(pg_rst), .pg_sel(pg_sel),
@@ -276,11 +296,12 @@ module intv_media #(
     logic [1:0]  s_be;
 
     always_comb begin
-        pick = l_req ? 2'd0 : c_req ? 2'd1 : 2'd2;
-        s_req = l_req || c_req || aux_req;
+        pick = l_req ? 2'd0 : c_req ? 2'd1 : jm_req ? 2'd2 : 2'd3;
+        s_req = l_req || c_req || jm_req || aux_req;
         case (pick)
             2'd0:    {s_we, s_addr, s_wdata, s_be} = {l_we, l_addr, l_wdata, l_be};
             2'd1:    {s_we, s_addr, s_wdata, s_be} = {c_we, c_addr, c_wdata, c_be};
+            2'd2:    {s_we, s_addr, s_wdata, s_be} = {jm_we, jm_addr, jm_wdata, 2'b11};
             default: {s_we, s_addr, s_wdata, s_be} = {aux_we, aux_addr, aux_wdata, aux_be};
         endcase
     end
@@ -289,8 +310,10 @@ module intv_media #(
 
     assign l_ack   = s_ack && gnt == 2'd0;
     assign c_ack   = s_ack && gnt == 2'd1;
-    assign aux_ack = s_ack && gnt == 2'd2;
+    assign jm_ack  = s_ack && gnt == 2'd2;
+    assign aux_ack = s_ack && gnt == 2'd3;
     assign aux_rdata = s_rdata;               // read data is shared by all masters
+    assign jm_rdata  = s_rdata;
 
     intv_sram #(.RD_CYC(3), .WR_CYC(3)) sram (
         .clk(clk), .reset(reset),

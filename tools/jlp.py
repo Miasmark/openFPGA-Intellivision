@@ -17,22 +17,26 @@ Address map (features on; JLP_NOTES 2.1):
   $8040-$9F7F    8,000 words of 16-bit RAM
   $9F80-$9F8B    multiply / divide operand pairs (MPYSS, MPYSU, MPYUS, MPYUU,
                  DIVSS, DIVUU), read back as written
-  $9F8E / $9F8F  results: product bits 15-0 / 31-16; quotient / remainder
+  $9F8C / $9F8D  read 0
+  $9F8E / $9F8F  results: product bits 15-0 / 31-16; quotient / remainder (writable)
+  $9F90-$9F97    the "extended registers": eight words that read back as written
   $9FFC          CRC data (write only); $9FFD the CRC (read, write = seed)
-  $9FFE          random number (read)
+  $9FFE          random number (read); $9FFF reads 0
 Everything else in $8000-$9FFF is not the JLP's (the map answers there).
 
-Choices where the guide is silent (JLP_NOTES 2.2-2.6; each settled by a
-black-box test, JLP_NOTES 4, and changed here if the test says otherwise):
-  - x / 0: quotient $FFFF, remainder = the dividend; DIVSS truncates toward
-    zero, the remainder takes the dividend's sign; $8000 / $FFFF gives
-    $8000 remainder 0.
-  - the switch follows the mode at every machine reset (on for 1 and 3).
-  - while off, nothing but the switch answers (flash registers included).
-  - CRC 0 and random $FFFF at reset; a random read returns the state, then
-    state := crc16(state, the cycle's low 16 bits) (deterministic).
-  - JF.first = 0, JF.last = 8 x sectors - 1; flash words erased = $FFFF.
-  - a command that is accepted makes the JLP busy for BUSY CPU cycles: the
+Settled against jzIntv 20200712 as a black box (sim/testroms/jlp, JLP_NOTES 4.1; jzIntv's
+author designed the JLP): the map above; x / 0 leaves both results as they were; DIVSS
+truncates toward zero, the remainder takes the dividend's sign, $8000 / $FFFF gives $8000
+remainder 0; the CRC is $FFFF at reset; JF.first = $00E0, JF.last = JF.first + 8 x sectors
+- 1, and without flash (mode 1, jlp_flash = 0) $8023 / $8024 read 0; while off, nothing but
+the switch answers (flash registers included) and the map's ROM answers below.
+Choices where jzIntv and the documents part or are silent (JLP_NOTES 4.1):
+  - mode 2 is off at every machine reset (as1600.txt; jzIntv starts it on).
+  - the random number is deterministic: a read returns the state, then state :=
+    crc16(state, the cycle's low 16 bits); $FFFF at reset.
+  - a command that is accepted makes the JLP busy for BUSY CPU cycles (jzIntv: about
+    800 for a read, 15,000 for a write, 27,000 for an erase, and a dropped read is busy
+    too): the
     whole cartridge port reads $FFFF and drops writes (Jlp.blocks); the
     command registers then read 0 (the guide's wait loop, ADD@ R1, PC).
     A dropped command (row or RAM range, a write to a row not empty, a
@@ -50,6 +54,8 @@ KEYS = {JF_WR: 0xC0DE, JF_RD: 0xDEC0, JF_ER: 0xBEEF}
 SW_ON, SW_OFF = 0x8033, 0x8034
 KEY_ON, KEY_OFF = 0x4A5A, 0x6A7A
 ROW, SECTOR = 96, 8                       # words a row, rows a sector
+FIRST = 0x00E0                            # JF.first (jzIntv's)
+EXT_LO = 0x9F90                           # the eight extended registers
 BUSY = 100                               # CPU cycles a flash command keeps the port busy
 POLY = 0xAD52
 
@@ -68,7 +74,8 @@ def s16(x):
 
 
 def muldiv(fn, a, b):
-    """(result $9F8E, result $9F8F) of function fn (0-5) on operands a, b."""
+    """(result $9F8E, result $9F8F) of function fn (0-5) on operands a, b; None for x / 0
+    (the results stay)."""
     if fn < 4:
         x = s16(a) if fn in (0, 1) else a & 0xFFFF
         y = s16(b) if fn in (0, 2) else b & 0xFFFF
@@ -77,14 +84,14 @@ def muldiv(fn, a, b):
     if fn == 4:
         x, y = s16(a), s16(b)
         if y == 0:
-            return 0xFFFF, a & 0xFFFF
+            return None
         q = abs(x) // abs(y)
         if (x < 0) != (y < 0):
             q = -q
         return q & 0xFFFF, (x - q * y) & 0xFFFF
     x, y = a & 0xFFFF, b & 0xFFFF
     if y == 0:
-        return 0xFFFF, x
+        return None
     return x // y, x % y
 
 
@@ -108,8 +115,9 @@ class Jlp:
         self.on = self.mode != 2
         self.ops = [0] * 12
         self.res = [0, 0]
-        self.crc = 0
+        self.crc = 0xFFFF
         self.rnd = 0xFFFF
+        self.ext = [0] * 8
         self.jf_addr = 0
         self.jf_row = 0
         self.busy_until = -1
@@ -126,9 +134,9 @@ class Jlp:
         """The JLP answers a read of a (the cartridge's map does not)."""
         if not self.on:
             return False
-        if RAM_LO <= a <= RAM_HI or MD_LO <= a <= MD_LO + 11 or a in (RES_LO, RES_HI, CRC_REG, RND):
+        if RAM_LO <= a <= RAM_HI or MD_LO <= a <= EXT_LO + 7 or a in (CRC_REG, RND, 0x9FFF):
             return True
-        return self.sectors > 0 and a in (JF_FIRST, JF_LAST, JF_WR, JF_RD, JF_ER)
+        return a in (JF_FIRST, JF_LAST, JF_WR, JF_RD, JF_ER)
 
     def stores(self, a):
         """A write to a is the JLP's (the cartridge's map does not store it)."""
@@ -136,9 +144,11 @@ class Jlp:
             return True
         if not self.on:
             return False
-        if RAM_LO <= a <= RAM_HI or MD_LO <= a <= MD_LO + 11 or a in (CRC_DATA, CRC_REG):
+        if RAM_LO <= a <= RAM_HI or MD_LO <= a <= MD_LO + 11 or a in (RES_LO, RES_HI, CRC_DATA, CRC_REG):
             return True
-        return self.sectors > 0 and a in (JF_ADDR, JF_ROW, JF_WR, JF_RD, JF_ER)
+        if EXT_LO <= a <= EXT_LO + 7:
+            return True
+        return a in (JF_ADDR, JF_ROW, JF_WR, JF_RD, JF_ER)
 
     def read(self, a, cycle):
         """The word the JLP drives at a (owns(a) must be true)."""
@@ -148,6 +158,8 @@ class Jlp:
             return self.ops[a - MD_LO]
         if a in (RES_LO, RES_HI):
             return self.res[a - RES_LO]
+        if EXT_LO <= a <= EXT_LO + 7:
+            return self.ext[a - EXT_LO]
         if a == CRC_REG:
             return self.crc
         if a == RND:
@@ -155,10 +167,10 @@ class Jlp:
             self.rnd = crc16(self.rnd, cycle)
             return v
         if a == JF_FIRST:
-            return 0
+            return FIRST if self.sectors else 0
         if a == JF_LAST:
-            return self.sectors * SECTOR - 1
-        return 0                                # the command registers when idle
+            return FIRST + self.sectors * SECTOR - 1 if self.sectors else 0
+        return 0                                # $9F8C, $9F8D, $9FFF; the command registers when idle
 
     def write(self, a, v, cycle):
         """Every CPU write (the JLP decodes its own; none while busy)."""
@@ -177,7 +189,13 @@ class Jlp:
             i = a - MD_LO
             self.ops[i] = v
             fn = i >> 1
-            self.res = list(muldiv(fn, self.ops[2 * fn], self.ops[2 * fn + 1]))
+            r = muldiv(fn, self.ops[2 * fn], self.ops[2 * fn + 1])
+            if r is not None:
+                self.res = list(r)
+        elif a in (RES_LO, RES_HI):
+            self.res[a - RES_LO] = v
+        elif EXT_LO <= a <= EXT_LO + 7:
+            self.ext[a - EXT_LO] = v
         elif a == CRC_DATA:
             self.crc = crc16(self.crc, v)
         elif a == CRC_REG:
@@ -190,8 +208,8 @@ class Jlp:
             self.command(a, cycle)
 
     def command(self, a, cycle):
-        row, addr = self.jf_row, self.jf_addr
-        if row >= self.sectors * SECTOR:
+        row, addr = self.jf_row - FIRST, self.jf_addr
+        if not 0 <= row < self.sectors * SECTOR:
             return
         if a == JF_ER:
             s = row // SECTOR * SECTOR * ROW
@@ -212,11 +230,12 @@ class Jlp:
     def state(self, cycle):
         """The JLP module's words: [0] {busy cycles left[15:0], on}, [1-12]
         the operands, [13-14] the results, [15] the CRC, [16] the random
-        state, [17] JF.addr, [18] JF.row. RAM is its own region; flash is
-        not in the state (the nonvolatile slot)."""
+        state, [17] JF.addr, [18] JF.row, [19-26] the extended registers.
+        RAM is its own region; flash is not in the state (the nonvolatile
+        slot)."""
         left = max(0, self.busy_until - cycle)
         return ([left << 1 | int(self.on)] + self.ops + self.res +
-                [self.crc, self.rnd, self.jf_addr, self.jf_row])
+                [self.crc, self.rnd, self.jf_addr, self.jf_row] + self.ext)
 
     def load_state(self, words, cycle):
         self.on = bool(words[0] & 1)
@@ -224,6 +243,7 @@ class Jlp:
         self.ops = list(words[1:13])
         self.res = list(words[13:15])
         self.crc, self.rnd, self.jf_addr, self.jf_row = words[15:19]
+        self.ext = list(words[19:27])
 
 
 # ---------------------------------------------------------------- self-test
@@ -247,7 +267,7 @@ def selftest():
     chk(muldiv(5, 100, 7) == (14, 2), "DIVUU 100 / 7")
     chk(muldiv(4, s16(-7) & 0xFFFF, 2) == (0xFFFD, 0xFFFF), "DIVSS -7 / 2")
     chk(muldiv(4, 0x8000, 0xFFFF) == (0x8000, 0), "DIVSS $8000 / -1")
-    chk(muldiv(5, 1234, 0) == (0xFFFF, 1234), "DIVUU / 0")
+    chk(muldiv(5, 1234, 0) is None and muldiv(4, 1, 0) is None, "x / 0 keeps the results")
     # the board
     j = Jlp(mode=3, sectors=2)
     j.write(0x9F8B, 7, 0)                       # DIVUU.den, then num
@@ -265,7 +285,7 @@ def selftest():
     for i in range(ROW):
         j.write(RAM_LO + i, 0x1000 + i, 10)
     j.write(JF_ADDR, RAM_LO, 11)
-    j.write(JF_ROW, 9, 12)
+    j.write(JF_ROW, FIRST + 9, 12)
     j.write(JF_WR, 0xC0DE, 20)
     chk(j.flash[9 * ROW:10 * ROW] == [0x1000 + i for i in range(ROW)], "flash write")
     chk(j.blocks(20 + BUSY - 1) and not j.blocks(20 + BUSY), "busy window")
@@ -279,13 +299,13 @@ def selftest():
     j.write(JF_ADDR, 0x9F40, 500)              # 0x9F40 + 95 > $9F7F: dropped
     j.write(JF_RD, 0xDEC0, 501)
     chk(not j.busy(502), "RAM range checked")
-    j.write(JF_ROW, 16, 600)                   # two sectors: rows 0-15
+    j.write(JF_ROW, FIRST + 16, 600)           # two sectors: rows FIRST + 0-15
     j.write(JF_ER, 0xBEEF, 601)
     chk(not j.busy(602), "row range checked")
-    j.write(JF_ROW, 12, 700)
+    j.write(JF_ROW, FIRST + 12, 700)
     j.write(JF_ER, 0xBEEF, 701)
     chk(j.flash[8 * ROW:16 * ROW] == [0xFFFF] * (SECTOR * ROW), "erase a sector")
-    chk(j.read(JF_LAST, 900) == 15, "JF.last")
+    chk(j.read(JF_FIRST, 900) == FIRST and j.read(JF_LAST, 900) == FIRST + 15, "JF.first, JF.last")
     # the switch
     j.write(SW_OFF, 0x6A7A, 1000)
     chk(not j.owns(RAM_LO) and not j.stores(0x9F80), "switched off")
@@ -299,7 +319,10 @@ def selftest():
     j2.reset()
     chk(not j2.on, "the switch back to the mode at reset")
     j3 = Jlp(mode=1)
-    chk(not j3.owns(JF_FIRST) and not j3.stores(JF_WR), "mode 1: no flash registers")
+    chk(j3.read(JF_FIRST, 0) == 0 and j3.read(JF_LAST, 0) == 0, "mode 1: the range reads 0")
+    j3.write(0x9F8E, 0x1234, 1)
+    j3.write(EXT_LO + 3, 0x4444, 2)
+    chk(j3.read(0x9F8E, 3) == 0x1234 and j3.read(EXT_LO + 3, 3) == 0x4444, "results, extended registers")
     # state round trip
     st = j.state(1100)
     j4 = Jlp(mode=3, sectors=2)

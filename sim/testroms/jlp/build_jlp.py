@@ -12,6 +12,8 @@ jzIntv run, compares word for word. Our own code, built, never committed.
 
   build_jlp.py build OUTDIR [NAME ...]     NAME.bin, NAME.cfg, NAME.txt (the model's results)
   build_jlp.py show NAME                   the model's results only
+  build_jlp.py compare NAME DUMPDIR        the results in a jzIntv dump (tools/refs/
+                                           jzintv_jlp_run.sh) against the model's, word by word
 """
 
 import argparse
@@ -22,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 HW = os.path.join(os.path.dirname(HERE), "hw")
 BASE = 0x5000
-W, R, F, FILL, SUM = 1, 2, 3, 4, 5
+W, R, F, FILL, SUM, WREL = 1, 2, 3, 4, 5, 6
 ON, OFF = (W, 0x8033, 0x4A5A), (W, 0x8034, 0x6A7A)
 WR, RD, ER = (0x802D, 0xC0DE), (0x802E, 0xDEC0), (0x802F, 0xBEEF)
 
@@ -36,7 +38,7 @@ def flash(cmd, row=None, addr=None):
     if addr is not None:
         t.append((W, 0x8025, addr))
     if row is not None:
-        t.append((W, 0x8026, row))
+        t.append((WREL, 0x8026, row & 0xFFFF))         # row: from JF.first
     return t + [(F, cmd[0], cmd[1])]
 
 
@@ -84,7 +86,8 @@ def p_div():
 
 
 def p_fls():
-    """T10 (c)-(g), T11: flash rows and sectors, dropped commands, the busy reads."""
+    """T10 (c)-(g), T11: flash rows (from JF.first) and sectors, dropped commands, the busy
+    reads."""
     t = rd(0x8023, 0x8024)
     t += flash(RD, 0, 0x9000) + [(SUM, 0x9000, 0)]                       # (c) an empty row
     t += [(FILL, 0x8040, 0x1000)] + flash(WR, 1, 0x8040)                 # (d) write row 1
@@ -95,7 +98,8 @@ def p_fls():
     t += flash(ER, 3)                                                    # (f) erase sector 0
     t += flash(RD, 1, 0x9300) + [(SUM, 0x9300, 0)]
     t += flash(RD, 8, 0x9400) + [(SUM, 0x9400, 0)]
-    t += flash(RD, 32, 0x9000)                                           # (g) rows 0-31 only
+    t += flash(RD, 32, 0x9000)                                           # (g) 32 rows only
+    t += flash(RD, -1, 0x9000)                                           # the row before JF.first
     t += flash(RD, 0, 0x9F40)                                            # 96 words past $9F7F
     t += flash((0x802F, 0xBEEE), 8)                                      # a wrong key
     return t + flash(RD, 8, 0x9500) + [(SUM, 0x9500, 0)]
@@ -256,6 +260,47 @@ def cmd_show(a):
     return 0
 
 
+def dump_results(d):
+    """The results a jzIntv run left: $0351 counts them from $0300 (big-endian dump)."""
+    import struct
+    m = open(os.path.join(d, "dump.mem"), "rb").read()
+    w = struct.unpack(">65536H", m)
+    return [w[0x300 + i] for i in range(min(w[0x351], 64))]
+
+
+def known(name, i, d):
+    """Why the model may differ from jzIntv at result i (JLP_NOTES 4.1), else None."""
+    if "reads until done" in d:
+        return "busy time: the core's is its copy engine's"
+    if d == "read  $9FFE":
+        return "random: the core's is deterministic"
+    if name == "jlpena" and i < 5:
+        return "mode 2 at reset: off by as1600.txt, jzIntv starts on"
+    return None
+
+
+def cmd_compare(a):
+    tools_path()
+    prog, image, cfg = build_one(a.name)
+    res, _ = model_results(a.name, image, cfg)
+    jz = dump_results(a.dump)
+    desc = describe(a.name)
+    nd = nk = 0
+    for i in range(max(len(res), len(jz))):
+        m = res[i] if i < len(res) else None
+        j = jz[i] if i < len(jz) else None
+        d = desc[i] if i < len(desc) else ""
+        why = known(a.name, i, d)
+        mark = "  " if m == j else "~~" if why else "<>"
+        if m != j:
+            nk += bool(why)
+            nd += not why
+        print("%04X model %s jzIntv %s %s  %s%s" % (i, "----" if m is None else "%04X" % m,
+              "----" if j is None else "%04X" % j, mark, d, ("  (%s)" % why) if m != j and why else ""))
+    print("JLP_COMPARE %s: %d results, %d differ, %d known differences" % (a.name, len(res), nd, nk))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -264,8 +309,11 @@ def main(argv=None):
     b.add_argument("names", nargs="*")
     s = sub.add_parser("show")
     s.add_argument("name")
+    c = sub.add_parser("compare")
+    c.add_argument("name")
+    c.add_argument("dump")
     a = ap.parse_args(argv)
-    return cmd_build(a) if a.cmd == "build" else cmd_show(a)
+    return {"build": cmd_build, "show": cmd_show, "compare": cmd_compare}[a.cmd](a)
 
 
 if __name__ == "__main__":

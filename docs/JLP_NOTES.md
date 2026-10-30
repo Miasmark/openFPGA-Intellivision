@@ -360,6 +360,43 @@ T10 and T11 on the PiRTO also answer whether Minty keeps flash across power cycl
 storage) and how long it stalls; on the Pocket the same programs (in simulation, then hardware)
 answer 5.3's open points.
 
+### 4.1 Results on jzIntv (2026-10-30)
+
+The eleven programs of `sim/testroms/jlp` (`build_jlp.py build`; T1-T10 above, T9 and the
+reset parts of T2 need the Reset button and wait for the PiRTO), each run on jzIntv 20200712 as a
+black box (`tools/refs/jzintv_jlp_run.sh`, `build_jlp.py compare`). jzIntv's author designed the
+JLP, so where the guide is silent its behaviour is the best evidence short of the board. Found,
+and taken into `tools/jlp.py`:
+
+| Point | jzIntv | Was (choice in section 2) |
+|---|---|---|
+| x / 0 (DIVUU, DIVSS) | both results keep their values (the write that makes the divisor 0 does not recompute) | quotient $FFFF, remainder the dividend |
+| DIVSS signs, $8000 / $FFFF, quotient / remainder places | truncation toward zero, remainder with the dividend's sign; $8000 r 0; quotient $9F8E, remainder $9F8F | the same (confirmed) |
+| $9F8C, $9F8D, $9FFF | read 0 | unassigned ($FFFF) |
+| $9F8E, $9F8F | writable: a write is read back (until the next operand write) | unassigned writes |
+| $9F90-$9F97 ("extended registers") | eight words, 0 at reset, read back as written, nothing else changes | unknown |
+| $9FFC, $9FF0, $8025, $8026, $8033, $8034, $803F, $8000 | $FFFF (nobody answers) | the same |
+| $802D-$802F when idle | 0 | the same (the wait loop's rule) |
+| CRC at reset | $FFFF | 0 |
+| JF.first | $00E0; JF.last = $E0 + 8 x sectors - 1 ($E7 for 1 sector, $FF for 4, $15F for 16) | 0 |
+| no flash (`jlp = 1`, `jlp_flash = 0`) | $8023 / $8024 read 0 | not answered |
+| `jlp_flash` absent with `jlp = 3` | 4 sectors | the same |
+| `jlpflash` (IntyBASIC) | taken as the size (16 sectors) | the same (choice) |
+| flash rules | an empty row reads $FFFF; a write to a row not empty is dropped; erase clears the whole sector of JF.row, not the next; rows outside JF.first-JF.last, RAM past $9F7F and a wrong key are dropped | the same (confirmed) |
+| switched off | RAM, accelerators and the flash registers all go; the map's ROM answers; the RAM keeps its data; writes to the ROM do nothing; wrong keys and swapped keys do nothing | the same (confirmed) |
+
+Known differences, kept on purpose (`build_jlp.py compare` lists them apart):
+
+- **Busy time.** jzIntv stalls about as the guide says (polls of the wait loop, about 31 cycles
+  each: a read about 11-30, a write about 400-580, an erase about 840) and stalls on dropped reads
+  too. The core is busy only while its copy engine works (BUSY, a few hundred cycles). A program
+  can only wait for the command register, so a shorter wait is harmless.
+- **Random numbers.** jzIntv's differ run to run; the core's are deterministic (save states,
+  benches).
+- **Mode 2 at reset.** as1600.txt (AS:1127-1129) says off; jzIntv starts it on. The core
+  follows the document until the PiRTO II with Minty, the third implementation, is measured
+  (JLPENA's first five results).
+
 ## 5 Save states, nonvolatile data, cost
 
 ### 5.1 In the save state (module id $20, reserved: SAVESTATE.md 3, `intv_ss_pkg.sv:28`)

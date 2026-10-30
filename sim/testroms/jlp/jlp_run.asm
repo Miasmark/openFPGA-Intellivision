@@ -10,6 +10,8 @@
 ;                   two results: the reads it took, the value read last
 ;   4  addr base    write base, base + 1, ... to the 96 words from addr
 ;   5  addr -       the 96 words from addr: two results, the first word and their sum
+;   6  addr value   write value + the word at $8023 (JF.first) to addr: a flash row
+;                   relative to the first, wherever the JLP puts it
 ; Then the display comes on and shows the results as hex, three a row after the index of
 ; the first, 33 a page; the pages turn every 150 frames (about 2.5 s). The title row shows
 ; the program's name and the page number.
@@ -70,6 +72,8 @@ run:    MVI@    R4, R0          ; op
         BEQ     op_f
         CMPI    #4, R0
         BEQ     op_fl
+        CMPI    #6, R0
+        BEQ     op_rr
 ; 5: the first word and the sum of 96
         MOVR    R1, R5
         CLRR    R2
@@ -84,6 +88,10 @@ sm_lp:  MVI@    R5, R0
         JSR     R5, keep
         B       run
 op_w:   MVO@    R2, R1
+        B       run
+op_rr:  MVI     $8023, R3
+        ADDR    R3, R2
+        MVO@    R2, R1
         B       run
 op_r:   MVI@    R1, R0
         JSR     R5, keep

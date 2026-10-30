@@ -74,6 +74,12 @@ OTHER = [os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(HERE, 'models', 'mf_datatable.sv'), os.path.join(HERE, 'tb_savestate.sv')]
 TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 FRAME = 14934
+# a run's own time limit, counted from when it has its simulation slot (simslot's queue
+# can hold a run for hours behind other benches; the 0.0.16 gate's nocart_R waited 4 h
+# and, under one limit for both, timed out without starting). About 1.5 s a frame here
+# unloaded: four times that, plus the build-up
+RUN_LIMIT_BASE, RUN_LIMIT_FRAME = 600, 6
+QUEUE_LIMIT = 24 * 3600    # the whole call (queue + run): only a stuck queue reaches it
 
 # (name, library file or None, EXEC-slot program or None, pads (R, L), frames,
 #  keys (tb_system PLAY notation) or None,
@@ -308,7 +314,7 @@ class Run:
         self.lines = []
         self.fails = []
         self.end = False
-        for ln in open(path):
+        for ln in open(path) if path else ():   # None: a run that left no log (its fails say why)
             ln = ln.rstrip('\n')
             t = ln.split()
             if not t:
@@ -377,15 +383,25 @@ class Bench:
             cmd.append('+keys=' + kf)
         cmd += list(extra)                     # before the image's own: the first plusarg counts
         cmd += self.prep[name][11]
+        limit = RUN_LIMIT_BASE + RUN_LIMIT_FRAME * -(-ncyc // FRAME)
+        cmd = ['timeout', '-k', '30', str(limit)] + cmd    # inside the slot: the queue wait not counted
         if self.simslot:
             cmd = [self.simslot] + cmd
         t0 = time.time()
         with open(os.path.join(self.work, tag + '.out'), 'w') as out:
-            r = subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=self.work, timeout=14400)
-        run = Run(log) if os.path.exists(log) else None
-        if run is not None and r.returncode != 0:
-            run.fails.append('FAIL exit code %d' % r.returncode)
-        print('  ran %s: %.0fs' % (tag, time.time() - t0), flush=True)
+            try:
+                rc = subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT, cwd=self.work,
+                                    timeout=QUEUE_LIMIT).returncode
+            except subprocess.TimeoutExpired:
+                rc = None
+        run = Run(log if os.path.exists(log) else None)
+        if rc is None:
+            run.fails.append('FAIL %s: no result in %d s (slot queue stuck?)' % (tag, QUEUE_LIMIT))
+        elif rc in (124, 137):
+            run.fails.append('FAIL %s: timed out after %d s in its slot' % (tag, limit))
+        elif rc != 0:
+            run.fails.append('FAIL %s: exit code %d' % (tag, rc))
+        print('  ran %s: %.0fs%s' % (tag, time.time() - t0, ' ' + run.fails[-1] if rc != 0 else ''), flush=True)
         return run
 
     def ecs_alt(self):
@@ -626,7 +642,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         name = img[0]
         ref, srun = futs[(name, 'R')].result(), futs[(name, 'S')].result()
         if ref is None or srun is None or not ref.end or ref.fails:
-            probs.append('%s: R or S did not run (%s)' % (name, ref.fails[:2] if ref else 'no log'))
+            probs.append('%s: R or S did not run (%s)' % (name, [x for r in (ref, srun) if r
+                                                                for x in r.fails[:2]] or 'no END'))
             continue
         refs[name] = ref
         p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:7],

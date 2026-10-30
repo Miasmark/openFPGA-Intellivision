@@ -250,7 +250,7 @@ stimulus (section 8.7).
 | Module | Holds | Notes |
 |---|---|---|
 | `intv_voice.sv` | the bus at `$0080-$0081`, the sample enable, the busy window (8.2), the output chain (8.5) | in `intv_machine`; answers only while on (8.6) |
-| `sp0256.sv` | the SPB640 (LRQ, ALD, the 64 x 10 FIFO in an `intv_ram` block RAM, head / tail / bit pointer) and the SP0256 (PC, stack, PAGE, MODE + prefix, halted, the 16 parameter registers, the decoded copy, amp, period, repeat, LFSR, interpolation, the 12-word delay line) | one FSM: the sequencer reads one bit field at a time (two words, two clocks each), the filter makes its 12 products one a clock with one multiplier |
+| `sp0256.sv` | the SPB640 (LRQ, ALD, the 64 x 10 FIFO in an `intv_ram` block RAM, head / tail / bit pointer) and the SP0256 (PC, stack, PAGE, MODE + prefix, halted, the 16 parameter registers, the decoded copy, amp, period, repeat, LFSR, interpolation, the 12-word delay line) | one FSM: the sequencer reads one bit field at a time (two words, two clocks each; the field formats in a block ROM), the filter makes its 12 products two a stage with one multiplier (a DSP block). The 16 parameter registers, the decoded copy and the delay line are a 16 x 32 block RAM laid out as state words 6-18, cleared by valid flags (a cleared register reads 0) |
 | `sp0256_fmt.svh` | the instruction formats (`fmt_hdr`, `fmt_fld`) and the coefficient table `qtbl` | generated: `tools/sp0256.py gen` (`gen --check` in the gates), from `sp0256.FORMATS` and `QTBL` |
 
 The resident ROM (2 KiB, `ivoice.bin`, data slot 0x105) stays where step 2 put it, in

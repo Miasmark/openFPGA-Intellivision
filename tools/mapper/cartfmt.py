@@ -153,6 +153,7 @@ class CfgParser:
         self.ended = False          # a NUL byte: the text ends there
         self.ranges = []            # (kind, haspage, page, attr, lo, hi, src)
         self.ecs = self.ecs_off = self.voice = self.jlp = False
+        self.jlp_mode = self.jlp_flash = None   # build step 11: the first instance counts
         self.has_page = self.has_bsw = False
         self.name = b''
         self.nover = False
@@ -211,6 +212,11 @@ class CfgParser:
             self.voice |= v in (2, 3)
         elif n in (b'jlp', b'jlp_accel'):
             self.jlp |= v != 0
+            if self.jlp_mode is None:
+                self.jlp_mode = min(v, 3)
+        elif n in (b'jlp_flash', b'jlpflash'):  # jlpflash: IntyBASIC's spelling (JLP_NOTES 1.1)
+            if self.jlp_flash is None:
+                self.jlp_flash = v
         elif n == b'lto_mapper' and v != 0:
             self._fail(ERR_CFG_LTO)
 
@@ -619,6 +625,26 @@ def parse_rom(data):
     return p
 
 
+JLP_MAX_SECTORS = 16                    # the core's flash store (JLP_NOTES 5.3)
+
+
+def jlp_config(mode, flash):
+    """(mode, sectors) of a cartridge (JLP_NOTES 1.1-1.3): mode 0-3 (jlp_accel), sectors of
+    1.5 KiB: 4 when mode >= 2 and no size is given, none for modes 0 and 1, at most
+    JLP_MAX_SECTORS."""
+    mode = mode or 0
+    if mode < 2:
+        return mode, 0
+    return mode, min(4 if flash is None else flash, JLP_MAX_SECTORS)
+
+
+def rom_jlp(compat):
+    """(mode, sectors) from a .rom compat tag: byte 3 bits 7-6, {byte 3 bits 1-0, byte 4}."""
+    if compat is None or len(compat) < 4:
+        return jlp_config(0, None)
+    return jlp_config(compat[3] >> 6, ((compat[3] & 3) << 8 | compat[4]) if len(compat) >= 5 else None)
+
+
 def rom_flags(compat):
     """Compat tag ($06) body -> flags (id_tag.txt: 00 don't care, 01 supports, 10 requires,
     11 incompatible)."""
@@ -680,6 +706,7 @@ class Loaded:
         self.flags = 0
         self.hit = False
         self.cfg_crc = 0
+        self.jlp_mode, self.jlp_sectors = 0, 0  # build step 11
         self.noss = False
         self.err = 0                    # fmt_err (0: mapped)
         self.asm = []                   # (entry index, dest base, kind) assembled blocks
@@ -956,6 +983,7 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
             ld.notes.append('CFG ignored: the image is a .rom')
         build_rom(ld, access, fine)
         ld.flags = rom_flags(compat)
+        ld.jlp_mode, ld.jlp_sectors = rom_jlp(compat)
     else:
         words = struct.unpack('>%dH' % ld.words, data + (b'\0' if len(data) & 1 else b''))
         for i, w in enumerate(words):
@@ -977,6 +1005,7 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
         vflags = 0
         if c is not None:
             ld.cfg_crc = crc32(cfg)
+            ld.jlp_mode, ld.jlp_sectors = jlp_config(c.jlp_mode, c.jlp_flash)
             vflags = (FLAG_ECS if c.ecs else 0) | (FLAG_ECS_OFF if c.ecs_off else 0) | \
                 (FLAG_VOICE if c.voice else 0) | (FLAG_JLP if c.jlp else 0)
         ld.fmt = FMT_RAW if c is None else FMT_CFG

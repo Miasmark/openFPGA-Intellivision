@@ -161,7 +161,9 @@ class Jlp:
         return 0                                # the command registers when idle
 
     def write(self, a, v, cycle):
-        """Every CPU write (the JLP decodes its own)."""
+        """Every CPU write (the JLP decodes its own; none while busy)."""
+        if self.busy(cycle):
+            return
         v &= 0xFFFF
         if a == SW_ON and v == KEY_ON:
             self.on = True

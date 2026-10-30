@@ -327,7 +327,7 @@ class SystemBus:
     """The step-3 system around the CPU model (see the module docstring)."""
 
     def __init__(self, exec_words, grom_bytes, cart=None, timing=None, stic_mode="none", ecs=None,
-                 voice=None):
+                 voice=None, jlp=None):
         if len(exec_words) != 4096 or len(grom_bytes) != 2048:
             raise ValueError("EXEC must be 4096 words, GROM 2048 bytes")
         self.exec = [w & 0x3FF for w in exec_words]
@@ -346,6 +346,7 @@ class SystemBus:
         self.mame_map = False           # MAME's memory map (MAME_MAP_ZERO, no aliases)
         self.ecs = ecs                  # tools/ecs.py Ecs, or None (no ECS at all)
         self.voice = voice              # tools/sp0256.py VoiceBus (on or off), or None (step 10)
+        self.jlp = jlp                  # tools/jlp.py Jlp, or None (step 11)
         self.replay = None              # MAME check: {addr: value} reads taken from the trace
         self.bank0 = _bank0()           # no cartridge: intv_cart's bank registers (kept over resets)
         self.reset()
@@ -364,6 +365,8 @@ class SystemBus:
             self.ecs.reset()
         if self.voice is not None:
             self.voice.reset()
+        if self.jlp is not None:
+            self.jlp.reset()
 
     # -- the PSG's registers ----------------------------------------------
     @property
@@ -454,6 +457,11 @@ class SystemBus:
             if self.ecs.keys_at is None and self.presses is not None:
                 self.ecs.keys_at = lambda f: press_keys(self.presses, f - 1)
             return v & self.ecs.read(a, self._t(cycle), self.timing.frame(self._t(cycle)))
+        if self.jlp is not None:
+            if self.jlp.blocks(self._t(cycle)):
+                return v                        # a flash command runs: the cartridge port is silent
+            if self.jlp.owns(a):
+                return v & self.jlp.read(a, self._t(cycle))
         if self.cart is not None:
             c = self.cart.read(a)
             if c is not None:
@@ -488,6 +496,9 @@ class SystemBus:
         own = self.ecs is not None and self.ecs.owns(a)
         if self.ecs is not None:
             self.ecs.write(a, value, self._t(cycle))
+        if self.jlp is not None:
+            own |= self.jlp.blocks(self._t(cycle)) or self.jlp.stores(a)
+            self.jlp.write(a, value, self._t(cycle))
         if self.cart is not None:
             if own:
                 self.cart.write(a, value, store=False)
@@ -560,6 +571,17 @@ def load_cart(path, cfg_path=None):
     return cartfmt.MapCart(ld), ld.crc, ld.layout, ld.flags, ld.hit
 
 
+def make_jlp(cart, flash=None):
+    """The JLP a cartridge asks for (build step 11: its CFG's or .rom tag's mode and flash
+    sectors, tools/mapper/cartfmt.py jlp_config), or None. flash: the nonvolatile store's
+    words, else erased."""
+    ld = getattr(cart, "ld", None)
+    if ld is None or not ld.jlp_mode:
+        return None
+    import jlp as jlpm
+    return jlpm.Jlp(ld.jlp_mode, ld.jlp_sectors, flash)
+
+
 ECS_OVERRIDES = {"auto": ecsm.OVERRIDE_AUTO, "on": ecsm.OVERRIDE_ON, "off": ecsm.OVERRIDE_OFF}
 
 
@@ -585,12 +607,13 @@ def make_ecs(cart, ecs, bios_dir=None, mame=False):
 
 
 def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none", cfg_path=None,
-                ecs=None, mame_ecs=False):
+                ecs=None, mame_ecs=False, jlp_flash=None):
     ex, gr = bios_paths(bios_dir)
     cart = load_cart(cart_path, cfg_path)
     dev = make_ecs(cart[0] if cart else None, ecs, bios_dir, mame_ecs)
     bus = SystemBus(load_words(ex), open(gr, "rb").read(),
-                    cart[0] if cart else None, timing, stic_mode, ecs=dev)
+                    cart[0] if cart else None, timing, stic_mode, ecs=dev,
+                    jlp=make_jlp(cart[0] if cart else None, jlp_flash))
     cpu = CP1610(bus=bus, buslog=buslog)
     return bus, cpu
 

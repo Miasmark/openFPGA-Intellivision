@@ -403,6 +403,8 @@ localparam [15:0] SLOT_JLP    = 16'h0106;
 // size (tools/savestate.py, intv_ss_pkg), served by intv_ss_ctl.
 localparam [31:0] SS_ADDR = 32'h50000000;
     wire    [31:0]  ss_bridge_rd_data;     // intv_ss_ctl, held from its last read
+    wire    [31:0]  jlp_bridge_rd_data;    // intv_jlp_nv (the JLP flash slot), held likewise
+    wire    [4:0]   jlp_sectors;           // clk_sys: the cartridge's JLP flash sectors
 localparam [31:0] SS_SIZE = 32'd153600;
 
 // Settings, written by the host from interact.json (clk_74a).
@@ -440,8 +442,9 @@ always @(posedge clk_74a) begin
     end
 end
 
-// JLP flash (step 11): nothing is stored yet. Its size in the data table is
-// 0 (below), and a read of 0x20xxxxxx returns 0 (the mux's default).
+// JLP flash (step 11): the slot's words at 0x20000000 are intv_jlp_nv's (in
+// intv_core); its size in the data table is the cartridge's sectors x 1,536
+// bytes (apf_datatable), 0 without flash (no file then).
 
 // for bridge write data, we just broadcast it to all bus devices
 // for bridge read data, we have to mux it
@@ -455,6 +458,9 @@ always @(*) begin
     end
     32'h50xxxxxx: begin
         bridge_rd_data <= ss_bridge_rd_data;    // the save-state blob (intv_ss_ctl)
+    end
+    32'h20xxxxxx: begin
+        bridge_rd_data <= jlp_bridge_rd_data;   // the JLP flash slot (intv_jlp_nv)
     end
     32'h60xxxxxx: begin
         bridge_rd_data <= cfg_st_rd_data;       // the CFG fetch's path struct (apf_cfgfetch)
@@ -672,6 +678,7 @@ apf_datatable #(
     .cfg_len    ( cfg_len ),
     .cfg_inlist ( cfg_inlist ),
     .len_valid  ( cart_len_valid ),
+    .jlp_sectors( jlp_sectors ),
     .t_read         ( target_dataslot_read ),
     .t_getfile      ( target_dataslot_getfile ),
     .t_openfile     ( target_dataslot_openfile ),
@@ -849,6 +856,8 @@ intv_core machine_side (
     .bridge_wr          ( bridge_wr ),
     .bridge_wr_data     ( bridge_wr_data ),
     .ss_bridge_rd_data  ( ss_bridge_rd_data ),
+    .jlp_bridge_rd_data ( jlp_bridge_rd_data ),
+    .jlp_sectors        ( jlp_sectors ),
     .savestate_start        ( savestate_start ),
     .savestate_start_ack    ( savestate_start_ack ),
     .savestate_start_busy   ( savestate_start_busy ),

@@ -125,6 +125,7 @@ module intv_machine #(
     output logic [15:0]      jm_wdata,
     input  wire logic        jm_ack,
     input  wire logic [15:0] jm_rdata,
+    input  wire logic        jlp_fl_clr,      // a cartridge load starts: the flash store erased
     input  wire logic [13:0] jlp_nv_addr,     // the flash store's slot port
     input  wire logic        jlp_nv_we,
     input  wire logic [15:0] jlp_nv_wdata,
@@ -244,7 +245,7 @@ module intv_machine #(
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_voice));
 
     intv_jlp #(.SS_ID(SS_JLP)) jlp (
-        .clk, .mreset, .mode(jlp_mode), .sect(jlp_sect), .ce, .run(!hold),
+        .clk, .mreset, .fl_clr(jlp_fl_clr), .mode(jlp_mode), .sect(jlp_sect), .ce, .run(!hold),
         .a(addr), .rd, .wr, .wdata(dout), .hit(j_hit), .q(j_q),
         .on(jlp_on), .busy(jlp_busy), .eng_busy(jlp_eng_busy),
         .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,

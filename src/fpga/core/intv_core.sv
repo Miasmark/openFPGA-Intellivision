@@ -79,6 +79,8 @@ module intv_core #(
     input  wire logic        bridge_wr,
     input  wire logic [31:0] bridge_wr_data,
     output logic      [31:0] ss_bridge_rd_data,
+    output logic      [31:0] jlp_bridge_rd_data,   // the JLP flash slot (0x20000000; step 11)
+    output logic      [4:0]  jlp_sectors,          // its size in 1.5 KiB sectors (0: no flash)
     input  wire logic        savestate_start,
     output logic             savestate_start_ack,
     output logic             savestate_start_busy,
@@ -144,9 +146,19 @@ module intv_core #(
     logic        jlp_on, jlp_busy, jlp_eng_busy, jm_req, jm_we, jm_ack;
     logic [16:0] jm_addr;
     logic [15:0] jm_wdata, jm_rdata;
-    /* verilator lint_off UNUSEDSIGNAL */
-    logic [15:0] jlp_nv_q;                 // the nonvolatile slot (next pass)
-    /* verilator lint_on UNUSEDSIGNAL */
+    logic [15:0] jlp_nv_q;
+    logic [13:0] jlp_nv_addr;
+    logic        jlp_nv_we;
+    logic [15:0] jlp_nv_wdata;
+    logic        busy_q = 1'b0;
+    always_ff @(posedge clk) busy_q <= cart_busy;
+    wire  logic  jlp_fl_clr = cart_busy && !busy_q;     // a cartridge load starts: flash erased
+    assign jlp_sectors = jlp_sect;
+
+    intv_jlp_nv jlpnv (
+        .clk_74a(clk_74a), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr), .bridge_addr(bridge_addr),
+        .bridge_wr_data(bridge_wr_data), .bridge_rd_data(jlp_bridge_rd_data),
+        .clk(clk), .nv_addr(jlp_nv_addr), .nv_we(jlp_nv_we), .nv_wdata(jlp_nv_wdata), .nv_q(jlp_nv_q));
     logic [16:0] aux_addr;
     logic [15:0] aux_wdata, aux_rdata;
     logic [11:0] exec_addr;
@@ -239,7 +251,8 @@ module intv_core #(
         .voice_busy(voice_busy), .voice_late(voice_late), .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
         .jlp_mode(jlp_mode), .jlp_sect(jlp_sect), .jlp_on(jlp_on), .jlp_busy(jlp_busy), .jlp_eng_busy(jlp_eng_busy),
         .jm_req(jm_req), .jm_we(jm_we), .jm_addr(jm_addr), .jm_wdata(jm_wdata), .jm_ack(jm_ack), .jm_rdata(jm_rdata),
-        .jlp_nv_addr(14'd0), .jlp_nv_we(1'b0), .jlp_nv_wdata(16'd0), .jlp_nv_q(jlp_nv_q),
+        .jlp_fl_clr(jlp_fl_clr),
+        .jlp_nv_addr(jlp_nv_addr), .jlp_nv_we(jlp_nv_we), .jlp_nv_wdata(jlp_nv_wdata), .jlp_nv_q(jlp_nv_q),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),

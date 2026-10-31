@@ -4,7 +4,10 @@
 // "data slot access all complete" (command 0x008F); core_bridge_cmd keeps it
 // in a dual-port RAM (mf_datatable, two clocks of read latency) whose port A
 // is ours. This module
-//   - writes the JLP flash slot's size (index JLP_IDX) as 0 until step 11
+//   - writes the JLP flash slot's size (index JLP_IDX): the cartridge's sectors x
+//     1,536 bytes (build step 11; 0 without flash, so the Pocket writes no file).
+//     The sector count comes from clk_sys and changes only at a load: two
+//     flip-flops, then taken when two clocks agree
 //     stores flash (DESIGN.md 13 item 17), as core_top did in step 1;
 //   - on each rising edge of dataslot_allcomplete, scans the table for the
 //     cartridge slot id (0x100) and reads its size: the file's length in
@@ -87,6 +90,7 @@ module apf_datatable #(
     output logic [31:0]      cfg_len,
     output logic             cfg_inlist,
     output logic             len_valid,
+    input  wire logic [4:0]  jlp_sectors,     // clk_sys: the JLP flash slot's size (x 1,536 bytes)
 
     // apf_cfgfetch (FETCH): core_bridge_cmd's target commands, its struct
     // RAM on the bridge, and how the fetch went (apf_cfgfetch's res)
@@ -148,6 +152,13 @@ module apf_datatable #(
     assign d_req   = req_seen;
     assign d_phase = st == D_FWAIT ? 2'd1 : reached ? 2'd2 : 2'd0;
 
+    logic [4:0] js_a = 5'd0, js_s = 5'd0, js_b = 5'd0;
+    always_ff @(posedge clk) begin
+        js_a <= jlp_sectors;
+        js_s <= js_a;
+        if (js_s == js_a) js_b <= js_s;
+    end
+
     always_ff @(posedge clk) begin
         ac_d <= allcomplete;
         if (allcomplete) d_ac <= 1'b1;
@@ -171,7 +182,7 @@ module apf_datatable #(
             D_IDLE: begin
                 // the JLP size word, rewritten while idle
                 dt_addr <= 10'(2 * JLP_IDX + 1);
-                dt_data <= 32'd0;
+                dt_data <= 32'(js_b) * 32'd1536;
                 dt_wren <= 1'b1;
                 if (allcomplete && !ac_d) begin
                     reached <= 1'b0;

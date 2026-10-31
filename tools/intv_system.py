@@ -836,13 +836,13 @@ def run_pictures(bus, cpu, last, mame_clock=False, max_cycles=None):
     return events
 
 
-def system_for(mode, bios_dir=None, cart_path=None, buslog=False, ecs=None, cfg_path=None):
+def system_for(mode, bios_dir=None, cart_path=None, buslog=False, ecs=None, cfg_path=None, jlp_flash=None):
     """(bus, cpu, mame_clock) for a STIC mode: "mame" runs on MAME's frame
     timing, clock and memory map, "stic" and "none" on the RTL's. ecs: as
     make_system (in "mame" mode the ECS is MAME's)."""
     tm = MameTiming() if mode == "mame" else FrameTiming()
     bus, cpu = make_system(bios_dir, cart_path, tm, buslog=buslog, stic_mode=mode, ecs=ecs,
-                           mame_ecs=mode == "mame", cfg_path=cfg_path)
+                           mame_ecs=mode == "mame", cfg_path=cfg_path, jlp_flash=jlp_flash)
     bus.mame_map = mode == "mame"
     return bus, cpu, mode == "mame"
 

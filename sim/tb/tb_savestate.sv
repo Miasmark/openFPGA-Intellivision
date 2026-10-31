@@ -110,7 +110,7 @@ module tb_savestate;
     // ------------------------------------------------------------ the host side
     logic [31:0] bridge_addr = 32'd0, bridge_wr_data = 32'd0;
     logic        bridge_rd = 1'b0, bridge_wr = 1'b0;
-    wire  logic [31:0] cmd_rd_data, ss_rd_data;
+    wire  logic [31:0] cmd_rd_data, ss_rd_data, jlp_rd_data;
     logic [31:0] bridge_rd_data;
     logic        pause_en = 1'b1;
 
@@ -118,6 +118,7 @@ module tb_savestate;
     always_comb begin
         if (bridge_addr[31:24] == 8'hF8)      bridge_rd_data = cmd_rd_data;
         else if (bridge_addr[31:24] == 8'h50) bridge_rd_data = ss_rd_data;
+        else if (bridge_addr[31:24] == 8'h20) bridge_rd_data = jlp_rd_data;   // the JLP flash slot
         else                                  bridge_rd_data = 32'd0;
     end
 
@@ -225,6 +226,7 @@ module tb_savestate;
         .audio(audio),
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),
         .bridge_wr_data(bridge_wr_data), .ss_bridge_rd_data(ss_rd_data),
+        .jlp_bridge_rd_data(jlp_rd_data), .jlp_sectors(),
         .savestate_start(savestate_start), .savestate_start_ack(s_ack),
         .savestate_start_busy(s_busy), .savestate_start_ok(s_ok), .savestate_start_err(s_err),
         .savestate_load(savestate_load), .savestate_load_ack(l_ack),
@@ -795,6 +797,26 @@ module tb_savestate;
         $fdisplay(fd, "L ecs mode %0d", core.ecs_mode);
         $fdisplay(fd, "L voice mode %0d", core.voice_mode);
         repeat (10) @(negedge clk);
+        // the JLP flash slot (build step 11): +jlpsav=F written at 0x20000000 as the Pocket does
+        // when it loads a game's .sav (after the cartridge's load, which erased the store)
+        begin
+            string jf;
+            int    f, ch;
+            logic [7:0] bb [4];
+            if ($value$plusargs("jlpsav=%s", jf)) begin
+                f = $fopen(jf, "rb");
+                if (f == 0) fail($sformatf("cannot read %s", jf));
+                host_on();
+                for (int i = 0; f != 0 && i < 6144; i++) begin
+                    for (int k = 0; k < 4; k++) begin ch = $fgetc(f); bb[k] = ch < 0 ? 8'hFF : 8'(ch); end
+                    if (ch < 0 && i > 0) break;
+                    br_wr(32'h20000000 + 32'(4 * i), {bb[0], bb[1], bb[2], bb[3]});
+                end
+                host_off();
+                if (f != 0) $fclose(f);
+                $fdisplay(fd, "R jlp slot written from %s", jf);
+            end
+        end
         if (hold_on == 0) hold_req = 1'b0;
 
         if ($value$plusargs("script=%s", script_f)) begin
@@ -851,6 +873,25 @@ module tb_savestate;
         end
 
         wait_cyc(ncyc);
+        // the JLP flash slot read back as the Pocket saves it (+jlpout=F, +jlpbytes=N), and the
+        // JLP cartridges' results ($0300 on, $0351 counts them: sim/testroms/jlp)
+        begin
+            string jf;
+            int    f, nb;
+            logic [31:0] v;
+            if ($value$plusargs("jlpout=%s", jf) && $value$plusargs("jlpbytes=%d", nb)) begin
+                f = $fopen(jf, "wb");
+                host_on();
+                for (int i = 0; i < nb / 4; i++) begin
+                    br_rd(32'h20000000 + 32'(4 * i), v);
+                    $fwrite(f, "%c%c%c%c", v[31:24], v[23:16], v[15:8], v[7:0]);
+                end
+                host_off();
+                $fclose(f);
+                for (int k = 0; k < int'(core.machine.sysram.mem[16'h151]) && k < 64; k++)
+                    $fdisplay(fd, "J %0d %04x", k, core.machine.sysram.mem[16'h100 + k]);
+            end
+        end
         $fdisplay(fd, "E drops %0d", core.ssc.br_drops);
         if (nfail == 0) $fdisplay(fd, "END");
         else $fdisplay(fd, "END with failures");

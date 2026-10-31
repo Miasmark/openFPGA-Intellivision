@@ -249,7 +249,7 @@ module tb_system;
         .ivoice_addr(iv_addr), .ivoice_q,
         .jlp_mode, .jlp_sect, .jlp_on, .jlp_busy, .jlp_eng_busy,
         .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,
-        .jlp_nv_addr(14'd0), .jlp_nv_we(1'b0), .jlp_nv_wdata(16'd0), .jlp_nv_q,
+        .jlp_fl_clr(1'b0), .jlp_nv_addr(14'd0), .jlp_nv_we(1'b0), .jlp_nv_wdata(16'd0), .jlp_nv_q,
         .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
         .phase, .dout, .din, .addr, .fetch, .hold, .halted,
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_m));

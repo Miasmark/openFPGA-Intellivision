@@ -192,15 +192,16 @@ def build_one(name):
     return prog, image, cfg
 
 
-def model_results(name, image, cfg, frames=40):
-    """The results the model's machine leaves at $0300 (tools/intv_system.py, the real EXEC)."""
+def model_results(name, image, cfg, frames=40, flash=None):
+    """The results the model's machine leaves at $0300 (tools/intv_system.py, the real EXEC);
+    flash: the JLP's flash words at the start (else erased)."""
     import tempfile
     import intv_system as isys
     d = tempfile.mkdtemp(prefix="jlp_")
     bp, cp = os.path.join(d, name + ".bin"), os.path.join(d, name + ".cfg")
     open(bp, "wb").write(image)
     open(cp, "w").write(cfg)
-    bus, cpu, mame = isys.system_for("stic", cart_path=bp, cfg_path=cp)
+    bus, cpu, mame = isys.system_for("stic", cart_path=bp, cfg_path=cp, jlp_flash=flash)
     if bus.jlp is None:
         raise SystemExit("%s: the model made no JLP from the CFG" % name)
     isys.run_pictures(bus, cpu, frames, mame_clock=mame)

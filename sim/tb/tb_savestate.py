@@ -67,7 +67,7 @@ CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v',
-       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp.sv', 'intv_jlp_nv.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(HERE, 'models', 'sram_as6c2016.sv'),
@@ -652,6 +652,11 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         futs[(name, 'R')] = bench.pool.submit(bench.sim, tagp + name + '_R', img, nframes * FRAME, [])
         futs[(name, 'S')] = bench.pool.submit(bench.sim, tagp + name + '_S', img, nframes * FRAME, lines)
         saves[name] = blobs
+        if name in JLP_NV:
+            prep = jlp_nv_prep(bench, name)
+            futs[(name, 'N')] = (prep, bench.pool.submit(
+                bench.sim, tagp + name + '_N', img, nframes * FRAME, [],
+                ['+jlpsav=' + prep[0], '+jlpout=' + prep[1], '+jlpbytes=%d' % prep[2]]))
         if name in PAUSE0_IMAGES:              # the same with Pause in Menu off
             l0, b0 = save_script(img, bench, tag='p')
             futs[(name, 'S0')] = (b0, bench.pool.submit(bench.sim, tagp + name + '_S0', img,
@@ -688,6 +693,15 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 p += check_save_run(img, ref, r0, b0, *bench.prep[name][3:7], cfgcrc=bench.prep[name][8],
                                     pause=False, what='S0', flags=bench.prep[name][9],
                                     ecscrc=bench.prep[name][10])[0]
+        if (name, 'N') in futs:
+            prep, fn = futs[(name, 'N')]
+            rn = fn.result()
+            if rn is None or not rn.end or rn.fails:
+                p.append('N: did not run (%s)' % (rn.fails[:2] if rn else 'no log'))
+            else:
+                p += check_jlp_nv(rn, prep)
+                print('%s: N (the JLP flash slot) %s' % (name, 'pass' if not check_jlp_nv(rn, prep) else 'FAIL'),
+                      flush=True)
         probs += ['%s %s' % (name, x) for x in p]
         saves[name] = info
         print('%s: R %d frames, S %d saves%s %s' % (name, img[4], len(info),
@@ -923,6 +937,56 @@ PLANTS = [
                                          "                m_we = 1'b1;\n                m_a  = cram_a;")],
      'jlpfls', 'psgtest', AFTER),
 ]
+# build step 11: the JLP flash slot (intv_jlp_nv, data slot 0x106) end to end. N: the cartridge's
+# .sav written at 0x20000000 after its load, as the Pocket does (the flash the model's own run from
+# erased left: jzIntv's layout), the run, the slot read back; the results ($0300 on) and the file
+# must be the model's from that flash (its write to a row the .sav filled is dropped, so the
+# results differ from R's: the .sav was taken)
+JLP_NV = {'jlpfls': 4}
+
+
+def jlp_mod():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'build_jlp', os.path.join(ROOT, 'sim', 'testroms', 'jlp', 'build_jlp.py'))
+    bj = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bj)
+    return bj
+
+
+def jlp_nv_prep(bench, name):
+    """(.sav path, output path, bytes, expected results, expected file bytes)."""
+    bj = jlp_mod()
+    _, image, cfg = bj.build_one(name)
+    _, b1 = bj.model_results(name, image, cfg)
+    f1 = list(b1.jlp.flash)
+    res2, b2 = bj.model_results(name, image, cfg, flash=f1)
+    sav = os.path.join(bench.work, name + '_in.sav')
+    with open(sav, 'wb') as f:
+        f.write(struct.pack('<%dH' % len(f1), *f1))
+    want = struct.pack('<%dH' % len(b2.jlp.flash), *b2.jlp.flash)
+    res1, _ = bj.model_results(name, image, cfg)
+    if res1 == res2:
+        raise SystemExit('%s: the .sav changes no result: N would not show it was taken' % name)
+    return sav, os.path.join(bench.work, name + '_out.sav'), len(want), res2, want
+
+
+def check_jlp_nv(run, prep):
+    sav, out, nb, res, want = prep
+    probs = []
+    got = [int(ln.split()[2], 16) for ln in run.lines if ln.startswith('J ')]
+    if got != res:
+        k = next((i for i in range(max(len(got), len(res))) if i >= len(got) or i >= len(res) or got[i] != res[i]), 0)
+        probs.append('N: results %d (first differing %d: %s), model from the .sav %d (%s)' % (
+            len(got), k, got[k:k + 3], len(res), res[k:k + 3]))
+    data = open(out, 'rb').read() if os.path.exists(out) else b''
+    if data != want:
+        k = next((i for i in range(min(len(data), len(want))) if data[i] != want[i]), min(len(data), len(want)))
+        probs.append('N: the slot read back: %d bytes, first differing at %d (%s), model %d bytes (%s)' % (
+            len(data), k, data[k:k + 4].hex(), len(want), want[k:k + 4].hex()))
+    return probs
+
+
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 
 

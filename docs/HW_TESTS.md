@@ -173,7 +173,8 @@ would see row requests and FRAME would read noticeably low.
 | candidate (section 8) | FRAME CYC | IRQ PATH | COPY PATH | IRQ ENTRY | S_F S_I S_X |
 |---|---|---|---|---|---|
 | **today's core (0.0.13 on)** | **14934** | **221** | **238** | **9** | 122C 0EB8 0E74 |
-| A, SI-A, IR-A (12-cycle interrupt) | 14934 | 224 | 238 | 12 | 122C 0EAC 0E74 |
+| A, SI-A, IR-A, M-A (12-cycle interrupt) | 14934 | 224 | 238 | 12 | 122C 0EAC 0E74 |
+| M (the MAME fork's timing as it is) | 14934 | 221 | 238 | 9 | |
 | A' (the dispatcher's SDBD + MVI@ R4, R7 three cycles longer) | 14934 | 224 | 241 | 9 | 122C 0EAC 0E68 |
 | B, SI-B, IR-B (frame 14,931) | 14931 | 221 | 238 | 9 | 1220 0EAC 0E68 |
 
@@ -213,6 +214,11 @@ ON passes (hex), k = 0 .. E:
 | SI-B | 360 35F 26A 24F 235 208 1F7 1F6 1E0 198 160 15F 26A 208 1E0 |
 | IR-A | 35D 35D 264 249 232 203 1F2 1F2 1DE 193 161 161 264 203 1DD |
 | IR-B | 35D 35C 265 249 232 203 1F2 1F2 1DE 193 162 161 264 203 1DD |
+| M (the MAME fork as it is) | 360 360 26B 24D 235 205 1F4 1F4 1E0 195 15F 15F 26A 205 1E0 |
+| **M-A, hold 110 (exact on all three)** | **361 361 26B 24E 235 206 1F5 1F5 1E1 195 160 15F 26B 205 1E1** |
+| M-A, hold 109 (exact on all three) | 361 361 26B 24E 235 209 1F5 1F5 1E1 198 15F 15F 26B 209 1E1 |
+| M-A' (hold 110, the dispatcher +3) | as M-A, hold 110 |
+| M-B (closest: ON 30279) | 361 360 26B 24E 235 206 1F5 1F4 1E1 195 160 15F 26A 206 1E1 |
 
 OFF passes: 3BF 3BE 2AD 28E 271 23F 229 229 215 1C2 185 185 2AC 23F 214 (today's core, A, A');
 B, SI and IR have 3BE at k = 0, SI and IR 1C1 at k = 9, B 184 at k = A and B. The exit NACTs cannot be told apart by any CPU-side count
@@ -245,12 +251,30 @@ frame 14,934, interrupt 9 cycles, frame BUSRQ 3,790-3,831, row r BUSRQ from 3,87
 | B | 33431 / 30360 | 1C 1C 1C 1C 1B 1B | as today | 14931, 9 | |
 | SI-A / SI-B | 33431 / 30280 | 1C 1B 1B 1B 1B 1B | 22 / 23 - step, row 4 at step 23 | 14934, 12 / 14931, 9 | |
 | IR-A / IR-B | 33432 / 30179, 30180 | 1C 1B 1B 1B 1B 1B | min(19, 24 - step) | 14934, 12 / 14931, 9 | |
+| M (the MAME fork, f82e8a54) | 33438 / 30270 | 1C 1C 1B 1B 1B 1B | min(19, 24 - step) | 14934, 9 | |
+| **M-A** | **33431 / 30280** | **1C 1B 1B 1B 1B 1B** | **min(19, 24 - step)** | 14934, 12 | |
+| M-B (best found) | 33431 / 30279 | 1C 1B 1B 1B 1B 1B | min(19, 24 - step) | 14931, 9 | |
 
-No variant tried matches all three console results (the search, about 3,000 model runs: hold
-lengths, frame request starts, lengths and merging, exit NACTs, the 12-row case, a request held a
-fixed time from BUSAK, BUSRQ taken after non-interruptible instructions; the last two contradict
-the console's stable hw_intlate or G82's "only after the completion of an interruptable
-instruction"). hw_frame settles A / A' / B; hw_steal2 then shows the requests' shape directly.
+**Family M** (from the MAME fork's commit f82e8a54 of 2026-10-31, fitted there to the same three
+console results): the CPU grants BUSRQ at the end of every instruction, interruptible or not
+(against G82's pin description and 2.5.5: "only after the completion of an interruptable
+instruction"; the console's hw_rowcopy, a writer of non-interruptible MVO@s, shows no plateau);
+12 row fetches and no 13th with VDR = 0 (against T3); the request at the end of VBlank held
+about 100 cycles (T4 had 42); row r requested at the fetch line, 3,933 + 912 r, for 110 cycles,
+then 2 NACTs. In our model this gives the fork's numbers (1,373 a frame, 1C 1C 1B..., all 24
+rowcopy steps). **M-A**: the same with a 12-cycle interrupt (or A'), row r released at 4,041 +
+912 r (requested at 3,931 for 110 or 3,932 for 109 cycles) and the frame request held 88-96 (88-94
+with 110): **hw_steal, hw_intlate and hw_rowcopy all exact** (H 108 with frame request 96 and
+request 3,933, and H 107 / 98 / 3,934, too). M-B (frame 14,931): hw_intlate and hw_rowcopy exact
+with rows released at 4,038 + 912 r, but ON 30279 at best (30299, 30279, 30270 around it). The
+counts' last digit also depends on the phase the console powered up in (the first OFF phase:
+33432 in the model; M-A's ON phases 30280, 30279, 30280 over a long run), so a difference of one
+in a single phase does not decide.
+
+Before family M, no variant tried matched all three (about 3,000 model runs: hold lengths, frame
+request starts, lengths and merging, exit NACTs, a 12-row case with the requests one line ahead,
+a request held a fixed time from BUSAK, BUSRQ after non-interruptible instructions with the rows
+one line ahead). hw_frame settles A / A' / B; hw_steal2 then tells the families and the holds apart.
 
 ## On the RTL
 

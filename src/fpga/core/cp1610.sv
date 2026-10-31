@@ -50,9 +50,11 @@
 // disagree"): 9-cycle interrupt; SIN interruptible; SETC 4 cycles; SARC
 // Rr,2 8 cycles; NEGR 0 sets C; SWAP Rr,2 copies the low byte to both
 // halves; branch not taken 7 cycles (no trailing NACT); the 3 extra cycles
-// of a stack read before the read; SDBD with direct mode or before MVO
-// ignored; jump with II=11 jumps with I unchanged; MVO@ with the pointer as
-// source writes the old value. Two options are inputs (tie them in the
+// of a stack read before the read; SDBD before MVO ignored. From the
+// owner's Model 2609 (hw_cpuodd, 2026-10-31): SDBD with direct mode takes
+// the address as double byte data from the next two words (then one read
+// there); jump with II=11 enables interrupts (as JE); MVO@ with the pointer
+// (R4-R6) as source writes the incremented pointer. Two options are inputs (tie them in the
 // core; the bench runs both ways):
 //   cfg_hlt_imm       0: HLT halts after the next interruptible instruction
 //                        (G82 p.33; S1 p.56 said "next instruction")
@@ -76,8 +78,9 @@
 //   word 4 {tmp, ea}  (data and address of the sequence in progress)
 //   word 5 [9:0] ir, [17:10] lo (SDBD low byte), [22:18] st (cycle state),
 //          [24:23] cnt (idle cycles left - 1), [25] jpt (jump word 3),
-//          [26] dbd (this instruction follows SDBD), [27] reserved (reads 0;
-//          up to 0.0.11 "halt after this instruction"), [28] taken (branch)
+//          [26] dbd (this instruction follows SDBD), [27] sda (SDBD + direct:
+//          the address's reads, 0 at an instruction boundary; until 0.0.11
+//          "halt after this instruction"), [28] taken (branch)
 //   word 6 [3:0] S Z O C, [4] I, [5] D, [6] reserved (reads 0; whether
 //          the instruction ending may be interrupted is decided in its
 //          last cycle and needs no flip-flop), [7] intrm request, [8] intrm line last sample,
@@ -149,6 +152,7 @@ module cp1610 #(
     logic [7:0]  lo;
     logic [15:0] ea, tmp;
     logic        jpt, dbd, taken;
+    logic        sda = 1'b0, sda_n;              // SDBD + direct: the address's two reads
 
     // next values
     logic [15:0] r_n [0:7];
@@ -343,7 +347,7 @@ module cp1610 #(
         intr_req_n = intr_req; intr_prev_n = intr_prev;
         hpend_n = hpend; hlt_n = hlt;
         st_n = st; cnt_n = cnt; ir_n = ir; lo_n = lo; ea_n = ea; tmp_n = tmp;
-        jpt_n = jpt; dbd_n = dbd; taken_n = taken;
+        jpt_n = jpt; dbd_n = dbd; taken_n = taken; sda_n = sda;
         fin = 1'b0; fin_ok = 1'b0; ex_rd = 1'b0; ex_idle = 1'b0;
         hlt_now = 1'b0; smp = 1'b0;
 
@@ -388,7 +392,9 @@ module cp1610 #(
                     ea_n = r[7]; r_n[7] = r[7] + 16'd1;
                     st_n = S_RBAR;
                 end else if (cls_mvo) begin
-                    tmp_n = r[f_r];             // old value, also when f_r is the pointer
+                    tmp_n = r[f_r];
+                    if (f_r == f_m && f_m[2] && f_m != 3'd7)
+                        tmp_n = r[f_m] + 16'd1; // the pointer as source: incremented (hw_cpuodd)
                     if (f_m == 3'd0 && f_r == 3'd7)
                         tmp_n = r[7] + 16'd1;   // MVO R7, A: the PC after the address word
                     if (f_m == 3'd0) begin
@@ -399,7 +405,9 @@ module cp1610 #(
                         st_n = S_WBAR;
                     end
                 end else begin                  // reads (cls_rd)
-                    if (f_m == 3'd0) begin      // direct; SDBD ignored
+                    if (f_m == 3'd0 && dbd) begin   // SDBD + direct: the address from two words
+                        ea_n = r[7]; r_n[7] = r[7] + 16'd2; sda_n = 1'b1; st_n = S_RBAR;
+                    end else if (f_m == 3'd0) begin // direct
                         ea_n = r[7]; r_n[7] = r[7] + 16'd1; st_n = S_ABAR;
                     end else if (f_m == 3'd6 && (!dbd || cfg_sdbd_r6_mame)) begin
                         cnt_n = 2'd2; st_n = S_IDLE;   // 3 cycles before the read
@@ -432,11 +440,13 @@ module cp1610 #(
                 if (cls_jump && jpt) begin      // S1 p.52: BB AAAAAA II, AAAAAAAAAA
                     if (tmp[9:8] != 2'd3) r_n[{1'b1, tmp[9:8]}] = r[7];
                     r_n[7] = {tmp[7:2], din[9:0]};
-                    if (tmp[1:0] == 2'd1) fI_n = 1'b1;
+                    if (tmp[1:0] == 2'd1 || tmp[1:0] == 2'd3) fI_n = 1'b1;   // II=11 as JE (hw_cpuodd)
                     if (tmp[1:0] == 2'd2) fI_n = 1'b0;
                     st_n = S_RNACT2;
                 end else if (cls_branch && !taken) begin
                     fin = 1'b1; fin_ok = 1'b1;  // 7 cycles, no trailing NACT
+                end else if (sda) begin         // the address's low byte; its high byte next
+                    lo_n = din[7:0]; ea_n = ea + 16'd1; st_n = S_R2BAR;
                 end else if (dbl) begin
                     lo_n = din[7:0]; ea_n = ea2; st_n = S_R2BAR;
                 end else begin
@@ -456,7 +466,12 @@ module cp1610 #(
             end
             S_R2BAR:  st_n = S_R2NACT;
             S_R2NACT: st_n = S_R2DTB;
-            S_R2DTB:  ex_rd = 1'b1;
+            S_R2DTB: begin
+                if (sda) begin                  // the address: then one read there
+                    ea_n = {din[7:0], lo}; sda_n = 1'b0; st_n = S_RBAR;
+                end else
+                    ex_rd = 1'b1;
+            end
 
             S_ABAR:   st_n = S_ANACT;
             S_ANACT:  st_n = S_AADAR;
@@ -571,6 +586,7 @@ module cp1610 #(
             st <= S_RST; cnt <= 2'd0; ir <= 10'd0; lo <= 8'd0;
             ea <= 16'd0; tmp <= 16'd0;
             {jpt, dbd, taken} <= 3'd0;
+            sda <= 1'b0;
         end else if (ss_we && ss_mod) begin
             unique case (ss_w)
                 8'd0: {r[1], r[0]} <= ss_wdata;
@@ -581,7 +597,7 @@ module cp1610 #(
                 8'd5: begin
                     ir <= ss_wdata[9:0]; lo <= ss_wdata[17:10];
                     st <= st_t'(ss_wdata[22:18]); cnt <= ss_wdata[24:23];
-                    {taken, dbd, jpt} <= {ss_wdata[28], ss_wdata[26:25]};
+                    {taken, sda, dbd, jpt} <= ss_wdata[28:25];
                 end
                 8'd6: begin
                     {fS, fZ, fO, fC} <= ss_wdata[3:0];
@@ -600,6 +616,7 @@ module cp1610 #(
             st <= st_n; cnt <= cnt_n; ir <= ir_n; lo <= lo_n;
             ea <= ea_n; tmp <= tmp_n;
             {jpt, dbd, taken} <= {jpt_n, dbd_n, taken_n};
+            sda <= sda_n;
         end
     end
 
@@ -612,7 +629,7 @@ module cp1610 #(
                 8'd2: ss_rdata = {r[5], r[4]};
                 8'd3: ss_rdata = {r[7], r[6]};
                 8'd4: ss_rdata = {tmp, ea};
-                8'd5: ss_rdata = {3'd0, taken, 1'b0, dbd, jpt, cnt, 5'(st), lo, ir};
+                8'd5: ss_rdata = {3'd0, taken, sda, dbd, jpt, cnt, 5'(st), lo, ir};
                 8'd6: ss_rdata = {19'd0, hlt, hpend, intr_prev, intr_req,
                                   intrm_prev, intrm_req, 1'b0, fD, fI, fS, fZ, fO, fC};
                 default: ss_rdata = 32'd0;

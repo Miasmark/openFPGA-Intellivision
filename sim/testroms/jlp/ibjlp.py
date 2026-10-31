@@ -53,9 +53,9 @@ loop:	WAIT
 
 
 def build(out):
-    ib = os.environ.get('INTYBASIC', '/home/miasmark/pocket_projects/intellivision/tools-ext/IntyBASIC/intybasic')
+    ib = os.environ.get('INTYBASIC', os.path.expanduser('~/pocket_projects/intellivision/tools-ext/IntyBASIC/intybasic'))
     lib = os.environ.get('INTYBASIC_LIB', os.path.dirname(ib))
-    asm = os.environ.get('AS1600', '/home/miasmark/daria_work/intv/refs/jzintv/src-tree/jzintv-20200712-src/bin/as1600')
+    asm = os.environ.get('AS1600', os.path.expanduser('~/daria_work/intv/refs/jzintv/src-tree/jzintv-20200712-src/bin/as1600'))
     os.makedirs(out, exist_ok=True)
     bas, src = os.path.join(out, 'ibjlp.bas'), os.path.join(out, 'ibjlp.asm')
     with open(bas, 'w') as f:

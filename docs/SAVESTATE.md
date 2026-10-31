@@ -123,20 +123,21 @@ Header (bytes 0-63, 32-bit words, big-endian):
 | Word | Byte | Field | Value |
 |---|---|---|---|
 | 0 | 0 | magic | $494E5456 "INTV" |
-| 1 | 4 | version | format version (4) |
+| 1 | 4 | version | format version (5) |
 | 2 | 8 | size | blob size in bytes (153600) |
-| 3 | 12 | length | payload bytes from byte 64 (40896) |
+| 3 | 12 | length | payload bytes from byte 64 (56896) |
 | 4 | 16 | cart_crc | the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge) |
 | 5 | 20 | cart_words | the cartridge image length in 16-bit words |
 | 6 | 24 | flags | bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core) |
 | 7 | 28 | crc | CRC32 of the payload (bytes 64 .. 64 + length - 1) |
-| 8 | 32 | mod_words | module state words (1941) |
+| 8 | 32 | mod_words | module state words (1969) |
 | 9 | 36 | cram_cells | cart RAM cells (16384) |
 | 10 | 40 | exec_crc | the EXEC slot's CRC32 (the bytes the loader took) |
 | 11 | 44 | grom_crc | the GROM slot's CRC32 |
 | 12 | 48 | cfg_crc | the CFG's CRC32 when the map came with one (0: none; version 2) |
 | 13 | 52 | ecs_crc | the ECS ROM slot's CRC32 while the ECS is attached, else 0 (version 3) |
-| 14-15 | 56-63 | reserved | 0 |
+| 14 | 56 | jram_cells | JLP RAM cells (8000; version 5) |
+| 15-15 | 60-63 | reserved | 0 |
 
 Modules (state words in id order; one 32-bit word per state word):
 
@@ -158,22 +159,23 @@ Modules (state words in id order; one 32-bit word per state word):
 | $10-$11 | ecsram | 512 | 5428-7475 | intv_ecs.sv | ECS RAM 2,048 x 8, four cells a word (ids $10-$11) |
 | $18 | voice | 24 | 7476-7571 | intv_voice.sv | Intellivoice: SP0256 sequencer, parameters, decoded copy, filter, the sample enable and busy window (step 10) |
 | $19 | voicefifo | 64 | 7572-7827 | intv_ram.sv | the SPB640's FIFO 64 x 10 (step 10) |
-| | (unused, zero) | | 7828-8191 | | |
+| $20 | jlp | 28 | 7828-7939 | intv_jlp.sv | JLP: switch and busy count, multiply / divide operands and results, CRC, random, flash registers, extended registers, the cycle count (step 11; its RAM is the JLP RAM region) |
+| | (unused, zero) | | 7940-8191 | | |
 
 Then:
 
 | Blob bytes | Part |
 |---|---|
 | 8192-40959 | cart RAM: 16384 cells of the SRAM area $18000-$1BFFF, cell 2k in bits 31-16 of a word |
-| 40960-153599 | reserved for later steps, zero |
+| 40960-56959 | JLP RAM: 8000 cells ($8040-$9F7F, the SRAM at $1C000), as the cart RAM |
+| 56960-153599 | reserved for later steps, zero |
 
 Ids kept for later steps:
 
 | Id | For |
 |---|---|
-| $20 | JLP registers (step 11) |
 
-Module words: 1941 (7764 bytes); payload 40896 bytes (bytes 64-40959); blob 153600 bytes.
+Module words: 1969 (7876 bytes); payload 56896 bytes (bytes 64-56959); blob 153600 bytes.
 
 <!-- END GENERATED -->
 

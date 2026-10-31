@@ -520,7 +520,7 @@ TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
 SS = {'cpu': 0x02, 'bus': 0x03, 'stic': 0x04, 'psg': 0x05, 'scr': 0x06, 'sys': 0x07,
       'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D, 'ecs': 0x0E, 'psg2': 0x0F, 'eram': 0x10,
-      'voice': 0x18}
+      'voice': 0x18, 'jlp': 0x20}
 
 
 # ------------------------------------------------------------------- model
@@ -1185,6 +1185,9 @@ def compare(name, run, got, exp):
                    for i in range(512)]
         # step 10: intv_voice's own words (the sample enable, the window, the held write)
         checks += [('voice word %d' % (20 + i), d[(SS['voice'], 20 + i)], st['voice'][i]) for i in range(3)]
+        # step 11: the JLP's words (tools/jlp.py Jlp.state, and the cycle count)
+        if st.get('jlp') is not None:
+            checks += [('jlp word %d' % i, d[(SS['jlp'], i)], st['jlp'][i]) for i in range(28)]
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (

@@ -10,19 +10,21 @@ Everything else is generated from LAYOUT below or checked against it:
   docs/SAVESTATE.md              the table between the GENERATED markers
   the SS_ID defaults of the RTL modules and intv_machine's parameters (checked only)
 
-The blob (format version 4, build step 10; 3 was step 9's, 2 step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
+The blob (format version 5, build step 11; 4 was step 10's, 3 step 9's, 2 step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
 32-bit words stored big-endian (the Pocket's bridge byte order):
   bytes 0-63        header, 16 words (HEADER below)
   bytes 64-8191     the modules' state words in id order (1,853 used; the rest zero)
   bytes 8192-40959  cart RAM, the 16K cells of the SRAM's cart RAM area, two per word
                     (cell 2k in bits 31-16)
-  bytes 40960-      reserved for later steps (ECS, Intellivoice, JLP): zero
+  bytes 40960-56959 JLP RAM, its 8,000 words ($8040-$9F7F, the SRAM at $1C000), two per word
+                    (version 5; zero without a JLP)
+  bytes 56960-      reserved: zero
 The payload is bytes 64 .. 64 + length - 1 (length in the header); its CRC32 (zlib's
 CRC-32, the same as the cartridge CRC) is in the header. A blob is refused unless the
 magic, version, size, length, cartridge CRC and length, the CFG's CRC, flags, word
 counts and the EXEC and GROM CRCs match this core, its cartridge (and CFG) and its system
 ROMs, the ECS flag and ECS ROM CRC (version 3: the ECS attached or not, and with which ROM),
-the Intellivoice flag (version 4: on or off),
+the Intellivoice flag (version 4: on or off), the JLP RAM's cell count (version 5),
 the reserved header words and the reserved area are
 zero, and the payload CRC is right.
 
@@ -78,17 +80,18 @@ LAYOUT = [
      'Intellivoice: SP0256 sequencer, parameters, decoded copy, filter, the sample enable and busy window (step 10)'),
     (0x19, 'voicefifo', 64, 'intv_ram.sv', None,
      "the SPB640's FIFO 64 x 10 (step 10)"),
+    (0x20, 'jlp', 28, 'intv_jlp.sv', 'SS_ID',
+     'JLP: switch and busy count, multiply / divide operands and results, CRC, random, flash registers, '
+     'extended registers, the cycle count (step 11; its RAM is the JLP RAM region)'),
 ]
-# Ids kept for later build steps (not in version 1's blob).
-RESERVED_IDS = [
-    (0x20, 'JLP registers (step 11)'),
-]
+# Ids kept for later build steps.
+RESERVED_IDS = []
 # intv_machine's id parameters (the rest are in core_top / intv_core)
 MACHINE_PARAMS = {'SS_CPU': 0x02, 'SS_BUS': 0x03, 'SS_STIC': 0x04, 'SS_PSG': 0x05, 'SS_SCR': 0x06,
                   'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D,
-                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10, 'SS_VOICE': 0x18}
+                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10, 'SS_VOICE': 0x18, 'SS_JLP': 0x20}
 
-VERSION = 4
+VERSION = 5
 MAGIC = 0x494E5456                 # "INTV"
 BLOB_BYTES = 153600                # DESIGN 4.4, decision 6
 HDR_WORDS = 16
@@ -96,13 +99,15 @@ MOD_BYTE = 64                      # first module word
 MOD_AREA_END = 8192                # module words up to here
 CRAM_BYTE = 8192
 CRAM_CELLS = 16384                 # the SRAM's cart RAM area (intv_media.sv)
-LIVE_END = CRAM_BYTE + 2 * CRAM_CELLS        # 40960: the end of what versions 1-3 use
+JRAM_BYTE = CRAM_BYTE + 2 * CRAM_CELLS       # 40960: the end of what versions 1-4 use
+JRAM_CELLS = 8000                  # the JLP RAM ($8040-$9F7F; SRAM $1C000, intv_cart.sv)
+LIVE_END = JRAM_BYTE + 2 * JRAM_CELLS        # 56960
 PAYLOAD_BYTES = LIVE_END - MOD_BYTE          # 40896
 MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1941
 
 # header words
 (H_MAGIC, H_VERSION, H_SIZE, H_LENGTH, H_CART_CRC, H_CART_WORDS, H_FLAGS, H_CRC, H_NMOD, H_NCRAM,
- H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC, H_ECS_CRC) = range(14)
+ H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC, H_ECS_CRC, H_NJRAM) = range(15)
 HEADER = [
     (H_MAGIC, 'magic', '$494E5456 "INTV"'),
     (H_VERSION, 'version', 'format version (%d)' % VERSION),
@@ -118,8 +123,9 @@ HEADER = [
     (H_GROM_CRC, 'grom_crc', "the GROM slot's CRC32"),
     (H_CFG_CRC, 'cfg_crc', "the CFG's CRC32 when the map came with one (0: none; version 2)"),
     (H_ECS_CRC, 'ecs_crc', "the ECS ROM slot's CRC32 while the ECS is attached, else 0 (version 3)"),
+    (H_NJRAM, 'jram_cells', 'JLP RAM cells (%d; version 5)' % JRAM_CELLS),
 ]
-H_LAST = H_ECS_CRC
+H_LAST = H_NJRAM
 FLAG_ECS, FLAG_VOICE, FLAG_PAL = 1, 2, 0x100
 
 assert 4 * HDR_WORDS == MOD_BYTE
@@ -151,8 +157,9 @@ def crc32(b):
 
 # ------------------------------------------------------------- pack / unpack
 def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_crc=0, grom_crc=0,
-         cfg_crc=0, version=VERSION, ecs_crc=0):
-    """mods: {id: [words]} (every LAYOUT module, exact length); cram: CRAM_CELLS cells."""
+         cfg_crc=0, version=VERSION, ecs_crc=0, jram=None):
+    """mods: {id: [words]} (every LAYOUT module, exact length); cram: CRAM_CELLS cells; jram:
+    JRAM_CELLS cells (None: zero)."""
     b = bytearray(BLOB_BYTES)
     for mid, name, n, w0 in module_offsets():
         ws = mods[mid]
@@ -164,6 +171,11 @@ def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_
         raise ValueError('cart RAM: %d cells' % len(cram))
     for c, v in enumerate(cram):
         struct.pack_into('>H', b, CRAM_BYTE + 2 * c, v & 0xFFFF)
+    if jram is not None:
+        if len(jram) != JRAM_CELLS:
+            raise ValueError('JLP RAM: %d cells' % len(jram))
+        for c, v in enumerate(jram):
+            struct.pack_into('>H', b, JRAM_BYTE + 2 * c, v & 0xFFFF)
     h = [0] * HDR_WORDS
     h[H_MAGIC], h[H_VERSION], h[H_SIZE], h[H_LENGTH] = MAGIC, version, BLOB_BYTES, PAYLOAD_BYTES
     h[H_CART_CRC], h[H_CART_WORDS], h[H_FLAGS] = cart_crc, cart_words, flags
@@ -173,6 +185,8 @@ def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_
         h[H_CFG_CRC] = cfg_crc
     if version >= 3:
         h[H_ECS_CRC] = ecs_crc
+    if version >= 5:
+        h[H_NJRAM] = JRAM_CELLS
     h[H_CRC] = crc32(b[MOD_BYTE:MOD_BYTE + PAYLOAD_BYTES]) if crc_override is None else crc_override
     for i, v in enumerate(h):
         struct.pack_into('>I', b, 4 * i, v & 0xFFFFFFFF)
@@ -192,6 +206,11 @@ def unpack(blob):
     return header(blob), mods, cram
 
 
+def jram_of(blob):
+    """The JLP RAM cells of a blob (version 5)."""
+    return list(struct.unpack_from('>%dH' % JRAM_CELLS, blob, JRAM_BYTE))
+
+
 def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_crc=None, cfg_crc=None,
            ecs_crc=0):
     """The core's load checks, in its order; [] if the blob would be taken."""
@@ -199,7 +218,7 @@ def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_cr
         return ['size %d bytes, want %d' % (len(blob), BLOB_BYTES)]
     h = header(blob)
     want = {H_MAGIC: MAGIC, H_VERSION: VERSION, H_SIZE: BLOB_BYTES, H_LENGTH: PAYLOAD_BYTES,
-            H_FLAGS: flags, H_NMOD: MOD_WORDS, H_NCRAM: CRAM_CELLS}
+            H_FLAGS: flags, H_NMOD: MOD_WORDS, H_NCRAM: CRAM_CELLS, H_NJRAM: JRAM_CELLS}
     if cart_crc is not None:
         want[H_CART_CRC] = cart_crc
     if cart_words is not None:
@@ -256,6 +275,8 @@ def gen_pkg():
     L.append("    localparam int          SS_MOD_END    = %d;     // module area end" % MOD_AREA_END)
     L.append("    localparam int          SS_CRAM_BYTE  = %d;" % CRAM_BYTE)
     L.append("    localparam int          SS_CRAM_CELLS = %d;" % CRAM_CELLS)
+    L.append("    localparam int          SS_JRAM_BYTE  = %d;" % JRAM_BYTE)
+    L.append("    localparam int          SS_JRAM_CELLS = %d;" % JRAM_CELLS)
     L.append("    localparam int          SS_LIVE_END   = %d;    // version %d uses bytes below" % (LIVE_END, VERSION))
     L.append("    localparam int          SS_PAYLOAD    = %d;    // payload bytes from SS_MOD_BYTE" % PAYLOAD_BYTES)
     L.append('')
@@ -310,7 +331,9 @@ def gen_table():
     L += ['', 'Then:', '',
           '| Blob bytes | Part |', '|---|---|',
           '| %d-%d | cart RAM: %d cells of the SRAM area $18000-$1BFFF, cell 2k in bits 31-16 of a word |'
-          % (CRAM_BYTE, LIVE_END - 1, CRAM_CELLS),
+          % (CRAM_BYTE, JRAM_BYTE - 1, CRAM_CELLS),
+          '| %d-%d | JLP RAM: %d cells ($8040-$9F7F, the SRAM at $1C000), as the cart RAM |'
+          % (JRAM_BYTE, LIVE_END - 1, JRAM_CELLS),
           '| %d-%d | reserved for later steps, zero |' % (LIVE_END, BLOB_BYTES - 1),
           '', 'Ids kept for later steps:', '', '| Id | For |', '|---|---|']
     for mid, what in RESERVED_IDS:

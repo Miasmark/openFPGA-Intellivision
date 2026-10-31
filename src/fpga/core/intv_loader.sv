@@ -47,7 +47,8 @@
 //   4. the format's verdict: a .rom's errors, the CFG's, or the source of
 //      the map: the CFG's ranges (if it has any), the .rom's tables, the
 //      layout (cart_layouts.hex; layout 1 cut at the image length)
-//   5. the cart RAM area cleared (RAM_CELLS at RAM_BASE); for a .rom, every
+//   5. the cart RAM area cleared (RAM_CELLS at RAM_BASE) and the JLP RAM after
+//      it (JLP_CELLS, $1C000-$1DFFF; build step 11); for a .rom, every
 //      256-word block of plane 1 no segment wrote cleared too
 //   6. the map table: 4,096 entries into intv_cart (docs/CARTFORMATS.md 4),
 //      from the layout, the CFG's ranges (word exact: a block one range
@@ -72,6 +73,7 @@ module intv_loader #(
     parameter logic [16:0] ECS_BASE   = 17'h10000,
     parameter logic [16:0] RAM_BASE   = 17'h18000,
     parameter int          RAM_CELLS  = 16384,
+    parameter int          JLP_CELLS  = 8192,      // the JLP RAM's area, right after (step 11)
     parameter logic [16:0] POOL_BASE  = 17'h1E000
 ) (
     input  wire logic        clk,
@@ -633,7 +635,7 @@ module intv_loader #(
                 st  <= F_CLR;
             end
             F_CLR: if (f_push) begin
-                if ({17'd0, clr} == RAM_CELLS - 1) begin
+                if ({17'd0, clr} == RAM_CELLS + JLP_CELLS - 1) begin
                     blk <= 8'd0;
                     st  <= F_COV;
                 end

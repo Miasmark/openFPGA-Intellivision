@@ -448,10 +448,16 @@ module tb_system;
 
     // --------------------------------------------------------- state port
     // module id, word count (the order is the write order)
-    localparam int NMOD = 19;
-    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64};
+    localparam int NMOD = 20;
+    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 32};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64, 28};
     logic [31:0] saved [NMOD][256];
+    // the JLP's flash store and its row bits (build step 11): not machine state (a state load
+    // keeps the flash, JLP_NOTES 5.2), so the core never rolls it back; a "later state" round
+    // trip (mode 2) goes back in time past flash commands the model never undid, so the
+    // bench rolls the store back itself there
+    logic [15:0]  fl_saved [12288];
+    logic [127:0] fe_saved;
     logic [3:0]  pbuf_saved [2][45360];
 
     task automatic ss_read(input int id, input int w, output logic [31:0] v);
@@ -469,8 +475,9 @@ module tb_system;
         ss_we = 1'b0;
     endtask
 
-    // cart RAM (16K cells at $18000 in the SRAM) through the aux port
-    localparam int CRAM = 16384;
+    // cart RAM (16K cells at $18000 in the SRAM) and the JLP RAM after it ($1C000, 8K;
+    // build step 11) through the aux port
+    localparam int CRAM = 16384 + 8192;
     logic [15:0] cram_saved [CRAM];
     bit          has_cart = 1'b0;
 
@@ -509,7 +516,8 @@ module tb_system;
         @(negedge clk);
         run = 1'b0;
         repeat (16) @(negedge clk);       // let a cartridge access finish
-        while (voice_busy) @(negedge clk); // and a voice sample (intv_ss_ctl's quiet point)
+        while (voice_busy || jlp_eng_busy) @(negedge clk); // and a voice sample, the JLP's flash
+                                           // engine (intv_ss_ctl's quiet point)
         if (live) fail("machine still live after run = 0");
         ss_en = 1'b1;
     endtask
@@ -523,6 +531,8 @@ module tb_system;
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
         if (has_cart) cram_all(0);
+        for (int i = 0; i < 12288; i++) fl_saved[i] = dut.jlp.store[i];
+        fe_saved = dut.jlp.empt;
     endtask
 
     task automatic dump_all(input int k);
@@ -564,6 +574,8 @@ module tb_system;
             wait_cycle(rtcyc + rton);
             freeze();
             $fdisplay(fd, "R frozen again at cycle %0d", cyc);
+            for (int i = 0; i < 12288; i++) dut.jlp.store[i] = fl_saved[i];
+            dut.jlp.empt = fe_saved;
         end
         // junk, so that nothing left from before can pass: straight into
         // the three RAM arrays (what another game would have left there; a

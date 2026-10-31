@@ -532,7 +532,10 @@ class SystemBus:
                 "psg2": list(self.ecs.psg.regs) if self.ecs is not None else [0] * 14,
                 "psg2x": self._psg2x(cycle),
                 "ecsram": self.ecs.ram_words() if self.ecs is not None else [0] * 512,
-                "voice": self._voice_words(cycle)}
+                "voice": self._voice_words(cycle),
+                # step 11: intv_jlp's words 0-26 and 27 {started, cycle mod 2^16}
+                "jlp": (self.jlp.state(self._t(cycle)) + [1 << 16 | (self._t(cycle) & 0xFFFF)]
+                        if self.jlp is not None else None)}
 
     def _voice_words(self, cycle):
         """intv_voice.sv's words 20-22 at the start of cycle `cycle` (step 10)."""

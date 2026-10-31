@@ -17,11 +17,14 @@
 //
 // The blob: tools/savestate.py's layout (intv_ss_pkg), 153,600 bytes at
 // bridge address 0x50000000, 32-bit words, big-endian. Its live part, bytes
-// 0 - 40,959 (header, module words, cart RAM), is kept in the SRAM at
-// STAGE (2 SRAM words per blob word, the upper half first): a save writes
-// it there and the host reads it from there; for a load the host writes it
-// there, and only after its header and payload CRC have been checked is
-// any of it written into the machine. Bytes from 40,960 on read 0; a write
+// 0 - 56,959 (header, module words, cart RAM, JLP RAM), is staged: bytes
+// 0 - 40,959 in the SRAM at STAGE (2 SRAM words per blob word, the upper
+// half first), the JLP RAM's 16,000 bytes (version 5, build step 11; the
+// SRAM's plane 2 has no room left) in a block RAM shadow of 4,000 words. A
+// save writes it there and the host reads it from there; for a load the
+// host writes it there, and only after its header and payload CRC have
+// been checked is any of it written into the machine (the JLP RAM into the
+// SRAM at JRAM, as the cart RAM at CRAM). Bytes from 56,960 on read 0; a write
 // of anything else there marks the blob bad (cleared by a write to word 0
 // and after every load). The bridge's accesses cross to clk_sys one at a
 // time (a toggle each way; the bridge leaves at least 88 clk_74a, 1.18 us,
@@ -45,7 +48,7 @@
 // freeze, with ss_en high (the block RAMs' ports belong to the state port
 // then; intv_ram.sv); ss_en drops at least 4 clk_sys before run rises.
 //
-//   save   freeze; every module word (ss_word_addr order) and the cart RAM
+//   save   freeze; every module word (ss_word_addr order), the cart RAM and the JLP RAM
 //          into the blob with the payload CRC, then the header; ok; resume
 //          (unless the menu holds the freeze). About 5 ms.
 //   load   freeze; check the header (magic, version, size, length, the
@@ -57,7 +60,7 @@
 //          unused module area 0, nothing written beyond the live part): a
 //          foreign or corrupt blob ends with err and the machine resumes
 //          untouched. Else every module
-//          word and the cart RAM are written (the timing word's mpos: the
+//          word, the cart RAM and the JLP RAM are written (the timing word's mpos: the
 //          machine resumes at the saved position), then ok.
 //
 // (build step 8) An image whose writable storage the blob cannot hold
@@ -87,7 +90,8 @@ module intv_ss_ctl #(
     parameter int          V_QUIET        = 60,   // freeze while the machine's vcnt < this
     parameter int          TIMEOUT_FRAMES = 3,    // DESIGN 4.2
     parameter logic [16:0] STAGE          = 17'h13000,
-    parameter logic [16:0] CRAM           = 17'h18000
+    parameter logic [16:0] CRAM           = 17'h18000,
+    parameter logic [16:0] JRAM           = 17'h1C000
 ) (
     // ---------------------------------------------- clk_74a: APF
     input  wire logic        clk_74a,
@@ -154,7 +158,8 @@ module intv_ss_ctl #(
     localparam int W_MOD0 = SS_MOD_BYTE / 4;              // 16: first module word
     localparam int W_GAP0 = W_MOD0 + SS_MOD_WORDS;        // unused module area
     localparam int W_CRAM = SS_CRAM_BYTE / 4;             // 2048
-    localparam int W_END  = SS_LIVE_END / 4;              // 10240
+    localparam int W_JRAM = SS_JRAM_BYTE / 4;             // 10240: the shadow's from here
+    localparam int W_END  = SS_LIVE_END / 4;              // 14240
 
     // ============================================== clk_74a side
     logic        b_t = 1'b0;                              // request toggle
@@ -244,9 +249,17 @@ module intv_ss_ctl #(
     // ---------------------------------------------- SRAM: one blob word
     // m_go starts two accesses through the aux port: m_a (bits 31-16) and
     // m_a + 1 (bits 15-0); m_done pulses when both are done, m_q the word read
-    typedef enum logic [1:0] {M_IDLE, M_HI, M_LO} mst_t;
+    // (a staged word of the JLP RAM region, m_sh: the shadow, one clk)
+    typedef enum logic [1:0] {M_IDLE, M_HI, M_LO, M_SH} mst_t;
     mst_t        mst = M_IDLE;
-    logic        m_go, m_we;
+    logic        m_go, m_we, m_sh;
+    logic [11:0] m_si;
+    logic [31:0] shadow [4096];
+    logic [31:0] sh_q;
+    always_ff @(posedge clk) begin
+        if (mst == M_IDLE && m_go && m_sh && m_we) shadow[m_si] <= m_d;
+        sh_q <= shadow[m_si];
+    end
     logic [16:0] m_a;
     logic [31:0] m_d;
     logic [15:0] m_lo = 16'd0;
@@ -259,7 +272,9 @@ module intv_ss_ctl #(
     always_ff @(posedge clk) begin
         m_done <= 1'b0;
         case (mst)
-            M_IDLE: if (m_go) begin
+            M_IDLE: if (m_go && m_sh)
+                mst <= M_SH;
+            else if (m_go) begin
                 aux_req   <= 1'b1;
                 aux_we    <= m_we;
                 aux_addr  <= m_a;
@@ -279,6 +294,11 @@ module intv_ss_ctl #(
                 aux_we    <= 1'b0;
                 m_done    <= 1'b1;
                 mst       <= M_IDLE;
+            end
+            M_SH: begin
+                m_q    <= sh_q;
+                m_done <= 1'b1;
+                mst    <= M_IDLE;
             end
             default: mst <= M_IDLE;
         endcase
@@ -370,7 +390,10 @@ module intv_ss_ctl #(
 
     wire logic        in_mod  = w >= 14'(W_MOD0) && w < 14'(W_GAP0);
     wire logic        in_gap  = w >= 14'(W_GAP0) && w < 14'(W_CRAM);
-    wire logic        in_cram = w >= 14'(W_CRAM);
+    wire logic        in_cram = w >= 14'(W_CRAM) && w < 14'(W_JRAM);
+    wire logic        in_jram = w >= 14'(W_JRAM);
+    wire logic [13:0] jw      = w - 14'(W_JRAM);
+    wire logic [16:0] jram_a  = JRAM + {2'd0, jw, 1'b0};
     wire logic [10:0] mi      = 11'(w - 14'(W_MOD0));
     wire logic [16:0] stg_a   = STAGE + {2'd0, w, 1'b0};
     wire logic [16:0] cram_a  = CRAM + {2'd0, w - 14'(W_CRAM), 1'b0};
@@ -396,6 +419,7 @@ module intv_ss_ctl #(
             4'(SS_H_GROM_CRC):   hdr_exp = gcrc;
             4'(SS_H_CFG_CRC):    hdr_exp = cfg_crc;
             4'(SS_H_ECS_CRC):    hdr_exp = ecs_crc;
+            4'(SS_H_JRAM_CELLS): hdr_exp = 32'(SS_JRAM_CELLS);
             default:             hdr_exp = 32'd0;
         endcase
     endfunction
@@ -410,6 +434,8 @@ module intv_ss_ctl #(
         m_we = 1'b0;
         m_a  = stg_a;
         m_d  = v;
+        m_sh = in_jram;                                   // a staged word: the shadow's
+        m_si = jw[11:0];
         bp_take = 1'b0;
         case (ost)
             O_BR: if (m_idle) begin
@@ -419,11 +445,14 @@ module intv_ss_ctl #(
                     m_we = bp_we;
                     m_a  = STAGE + {bp_w[15:0], 1'b0};
                     m_d  = bp_d;
+                    m_sh = bp_w >= 22'(W_JRAM);
+                    m_si = 12'(bp_w - 22'(W_JRAM));
                 end
             end
-            O_SNAP:  if (ph == 2'd0 && dly == 3'd0 && in_cram) begin
-                m_go = 1'b1;                              // two cart RAM cells
-                m_a  = cram_a;
+            O_SNAP:  if (ph == 2'd0 && dly == 3'd0 && (in_cram || in_jram)) begin
+                m_go = 1'b1;                              // two cart / JLP RAM cells
+                m_a  = in_jram ? jram_a : cram_a;
+                m_sh = 1'b0;
             end
             O_SNAPW, O_HDR: if (ph == 2'd0) begin
                 m_go = 1'b1;
@@ -433,10 +462,11 @@ module intv_ss_ctl #(
                 m_go = 1'b1;
             O_VPAY:  if (ph == 2'd0 && !bad)
                 m_go = 1'b1;
-            O_APPLYW: if (ph == 2'd0 && in_cram) begin
+            O_APPLYW: if (ph == 2'd0 && (in_cram || in_jram)) begin
                 m_go = 1'b1;
                 m_we = 1'b1;
-                m_a  = cram_a;
+                m_a  = in_jram ? jram_a : cram_a;
+                m_sh = 1'b0;
             end
             default: ;
         endcase

@@ -227,7 +227,8 @@ module intv_core #(
     intv_machine #(
         .SS_CPU(SS_CPU), .SS_BUS(SS_BUS), .SS_STIC(SS_STIC), .SS_PSG(SS_PSG),
         .SS_SCR(SS_SCRATCH), .SS_SYS(SS_SYSRAM), .SS_GRAM(SS_GRAM), .SS_ROW(SS_ROW),
-        .SS_LINE(SS_LINE), .SS_ECS(SS_ECS), .SS_PSG2(SS_PSG2), .SS_ERAM(SS_ECSRAM), .SS_VOICE(SS_VOICE)
+        .SS_LINE(SS_LINE), .SS_ECS(SS_ECS), .SS_PSG2(SS_PSG2), .SS_ERAM(SS_ECSRAM), .SS_VOICE(SS_VOICE),
+        .SS_JLP(SS_JLP)
     ) machine (
         .clk(clk), .mreset(machine_reset), .ce(ce_cpu), .ce_pix(ce_stic), .live(live),
         .hcnt(hcnt), .vcnt(vcnt),

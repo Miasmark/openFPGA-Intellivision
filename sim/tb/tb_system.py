@@ -1943,6 +1943,24 @@ PLANTS = [
                                           "wire logic [15:0] psgs = mixs[15:0];")], 'voicemix', None),
     # the ECS level (the module's own knob): ignored, PSG #2 always x1 (ecssound_l4: Loudest)
     ('ecs_level_ignored', 'intv_machine.sv', [("        case (ecs_level)", "        case (3'd2)")], 'ecssound_l4', None),
+    # step 11: the JLP (each caught by one of its cartridges, RTL = model through System RAM and the
+    # JLP's state words): x / 0 recomputing, the CRC's reset value, JF.first, a write to a row not
+    # empty taken, a short busy window, the RAM window one word off (the CPU's accesses alone, so the
+    # flash engine's copy shows it), the switch not hiding the registers, a result word not restored
+    # (round trip rt1, after the result's write), the random update's cycle number
+    ('jlp_div0_updates', 'intv_jlp.sv', [("end else if (op_b != 16'd0) begin", "end else begin")], 'jlpdiv', None),
+    ('jlp_crc_reset0', 'intv_jlp.sv', [("crc <= 16'hFFFF; rnd <= 16'hFFFF;", "crc <= 16'h0000; rnd <= 16'hFFFF;")],
+     'jlpdiv', None),
+    ('jlp_first_off', 'intv_jlp.sv', [("localparam logic [15:0] FIRST = 16'h00E0;", "localparam logic [15:0] FIRST = 16'h00E1;")],
+     'jlpfls', None),
+    ('jlp_full_row_written', 'intv_jlp.sv', [("(cmd == 2'd2 || empt[row7])", "(cmd == 2'd2 || 1'b1)")], 'jlpfls', None),
+    ('jlp_busy_short', 'intv_jlp.sv', [("left <= 16'(BUSY - 1);", "left <= 16'd2;")], 'jlpfls', None),
+    ('jlp_ram_off_by_one', 'intv_cart.sv', [("m_addr    <= JLP_BASE + {4'd0, j_off[12:0]};",
+                                             "m_addr    <= JLP_BASE + {4'd0, j_off[12:0]} + 17'd1;")], 'jlpfls', None),
+    ('jlp_off_answers', 'intv_jlp.sv', [("wire logic sel_rd = on && intv_jlp_pkg::reg_rd(a);",
+                                         "wire logic sel_rd = intv_jlp_pkg::reg_rd(a);")], 'jlpena', None),
+    ('jlp_ss_result_lost', 'intv_jlp.sv', [("5'd13: res0 <= ss_wdata[15:0];", "5'd13: ;")], 'jlpmul', ['rt1']),
+    ('jlp_rnd_cycle', 'intv_jlp.sv', [("cr_v <= rnd ^ cyc;", "cr_v <= rnd ^ (cyc + 16'd1);")], 'jlpdiv', None),
     # the final saturation (the voice on top of the PSGs' sum) dropped: voicemix drives it past 32,767
     ('voice_mix_unsat', 'intv_machine.sv', [("assign audio     = vsum > 18'sd32767 ? 16'h7FFF : vsum < -18'sd32768 ? 16'h8000 : vsum[15:0];",
                                             "assign audio     = vsum[15:0];")], 'voicemix', None),

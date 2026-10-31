@@ -137,6 +137,11 @@ SS_IMAGES = [
     ('voicetest', None, 'voicetest.py', (0xFF, 0xFF), 40, None,
      [(4, 'voice'), (6, 'voice'), (9, 'voicewin'), (12, 'voice'), (15, 'voice'), (18, 'voice'),
       (21, 'voicewin')], (25, 6), 30),
+    # build step 11 (SS_JLP, version 5's JLP RAM region): our JLP flash cartridge
+    # (sim/testroms/jlp): saves among its flash commands (frames 4-6: reads, writes, the erase;
+    # some inside a command's busy window), its JLP RAM rows and registers in use
+    ('jlpfls', ('jlp', 'jlpfls'), None, (0xFF, 0xFF), 40, None,
+     [(5, 'any'), (6, 'any'), (9, 'any'), (12, 'midinst')], (28, 8), 32),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
@@ -247,6 +252,19 @@ def prepare(work, img, lib, bdir):
         im = [x for x in b9.images(os.path.join(work, 'step9_build')) if x['name'] == zipname[1]][0]
         cart, cfgp = b9.write(work, im)
         crc, words, cfgcrc = ss.crc32(im['data']), (len(im['data']) + 1) // 2, ss.crc32(im['cfg'])
+    elif isinstance(zipname, tuple) and zipname[0] == 'jlp':      # a JLP cartridge (step 11)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'build_jlp', os.path.join(ROOT, 'sim', 'testroms', 'jlp', 'build_jlp.py'))
+        bj = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bj)
+        _, data, cfgtext = bj.build_one(zipname[1])
+        cart, cfgp = os.path.join(work, name + '.bin'), os.path.join(work, name + '.cfg')
+        with open(cart, 'wb') as f:
+            f.write(data)
+        with open(cfgp, 'w') as f:
+            f.write(cfgtext)
+        crc, words, cfgcrc = ss.crc32(data), (len(data) + 1) // 2, ss.crc32(cfgtext.encode())
     elif isinstance(zipname, tuple):             # a step-8 image from our sources
         sys.path.insert(0, os.path.join(ROOT, 'sim', 'testroms', 'step8'))
         import build_images
@@ -573,7 +591,7 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
                 os.path.basename(p), want_k, kline))
         if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], flags=h[ss.H_FLAGS],
                    exec_crc=h[ss.H_EXEC_CRC], grom_crc=h[ss.H_GROM_CRC], cfg_crc=h[ss.H_CFG_CRC],
-                   ecs_crc=h[ss.H_ECS_CRC]) != blob:
+                   ecs_crc=h[ss.H_ECS_CRC], jram=ss.jram_of(blob)) != blob:
             probs.append('S: blob %s: pack(unpack) differs' % os.path.basename(p))
         cpu = mods[0x02]
         want = [(regs[1] << 16) | regs[0], (regs[3] << 16) | regs[2], (regs[5] << 16) | regs[4],
@@ -899,6 +917,11 @@ PLANTS = [
     # when busy is up, so a busy forced to 0 would never ask for the save it should catch)
     ('ss_voice_busy_ignored', 'intv_ss_ctl.sv', [("&& !ce_cpu && !voice_busy", "&& !ce_cpu")],
      'voicetest', 'psgtest', AFTER + r'|: freeze inside a voice sample'),
+    # build step 11: a load writes the JLP RAM region over the cart RAM's (the JLP RAM keeps what
+    # ran before: the cartridge's flash rows and results after the load move)
+    ('ss_jram_lost', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
+                                         "                m_we = 1'b1;\n                m_a  = cram_a;")],
+     'jlpfls', 'psgtest', AFTER),
 ]
 PLANT_FOREIGN = {'psgtest': 6, 'astrosmash': 20}     # the foreign states: a save at this frame
 

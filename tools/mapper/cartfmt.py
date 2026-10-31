@@ -1173,7 +1173,7 @@ class MapCart:
     def ss_words(self):
         ld = self.ld
         w = [ld.crc, (int(ld.hit) << 16) | (ld.flags << 8) | ld.layout, ld.words, ld.cfg_crc,
-             (ld.fmt << 17) | (int(ld.noss) << 16) | ld.paged]
+             (ld.jlp_sectors << 21) | (ld.jlp_mode << 19) | (ld.fmt << 17) | (int(ld.noss) << 16) | ld.paged]
         w += [sum(self.sel[i] << (4 * i) for i in range(8)), sum(self.sel[8 + i] << (4 * i) for i in range(8))]
         w += [sum(self.bank[4 * k + i] << (8 * i) for i in range(4)) for k in range(8)]
         w.append(ld.limit)

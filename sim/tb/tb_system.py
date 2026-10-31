@@ -170,7 +170,7 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
 # System RAM ($0300 on), which the state dumps compare (RTL = model); the model = jzIntv on
 # every data word (JLP_NOTES 4.1)
 JLP_IMAGES = [(n, ('jlp', n), None, 40, (0xFF, 0xFF), 'stic')
-              for n in ('jlpmap', 'jlpmul', 'jlpdiv', 'jlpfls', 'jlpena', 'jlpf1', 'jlpm1', 'jlpfz')]
+              for n in ('jlpmap', 'jlpmul', 'jlpdiv', 'jlpfls', 'jlpena', 'jlpf1', 'jlpm1', 'jlpfz', 'jlpkeep')]
 # and a program compiled as IntyBASIC games are (sim/testroms/jlp/ibjlp.py: --jlp, the user's
 # IntyBASIC and as1600): its variables in JLP RAM, * / % on the accelerators, the flash through
 # IntyBASIC's runtime (model = jzIntv on its printed results, JLP_NOTES 4.1)

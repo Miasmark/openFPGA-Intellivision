@@ -121,6 +121,15 @@ def p_size():
     return rd(0x8023, 0x8024, 0x8040) + [(W, 0x8040, 0x4321)] + rd(0x8040)
 
 
+def p_keep():
+    """8.4: the flash slot's round trip on the Pocket. The first run finds row 0 empty and writes
+    it; after a quit and a reload of the game (the Pocket saves the .sav, then loads it) the
+    second run reads it back, and its write is dropped (the row is not empty)."""
+    t = rd(0x8023, 0x8024) + flash(RD, 0, 0x9000) + [(SUM, 0x9000, 0)]
+    t += [(FILL, 0x8040, 0x1000)] + flash(WR, 0, 0x8040)
+    return t + flash(RD, 0, 0x9100) + [(SUM, 0x9100, 0)]
+
+
 ROMPAT = ((0x8040, 0x807F), (0x9F80, 0x9F8F))       # JLPENA: ROM under the JLP, word = addr ^ $5A5A
 PROGS = {
     "jlpmap": (p_map, "jlp = 3\njlp_flash = 4\n", False),
@@ -134,7 +143,9 @@ PROGS = {
     "jlpfib": (p_size, "jlp = 3\njlpflash = 16\n", False),
     "jlpm1": (p_size, "jlp = 1\n", False),
     "jlpfz": (p_size, "jlp = 3\njlp_flash = 0\n", False),
+    "jlpkeep": (p_keep, "jlp = 3\njlp_flash = 1\n", False),
 }
+RERUN = {"jlpkeep"}         # NAME.txt also gives a second run's results, over the first's flash
 
 
 def tools_path():
@@ -241,11 +252,14 @@ def cmd_build(a):
         prog, image, cfg = build_one(name)
         for w in prog.warnings:
             print("%s: warning: %s" % (name, w), file=sys.stderr)
-        res, _ = model_results(name, image, cfg)
+        res, bus = model_results(name, image, cfg)
         open(os.path.join(a.out, name + ".bin"), "wb").write(image)
         open(os.path.join(a.out, name + ".cfg"), "w").write(cfg)
         txt = layout(name, res) + "\n" + "\n".join("%04X %04X  %s" % (i, res[i] if i < len(res) else 0, d)
                                                     for i, d in enumerate(describe(name)))
+        if name in RERUN:
+            res2, _ = model_results(name, image, cfg, flash=bus.jlp.flash)
+            txt += "\n\nThe second run (the first's flash, from the .sav):\n" + layout(name, res2)
         open(os.path.join(a.out, name + ".txt"), "w").write(txt + "\n")
         print("%-7s %5d words, %2d results (model)" % (name, len(image) // 2, len(res)))
     return 0

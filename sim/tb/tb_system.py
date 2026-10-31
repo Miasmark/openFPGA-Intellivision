@@ -171,6 +171,10 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
 # every data word (JLP_NOTES 4.1)
 JLP_IMAGES = [(n, ('jlp', n), None, 40, (0xFF, 0xFF), 'stic')
               for n in ('jlpmap', 'jlpmul', 'jlpdiv', 'jlpfls', 'jlpena', 'jlpf1', 'jlpm1', 'jlpfz')]
+# and a program compiled as IntyBASIC games are (sim/testroms/jlp/ibjlp.py: --jlp, the user's
+# IntyBASIC and as1600): its variables in JLP RAM, * / % on the accelerators, the flash through
+# IntyBASIC's runtime (model = jzIntv on its printed results, JLP_NOTES 4.1)
+JLP_IMAGES.append(('ibjlp', ('ib', 'ibjlp'), None, 100, (0xFF, 0xFF), 'stic'))
 IMAGES += JLP_IMAGES
 # the hardware measurement cartridges (sim/testroms/hw/build_hw.py, docs/HW_TESTS.md): RTL = model on
 # the owner's test programs before they go to his console. Long runs (hundreds of frames, to their
@@ -2030,6 +2034,13 @@ def main():
                 cart = hw_image(zipname[1], work)
             elif isinstance(zipname, tuple) and zipname[0] == 'jlp':
                 cart = jlp_image(zipname[1], work)
+            elif isinstance(zipname, tuple) and zipname[0] == 'ib':
+                import importlib.util
+                spec = importlib.util.spec_from_file_location('ibjlp', os.path.join(TESTROMS, 'jlp', 'ibjlp.py'))
+                ibm = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(ibm)
+                cart, cpath = ibm.build(os.path.join(work, 'ibjlp'))
+                CFG_OF[cart] = cpath
             elif isinstance(zipname, tuple):        # synthetic, CRC forced to a table entry
                 cart = os.path.join(work, name + '.bin')
                 with open(cart, 'wb') as f:

@@ -7,7 +7,8 @@ cartridge images directly (raw `.int`/`.bin`, `.bin` + `.cfg`, Intellicart
 `.rom`), and support save states and sleep from its first release.
 
 **Status: in development.** Build steps 1-9 are done (8: cartridge formats, 9: the ECS); step 10,
-the Intellivoice, is built in 0.0.16 (0.0.17: the same chip in less of the FPGA) and waits for its hardware test. The core loads and
+the Intellivoice, is built in 0.0.16 (0.0.17: the same chip in less of the FPGA) and waits for its hardware test;
+step 11, JLP (its RAM, multiply / divide, CRC, random numbers and flash saves in a .sav), is being built. The core loads and
 maps the cartridge and the system ROMs, runs the EXEC and games on the
 CP1610 with the STIC's picture (backgrounds, MOBs, collisions) and the
 PSG's sound, takes the Pocket's controllers and keyboard as the hand

@@ -512,3 +512,61 @@ at $9F90-$9F97 may belong to it **[unk]**.
 5. Busy behaviour seen by the CPU: value of the command registers when idle, ROM while busy (T11).
 6. The extended registers $9F90-$9F97 (T7, or a document).
 7. Unassigned addresses in $8000-$803F and $9F80-$9FFF, operand read-back (T1, T3).
+
+## 8 RTL (as built, step 11)
+
+### 8.1 Modules
+
+| Module | Holds | Notes |
+|---|---|---|
+| `intv_jlp_pkg.sv` | the JLP's decode (`ram`, `reg_rd`, `reg_wr`, `sw`, `owns`) | shared by `intv_cart` and `intv_jlp`, so the cartridge's holes and the JLP's registers are one list (tools/jlp.py `Jlp.owns` / `stores`) |
+| `intv_jlp.sv` | the switch, the operands, results and extended registers, CRC, random, the flash registers, the busy count, the cycle count; the flash store and its engine | in `intv_machine` beside `intv_voice`; reads merge into the bus as the ECS's and the voice's |
+| `intv_cart.sv` | the JLP RAM window: while on, `$8040-$9F7F` is SRAM `$1C000 + (a - $8040)`, 16-bit; the registers' holes; silent while busy | `jlp_mode` / `jlp_sect` are load results (state word 4 [25:19]) |
+| `intv_cfgparse.sv`, `intv_loader.sv` | `jlp` / `jlp_accel` and `jlp_flash` / `jlpflash` (the first counts), the .rom tag's bytes 3-4; the sector rule (4 by default for modes 2-3, at most 16) | the loader also clears the JLP RAM with the cart RAM at a load |
+| `intv_media.sv` | a fourth SRAM master, the flash engine's (after the cartridge port, before the aux port) | |
+| `intv_jlp_nv.sv` | data slot 0x106 on the bridge at `0x20000000`: writes into the store, reads back, one at a time across the clocks | `apf_datatable` writes its size, sectors x 1,536 bytes |
+| `intv_ss_ctl.sv` | the JLP RAM region of the blob (version 5), staged in a 4,000-word block RAM shadow | the SRAM's plane 2 has no room for more staging |
+
+### 8.2 Choices in the RTL
+
+- **Multiply** in one DSP block (17 x 17 signed, operands sign- or zero-extended by the function),
+  results the same clock. **Divide**: 17 restoring steps on magnitudes, signs after; done 17
+  clk_sys after the write, long before the next bus read. **CRC and random**: one engine, 16
+  right shifts a write to `$9FFC` or a read of `$9FFE`.
+- **Random**: the state, then `crc16(state, the read's cycle number mod 2^16)`; the cycle count
+  starts at the machine reset as `intv_voice`'s (the first ce starts cycle 0 and does not count)
+  and is state word 27 with its `started` bit. The RTL's values equal the model's on every read.
+- **Busy**: a command that passes its checks makes `left = BUSY - 1` (BUSY = 100 CPU cycles);
+  each ce counts it down; while it is not 0 the JLP and the whole cartridge port answer nothing
+  and store nothing (the wait loop's reads give `$FFFF`, then 0). The engine is done in about
+  1,000 clk_sys, under a quarter of the window.
+- **Flash store**: 12,288 x 16 in block RAM, each word inverted, so the power-on zeros read as
+  erased; a row's "empty" bit (128 of them) decides a write command at once, kept by the engine
+  (a written row with a word not `$FFFF`, an erased sector) and by the slot's writes. A
+  cartridge load's start erases the whole store (12,288 clk_sys) before the Pocket writes the
+  new game's .sav.
+- **The slot's file** is jzIntv's (4.1): rows from JF.first, 96 little-endian words each, no
+  header; bridge word i holds store words 2i and 2i + 1.
+
+### 8.3 What the benches check
+
+- `tb_system`: the eight JLP cartridges (`JLP_IMAGES`; RTL = model on every bus cycle, the
+  System RAM results and the JLP's 28 state words), straight and five save / restore round trips
+  each; in a later-state round trip the bench rolls the flash store back itself (a state load
+  keeps the flash, 5.2). Plants: x / 0 recomputing, the CRC's reset value, JF.first, a write to a
+  row not empty taken, a short busy window, the RAM window one word off, the switch not hiding the
+  registers, a result word not restored, the random update's cycle number: all caught.
+- `tb_savestate`: `jlpfls` with saves among its flash commands (version 5 blobs; a blob keeps the
+  flash store of its freeze in the bench, put back by a load meant to succeed), every run (R, S,
+  L0-L4, W1-W2, D, F, C); N, the flash slot end to end (a .sav written at `0x20000000`, the run,
+  the slot read back: results and file = the model's from that flash). Plant: the JLP RAM region
+  applied over the cart RAM's.
+- `tb_loader`: the CFGs and .rom tags with JLP give the mode and sectors in the cartridge's state
+  word 4 (cartfmt's).
+
+### 8.4 Open on the hardware
+
+- The order the Pocket loads a game's .sav and its cartridge in (the store is erased when the
+  cartridge's load starts; a .sav written before that would be lost), and when it writes the file
+  back (quit, sleep).
+- Mode 2 at reset (off, as1600.txt; jzIntv on): the PiRTO II with Minty, JLPENA.

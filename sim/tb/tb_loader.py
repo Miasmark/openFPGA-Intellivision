@@ -141,12 +141,14 @@ def fetch_expect(img):
     beside the cartridge (none, or another name: img['miss']), 4 the host refused the read (the
     table's size past the file: img['cfglenadj']), 5 a cartridge path without an extension
     (img['nodot']), 7 a command the host never answers (img['nohost'], a command number: 0.0.14's
-    watchdog). Since 0.0.15 Ready to run (0x0140) goes out after the fetch, so a host that acks it
-    late (img['rtrdelay']) or never (img['rtrhold']) no longer holds the fetch up."""
+    watchdog). Since 2026-10-31 (the owner's "Core not ready to run" on 0.0.15-0.0.17) Ready to run
+    (0x0140) goes out at configuration again and the fetch waits for its ok: a host that acks it
+    late (img['rtrdelay']) still gets the CFG; one that never does (img['rtrhold']) holds the fetch
+    for apf_datatable's RTR_SAFE, then its get filename times out behind the unacked 0x0140 (7)."""
     cfg = img.get('cfg')
     if img.get('neg') == 'nocart':
         return 0, None
-    if img.get('nohost') is not None:
+    if img.get('nohost') is not None or img.get('rtrhold'):
         return 7, None
     if img.get('nodot'):
         return 5, None
@@ -159,6 +161,8 @@ def fetch_expect(img):
 
 def fetch_to(img):
     """apf_cfgfetch's to_cmd: the command that timed out (1 get filename, 2 open, 4 read)."""
+    if img.get('rtrhold'):
+        return 1                         # the get filename, queued behind the unacked Ready to run
     return {0x190: 1, 0x192: 2, 0x180: 4}.get(img.get('nohost'), 0)
 
 
@@ -660,10 +664,10 @@ PLANTS = [
      "assign loader_wr = bridge_wr;", 'a late CFG read\'s bytes reach the loader'),
     ('fetch_port_bridge', 'apf_cfgfetch.sv', "assign mem_own = b_we || (cph == 2'd0",
      "assign mem_own = 1'b0 && (cph == 2'd0", 'CFG fetch: the struct RAM port never given to the steps'),
-    # 0.0.15: Ready to run at PLL lock again (0.0.14's wiring): the fetch's first command queues behind
-    # it and the late ack (RTRDLY) runs the watchdog out
-    ('rtr_at_lock', 'apf_datatable.sv', "    initial setup_done = 1'b0;", "    initial setup_done = 1'b1;",
-     'Ready to run before the CFG fetch'),
+    # (2026-10-31) the fetch not waiting for Ready to run's ok (0.0.14's flow): its first command
+    # queues behind the unacked 0x0140 and the late ack (RTRDLY) runs the watchdog out
+    ('fetch_before_rtr', 'apf_datatable.sv', "end else if (rtr_ok || 32'(rtr_n) == 32'(RTR_SAFE)) begin",
+     "end else if (1'b1) begin", 'the CFG fetch before Ready to run\'s ok'),
     ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
      "end else if (!got_cart && !rescan) begin", 'the CFG entry taken for the cartridge without a cartridge entry'),
 ]

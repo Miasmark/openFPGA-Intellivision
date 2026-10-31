@@ -43,7 +43,12 @@
 //     loader: no cartridge). The 0x0082 size is kept until the next one for
 //     the slot, so a session that does not reload the cartridge checks
 //     against the last load's size.
-//   - setup_done (core_top: status_setup_done, with PLL lock): rises when the
+//   - (2026-10-31, after the owner's "Core not ready to run" on 0.0.15-0.0.17)
+//     status_setup_done is PLL lock again (core_top), and the fetch below waits
+//     for Ready to run's ok (rtr_ok: the Pocket acks 0x0140 when it starts the
+//     core and answers the core's requests from then on; RTR_SAFE: 3 s); a
+//     Core Settings reload finds it acked already. setup_done is diagnostics now:
+//   - setup_done: rises when the
 //     first load since configuration has reached len_valid (D_SET), the CFG
 //     fetch finished whatever its result, so the core reports APF "setup"
 //     ("Pocket loads assets, core may request dataslot reads") while it
@@ -67,7 +72,8 @@ module apf_datatable #(
     parameter bit          FETCH   = 1'b1,     // the CFG found by name (apf_cfgfetch)
     parameter int          WD_BITS = 26,       // apf_cfgfetch's time limit per command (2^WD_BITS clk_74a)
     parameter int          TO_HOLD = 300000000, // apf_cfgfetch's hold after a timeout (clk_74a: 4 s)
-    parameter int          SAFE    = 222750000  // setup_done without an "all complete" (clk_74a: 3 s)
+    parameter int          SAFE    = 222750000, // setup_done without an "all complete" (clk_74a: 3 s)
+    parameter int          RTR_SAFE = 222750000 // the fetch starts anyway if 0x0140 is not acked (3 s)
 ) (
     input  wire logic        clk,             // clk_74a
     input  wire logic        allcomplete,
@@ -118,7 +124,8 @@ module apf_datatable #(
     output logic             d_req,
     output logic             d_upd,
     output logic [1:0]       d_phase,
-    output logic             setup_done       // core_bridge_cmd's status_setup_done (with PLL lock): see above
+    output logic             setup_done,      // the first load's fetch done (diagnostics; see above)
+    input  wire logic        rtr_ok           // Ready to run (0x0140) acked: the Pocket answers requests now
 );
 
     typedef enum logic [3:0] {D_IDLE, D_ID, D_IDW, D_SIZEW, D_NEXT, D_DECIDE, D_FETCH, D_FWAIT, D_SET} dstate_t;
@@ -143,6 +150,7 @@ module apf_datatable #(
 
     logic reached = 1'b0;                      // len_valid set for the current load
     logic [$clog2(SAFE + 1) - 1:0] safe_n = '0;
+    logic [$clog2(RTR_SAFE + 1) - 1:0] rtr_n = '0;     // clocks in D_FETCH waiting for 0x0140's ok
     initial setup_done = 1'b0;
     initial begin d_ac = 1'b0; d_upd = 1'b0; end
     assign d_req   = req_seen;
@@ -160,6 +168,8 @@ module apf_datatable #(
         if (upd && upd_id == SLOT_ID[15:0]) d_upd <= 1'b1;
         dt_wren <= 1'b0;
         f_start <= 1'b0;
+        if (st != D_FETCH) rtr_n <= '0;
+        else if (32'(rtr_n) != 32'(RTR_SAFE)) rtr_n <= rtr_n + 1'b1;
         if (wr_req && wr_id == SLOT_ID[15:0]) begin
             req_seen <= 1'b1;
             req_len  <= wr_size;
@@ -233,10 +243,11 @@ module apf_datatable #(
             // none without a cartridge (length 0: nothing to name it after)
             D_DECIDE: st <= FETCH && cart_new ? D_FETCH : D_SET;
             D_FETCH: begin
-                cart_new <= 1'b0;
-                if (cart_len == 32'd0)
+                if (cart_len == 32'd0) begin
+                    cart_new <= 1'b0;
                     st <= D_SET;
-                else begin
+                end else if (rtr_ok || 32'(rtr_n) == 32'(RTR_SAFE)) begin   // after 0x0140's ok (or 3 s)
+                    cart_new <= 1'b0;
                     f_start <= 1'b1;
                     st <= D_FWAIT;
                 end

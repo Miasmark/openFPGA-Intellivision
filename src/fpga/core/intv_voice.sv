@@ -23,7 +23,7 @@
 //
 // The busy window: a sample fires at the ce that ends cycle c, after that
 // ce's bus access (a write in it lands before the sample). sp0256.sv then
-// makes the sample (at most about 160 clk_sys). Accesses at the ces that
+// makes the sample (at most about 230 clk_sys). Accesses at the ces that
 // end cycles c + 1 .. c + WIN are in the window: a read gives the values
 // $0080 / $0081 had when the sample fired, a write is held and lands right
 // after the window's last ce (WIN = 8 cycles, 384 clk_sys: a sample is made

@@ -97,7 +97,7 @@ plant ss_cnt $F "st <= st_t'(ss_wdata[22:18]); cnt <= ss_wdata[24:23];" "st <= s
 # state port: the INTRM line sample not restored
 plant ss_intrm_prev $F "{intr_prev, intr_req, intrm_prev, intrm_req} <= ss_wdata[10:7];" "{intr_prev, intr_req, intrm_req} <= {ss_wdata[10:9], ss_wdata[7]};" tests 1
 # state port: the SDBD low byte not saved
-plant ss_lo $F "8'd5: ss_rdata = {3'd0, taken, 1'b0, dbd, jpt, cnt, 5'(st), lo, ir};" "8'd5: ss_rdata = {3'd0, taken, 1'b0, dbd, jpt, cnt, 5'(st), 8'd0, ir};" sweep 1
+plant ss_lo $F "8'd5: ss_rdata = {3'd0, taken, sda, dbd, jpt, cnt, 5'(st), lo, ir};" "8'd5: ss_rdata = {3'd0, taken, sda, dbd, jpt, cnt, 5'(st), 8'd0, ir};" sweep 1
 # NEGR of 0 leaves C clear (MAME's behaviour, CPU_NOTES row 5)
 plant negr_c $F "x_we = 1'b1; x_sz = 1'b1; x_c = sum[17]; x_o = sum[16];" "x_we = 1'b1; x_sz = 1'b1; x_c = sum[17] & (f_m != 3'd4); x_o = sum[16];" tests 0
 # state port: the sequence address/data word not restored
@@ -110,6 +110,11 @@ plant ss_hpend $F "{hlt, hpend} <= ss_wdata[12:11];" "hlt <= ss_wdata[12];" test
 plant busrq_exit1 $F "if (!busrq) cnt_n = 2'd2;   // released: 2 more NACT (S1 p.36)" "if (!busrq) cnt_n = 2'd1;" tests 0
 # HLT halts after the next instruction, interruptible or not (S1's wording; G82 p.33 says interruptible)
 plant hlt_next_any $F "if (hpend && fin_ok) begin hpend_n = 1'b0; hlt_n = 1'b1; end" "if (hpend) begin hpend_n = 1'b0; hlt_n = 1'b1; end" tests 0
+# the owner's Model 2609 (hw_cpuodd, 2026-10-31): MVO@ with the pointer as source writes the old
+# value; jump with II=11 leaves I alone; SDBD + direct reads the address's two bytes from one word
+plant mvo_ptr_old $F "                        tmp_n = r[f_m] + 16'd1; // the pointer as source: incremented (hw_cpuodd)" "                        tmp_n = r[f_m];" tests 0
+plant jump_ii3_keep $F "if (tmp[1:0] == 2'd1 || tmp[1:0] == 2'd3) fI_n = 1'b1;" "if (tmp[1:0] == 2'd1) fI_n = 1'b1;" tests 0
+plant sdbd_dir_word $F "lo_n = din[7:0]; ea_n = ea + 16'd1; st_n = S_R2BAR;" "lo_n = din[7:0]; ea_n = ea; st_n = S_R2BAR;" tests 0
 
 echo "TB_CPU_ALL $([ $rc = 0 ] && echo pass || echo FAIL)"
 exit $rc

@@ -621,7 +621,7 @@ class CP1610:
         if bb != 3:
             self.r[4 + bb] = self.r[7]
         self.r[7] = target
-        if ii == 1:
+        if ii in (1, 3):    # II=11 enables interrupts as JE (the owner's Model 2609, hw_cpuodd, 2026-10-31)
             self.I = 1
         elif ii == 2:
             self.I = 0
@@ -723,9 +723,11 @@ class CP1610:
                 self._words.append(self._direct_write_seq(r[7], v))
                 r[7] = (r[7] + 1) & 0xFFFF
             else:           # MVO@ / PSHR / MVOI: 9 cycles
+                a = r[m]
                 if rg == m and m >= 4:
                     self._undefined("MVO@ with the pointer as source (S1 p.55: not supported)")
-                a = r[m]
+                    if m < 7:   # the incremented pointer is written (the owner's Model 2609, hw_cpuodd)
+                        v = (a + 1) & 0xFFFF
                 self._write_seq(a, v)
                 if m == 7:
                     self._words.append(v)
@@ -734,10 +736,18 @@ class CP1610:
             return False
         if m == 0:          # direct: 10 cycles
             if dbd:
+                # the address comes as double byte data, from the next two words (low bytes,
+                # as SDBD immediate): the owner's Model 2609 (hw_cpuodd, 2026-10-31) showed the
+                # word after the instruction taken (its store never ran: 0000)
                 self._undefined("SDBD with direct mode (S1 p.49: not supported)")
-            a, data = self._direct_read_seq(r[7])
-            self._words.append(a)
-            r[7] = (r[7] + 1) & 0xFFFF
+                a = self._read2_seq(r[7], (r[7] + 1) & 0xFFFF)
+                self._words.extend(self._raw2)
+                r[7] = (r[7] + 2) & 0xFFFF
+                data = self._read_seq(a, "data")
+            else:
+                a, data = self._direct_read_seq(r[7])
+                self._words.append(a)
+                r[7] = (r[7] + 1) & 0xFFFF
         elif dbd:           # double byte data, S1 p.49 fig 3.2.6/3.2.7
             if m < 4:       # same location twice
                 data = self._read2_seq(r[m], r[m])

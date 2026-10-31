@@ -31,6 +31,8 @@ input   wire    [31:0]  bridge_wr_data,
 // add synchronizers if these need to be used in other clock domains
 input   wire            status_boot_done,           // assert when PLLs lock and logic is ready
 input   wire            status_setup_done,          // assert when core is happy with what's been loaded into it
+input   wire            ready_to_run,               // (this core) its rising edge sends Ready to run (0x0140);
+                                                    // the template's sends it on status_setup_done's
 input   wire            status_running,             // assert when pocket's taken core out of reset and is running
 
 output  reg             dataslot_requestread,
@@ -217,13 +219,13 @@ always @(posedge clk) begin
 
     // detect a rising edge on the input signal
     // and flag a queue that will be cleared later
-    status_setup_done_1 <= status_setup_done;
+    status_setup_done_1 <= ready_to_run;
     target_dataslot_read_1 <= target_dataslot_read;
     target_dataslot_write_1 <= target_dataslot_write;
     target_dataslot_getfile_1 <= target_dataslot_getfile;
     target_dataslot_openfile_1 <= target_dataslot_openfile;
     
-    if(status_setup_done & ~status_setup_done_1) begin
+    if(ready_to_run & ~status_setup_done_1) begin
         status_setup_done_queue <= 1;
     end
     if(target_dataslot_read & ~target_dataslot_read_1) begin

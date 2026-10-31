@@ -126,7 +126,7 @@ module tb_loader;
         .clk(clk_74a), .reset_n(reset_n),
         .bridge_endian_little(1'b0), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd),
         .bridge_rd_data(cmd_bridge_rd_data), .bridge_wr(bridge_wr), .bridge_wr_data(bridge_wr_data),
-        .status_boot_done(1'b1), .status_setup_done(1'b1), .status_running(reset_n),
+        .status_boot_done(1'b1), .status_setup_done(1'b1), .ready_to_run(dt_setup_done), .status_running(reset_n),
         .dataslot_requestread(), .dataslot_requestread_id(),
         .dataslot_requestread_ack(1'b1), .dataslot_requestread_ok(1'b1),
         .dataslot_requestwrite(dataslot_requestwrite), .dataslot_requestwrite_id(dataslot_requestwrite_id),
@@ -176,14 +176,8 @@ module tb_loader;
     wire logic [15:0] dataslot_update_id;
     wire logic [1:0]  d_phase;
     wire logic [3:0]  tstate;
-    wire logic        dt_setup_done;          // apf_datatable's first-fetch flag (diagnostics; status_setup_done
-                                              // is configuration again, 2026-10-31, as core_top's)
-    // Ready to run acked (core_top's rtr_ok): the target state leaves WAITRESULT_RTR the first time
-    logic             rtr_wait = 1'b0, rtr_ok = 1'b0;
-    always_ff @(posedge clk_74a) begin
-        if (tstate == 4'd14) rtr_wait <= 1'b1;
-        else if (rtr_wait) rtr_ok <= 1'b1;
-    end
+    wire logic        dt_setup_done;          // core_bridge_cmd's ready_to_run (after the fetch); the status the
+                                              // host polls is setup done from configuration (2026-10-31)
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic        cfg_wr_ok;
     /* verilator lint_on UNUSEDSIGNAL */
@@ -195,8 +189,7 @@ module tb_loader;
     // the fetch's watchdog: 2^18 clk_74a (3.5 ms; the Pocket's build: 2^26), past the bench's
     // longest answer and inside wait_ready's limit; the hold after a timeout 1,000 (the Pocket's: 4 s);
     // setup_done's safety 2^24 clk_74a (the Pocket's: 3 s), past the longest load from configuration
-    // the fetch's wait for Ready to run's ok: 2^21 clk_74a (the Pocket's: 3 s), past RTRDLY's 600,000
-    apf_datatable #(.WD_BITS(18), .TO_HOLD(1000), .SAFE(1 << 24), .RTR_SAFE(1 << 21)) dtab (
+    apf_datatable #(.WD_BITS(18), .TO_HOLD(1000), .SAFE(1 << 24)) dtab (
         .clk(clk_74a), .allcomplete(dataslot_allcomplete),
         .wr_req(dataslot_requestwrite), .wr_id(dataslot_requestwrite_id),
         .wr_size(dataslot_requestwrite_size),
@@ -211,7 +204,7 @@ module tb_loader;
         .fetch_res(fetch_res), .fetch_code(fetch_code), .fetch_len(fetch_len),
         .upd(dataslot_update), .upd_id(dataslot_update_id),
         .fetch_to(fetch_to), .cfg_wr_ok(cfg_wr_ok), .loader_wr(loader_wr),
-        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase), .setup_done(dt_setup_done), .rtr_ok(rtr_ok)
+        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase), .setup_done(dt_setup_done)
     );
 
     // ---------------------------------------------------------------- DUT

@@ -472,21 +472,15 @@ end
 // bridge host commands
 // synchronous to clk_74a
     wire            status_boot_done = pll_core_locked_s;
-    // setup done at PLL lock, as every core: Ready to run (0x0140) goes out on its rising edge
-    // (core_bridge_cmd). 0.0.15-0.0.17 held it until the CFG fetch; the owner's Pocket then
-    // stopped with "Core not ready to run" (2026-10-31): the Pocket waits for setup done before it
-    // starts the core, and answers the core's own requests only once it has. So the CFG fetch
-    // waits for 0x0140's ok instead (rtr_ok, apf_datatable).
+    // Setup done (the status the host polls) at PLL lock, as every core; Ready to run (0x0140,
+    // core_bridge_cmd's ready_to_run) only once the first load's CFG fetch is done (apf_datatable;
+    // 3 s with no load). The owner's Pocket (2026-10-31) needs both: 0.0.15-0.0.17 held the
+    // status until the fetch ("Core not ready to run"); 0.0.14 and 0.0.18 sent 0x0140 at lock and
+    // the fetch's 0x0190 queued behind it, unacked on a Core Settings reload (photo: card 13 yellow,
+    // card 12 blue). Sent after the fetch, nothing queues behind it.
     wire            status_setup_done = pll_core_locked_s;
-    /* verilator lint_off UNUSEDSIGNAL */
-    wire            dt_setup_done;          // apf_datatable's first-fetch flag (diagnostics only)
-    /* verilator lint_on UNUSEDSIGNAL */
-    // Ready to run acked: core_bridge_cmd's target state leaves WAITRESULT_RTR (14) the first time
-    reg             rtr_wait = 1'b0, rtr_ok = 1'b0;
-always @(posedge clk_74a) begin
-    if (target_state == 4'd14) rtr_wait <= 1'b1;
-    else if (rtr_wait) rtr_ok <= 1'b1;
-end
+    wire            dt_setup_done;          // apf_datatable: the first load's CFG fetch is done (or 3 s, no load)
+    wire            ready_to_run = pll_core_locked_s & dt_setup_done;
     wire            status_running = reset_n; // we are running as soon as reset_n goes high
 
     wire            dataslot_requestread;
@@ -583,6 +577,7 @@ core_bridge_cmd icb (
 
     .status_boot_done       ( status_boot_done ),
     .status_setup_done      ( status_setup_done ),
+    .ready_to_run           ( ready_to_run ),
     .status_running         ( status_running ),
 
     .dataslot_requestread       ( dataslot_requestread ),
@@ -707,7 +702,6 @@ apf_datatable #(
     .d_upd          ( d_upd ),
     .d_phase        ( d_phase ),
     .setup_done     ( dt_setup_done ),
-    .rtr_ok         ( rtr_ok ),
     .loader_wr      ( loader_bridge_wr )      // the CFG slot's writes only for a fetch read
 );
 

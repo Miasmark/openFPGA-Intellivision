@@ -43,11 +43,13 @@
 //     loader: no cartridge). The 0x0082 size is kept until the next one for
 //     the slot, so a session that does not reload the cartridge checks
 //     against the last load's size.
-//   - (2026-10-31) setup_done drives Ready to run only (core_bridge_cmd's
-//     ready_to_run); the status the host polls (status_setup_done) is PLL lock
-//     (core_top): the owner's Pocket stops with "Core not ready to run" if the
-//     status waits (0.0.15-0.0.17), and leaves 0x0140 unacked on a Core
-//     Settings reload, so a fetch queued behind it times out (0.0.18).
+//   - (2026-10-31, the owner's tests of 0.0.15-0.0.19) status_setup_done and
+//     Ready to run (0x0140) go out at PLL lock (core_top; any later and the
+//     Pocket stops with "Core not ready to run"), and the fetch below waits
+//     until core_bridge_cmd is done with 0x0140 (rtr_ok): answered, as on a
+//     first load, or given up after 5 s (core_bridge_cmd RTR_GIVEUP: on a Core
+//     Settings reload the Pocket leaves it unanswered), so the fetch's own
+//     commands never queue behind it. setup_done is diagnostics now:
 //   - setup_done: rises when the
 //     first load since configuration has reached len_valid (D_SET), the CFG
 //     fetch finished whatever its result, so the core reports APF "setup"
@@ -123,7 +125,8 @@ module apf_datatable #(
     output logic             d_req,
     output logic             d_upd,
     output logic [1:0]       d_phase,
-    output logic             setup_done       // core_bridge_cmd's ready_to_run (with PLL lock): see above
+    output logic             setup_done,      // the first load's fetch done (diagnostics; see above)
+    input  wire logic        rtr_ok           // core_bridge_cmd is done with Ready to run (answered or given up)
 );
 
     typedef enum logic [3:0] {D_IDLE, D_ID, D_IDW, D_SIZEW, D_NEXT, D_DECIDE, D_FETCH, D_FWAIT, D_SET} dstate_t;
@@ -241,7 +244,7 @@ module apf_datatable #(
                 if (cart_len == 32'd0) begin
                     cart_new <= 1'b0;
                     st <= D_SET;
-                end else begin
+                end else if (rtr_ok) begin             // after core_bridge_cmd is done with 0x0140
                     cart_new <= 1'b0;
                     f_start <= 1'b1;
                     st <= D_FWAIT;

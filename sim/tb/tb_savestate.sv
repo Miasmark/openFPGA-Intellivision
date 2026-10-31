@@ -136,7 +136,7 @@ module tb_savestate;
         .clk(clk74), .reset_n(reset_n), .bridge_endian_little(1'b0),
         .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_rd_data(cmd_rd_data),
         .bridge_wr(bridge_wr), .bridge_wr_data(bridge_wr_data),
-        .status_boot_done(1'b1), .status_setup_done(1'b1), .ready_to_run(1'b1), .status_running(1'b1),
+        .status_boot_done(1'b1), .status_setup_done(1'b1), .status_running(1'b1),
         .dataslot_requestread(d_rr), .dataslot_requestread_id(d_rr_id),
         .dataslot_requestread_ack(1'b1), .dataslot_requestread_ok(1'b1),
         .dataslot_requestwrite(d_rw), .dataslot_requestwrite_id(d_rw_id),

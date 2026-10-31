@@ -15,7 +15,9 @@
 // because it should report PLL lock status
 //
 
-module core_bridge_cmd (
+module core_bridge_cmd #(
+    parameter RTR_GIVEUP = 32'd371250000    // (this core) clk_74a to wait for Ready to run's ok: 5 s
+) (
 
 input   wire            clk,
 output  reg             reset_n,
@@ -31,8 +33,6 @@ input   wire    [31:0]  bridge_wr_data,
 // add synchronizers if these need to be used in other clock domains
 input   wire            status_boot_done,           // assert when PLLs lock and logic is ready
 input   wire            status_setup_done,          // assert when core is happy with what's been loaded into it
-input   wire            ready_to_run,               // (this core) its rising edge sends Ready to run (0x0140);
-                                                    // the template's sends it on status_setup_done's
 input   wire            status_running,             // assert when pocket's taken core out of reset and is running
 
 output  reg             dataslot_requestread,
@@ -102,7 +102,8 @@ output  wire    [31:0]  datatable_q,
 // Intellivision core (0.0.14): the target command state machine's state, for
 // the test pattern's load diagnostics (0 idle, 14 waiting for the host's ok
 // to Ready to run 0x0140, 15 waiting for a data slot command's ok)
-output  wire    [3:0]   target_state
+output  wire    [3:0]   target_state,
+output  reg             rtr_gaveup                  // (this core) Ready to run unanswered for RTR_GIVEUP: given up
 
 );
 
@@ -185,6 +186,7 @@ localparam  [3:0]   TARG_ST_DATASLOTOP  = 'd2;
 localparam  [3:0]   TARG_ST_WAITRESULT_RTR  = 'd14;
 localparam  [3:0]   TARG_ST_WAITRESULT_DSO  = 'd15;
     reg     [3:0]   tstate;
+    reg     [31:0]  rtr_cnt;
     assign target_state = tstate;
     
     reg             status_setup_done_1, status_setup_done_queue;
@@ -206,6 +208,8 @@ initial begin
     osnotify_inmenu <= 0;
     
     status_setup_done_queue <= 0;
+    rtr_cnt <= 0;
+    rtr_gaveup <= 0;
     target_dataslot_read_queue <= 0;
     target_dataslot_write_queue <= 0;
     target_dataslot_getfile_queue <= 0;
@@ -219,13 +223,13 @@ always @(posedge clk) begin
 
     // detect a rising edge on the input signal
     // and flag a queue that will be cleared later
-    status_setup_done_1 <= ready_to_run;
+    status_setup_done_1 <= status_setup_done;
     target_dataslot_read_1 <= target_dataslot_read;
     target_dataslot_write_1 <= target_dataslot_write;
     target_dataslot_getfile_1 <= target_dataslot_getfile;
     target_dataslot_openfile_1 <= target_dataslot_openfile;
     
-    if(ready_to_run & ~status_setup_done_1) begin
+    if(status_setup_done & ~status_setup_done_1) begin
         status_setup_done_queue <= 1;
     end
     if(target_dataslot_read & ~target_dataslot_read_1) begin
@@ -531,6 +535,7 @@ always @(posedge clk) begin
         end 
     end
     TARG_ST_READYTORUN: begin
+        rtr_cnt <= 0;
         target_0 <= 32'h636D_0140;
         tstate <= TARG_ST_WAITRESULT_RTR;
     end
@@ -555,11 +560,16 @@ always @(posedge clk) begin
         end
     end
     TARG_ST_WAITRESULT_RTR: begin
+        rtr_cnt <= rtr_cnt + 1'b1;
         if(target_0[31:16] == 16'h6F6B) begin
             // done
             tstate <= TARG_ST_IDLE;
+        end else if(rtr_cnt == RTR_GIVEUP) begin
+            // (this core) the owner's Pocket leaves Ready to run unanswered on a Core Settings
+            // reload (2026-10-31): stop waiting, so the commands behind it (the CFG fetch) go out
+            rtr_gaveup <= 1;
+            tstate <= TARG_ST_IDLE;
         end
-    
     end
     endcase
     

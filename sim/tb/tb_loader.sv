@@ -122,11 +122,12 @@ module tb_loader;
     wire  logic        datatable_wren;
     wire  logic [31:0] datatable_data, datatable_q;
     /* verilator lint_off PINCONNECTEMPTY */
-    core_bridge_cmd icb (
+    // Ready to run given up after 2^20 clk_74a (the Pocket's build: 5 s), past RTRDLY's 600,000
+    core_bridge_cmd #(.RTR_GIVEUP(1 << 20)) icb (
         .clk(clk_74a), .reset_n(reset_n),
         .bridge_endian_little(1'b0), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd),
         .bridge_rd_data(cmd_bridge_rd_data), .bridge_wr(bridge_wr), .bridge_wr_data(bridge_wr_data),
-        .status_boot_done(1'b1), .status_setup_done(1'b1), .ready_to_run(dt_setup_done), .status_running(reset_n),
+        .status_boot_done(1'b1), .status_setup_done(1'b1), .status_running(reset_n),
         .dataslot_requestread(), .dataslot_requestread_id(),
         .dataslot_requestread_ack(1'b1), .dataslot_requestread_ok(1'b1),
         .dataslot_requestwrite(dataslot_requestwrite), .dataslot_requestwrite_id(dataslot_requestwrite_id),
@@ -176,8 +177,14 @@ module tb_loader;
     wire logic [15:0] dataslot_update_id;
     wire logic [1:0]  d_phase;
     wire logic [3:0]  tstate;
-    wire logic        dt_setup_done;          // core_bridge_cmd's ready_to_run (after the fetch); the status the
-                                              // host polls is setup done from configuration (2026-10-31)
+    wire logic        dt_setup_done;          // apf_datatable's first-fetch flag (diagnostics; status_setup_done
+                                              // is configuration again, 2026-10-31, as core_top's)
+    // Ready to run acked (core_top's rtr_ok): the target state leaves WAITRESULT_RTR the first time
+    logic             rtr_wait = 1'b0, rtr_ok = 1'b0;
+    always_ff @(posedge clk_74a) begin
+        if (tstate == 4'd14) rtr_wait <= 1'b1;
+        else if (rtr_wait) rtr_ok <= 1'b1;
+    end
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic        cfg_wr_ok;
     /* verilator lint_on UNUSEDSIGNAL */
@@ -204,7 +211,7 @@ module tb_loader;
         .fetch_res(fetch_res), .fetch_code(fetch_code), .fetch_len(fetch_len),
         .upd(dataslot_update), .upd_id(dataslot_update_id),
         .fetch_to(fetch_to), .cfg_wr_ok(cfg_wr_ok), .loader_wr(loader_wr),
-        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase), .setup_done(dt_setup_done)
+        .d_ac(d_ac), .d_req(d_req), .d_upd(d_upd), .d_phase(d_phase), .setup_done(dt_setup_done), .rtr_ok(rtr_ok)
     );
 
     // ---------------------------------------------------------------- DUT

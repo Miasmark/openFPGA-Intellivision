@@ -278,9 +278,11 @@ one line ahead). hw_frame settles A / A' / B; hw_steal2 then tells the families 
 
 ## On the RTL
 
-All five run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys`; HW_IMAGES,
+All seven run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2`; HW_IMAGES,
 never in `--all`: 60 to 1,150 frames each) with the RTL equal to the model on every bus phase and
 picture, straight and through the bench's save/restore round trips, at the core from 0.0.13
 (2026-10-29): hw_steal 460 frames, hw_intlate 230, hw_rowcopy 1,150 (to step 12), hw_cpuodd 60,
-hw_ecskeys 60 with ECS keys held (W; W+Q; W+Q+1; Shift+L) under Auto (attached). So the screens the
-owner photographs are the model's predictions above, exactly.
+hw_ecskeys 60 with ECS keys held (W; W+Q; W+Q+1; Shift+L) under Auto (attached); hw_frame (720
+frames, to its first result screen) and hw_steal2 (130 frames, the first round shown) likewise on
+2026-10-31 (`--only hw_frame,hw_steal2`). So the screens the owner photographs are the model's
+predictions above, exactly.

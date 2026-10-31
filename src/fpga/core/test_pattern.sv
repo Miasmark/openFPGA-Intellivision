@@ -27,7 +27,9 @@
 //     answered in time (the cartridge then maps without a CFG); black = not
 //     looked for, or the look not finished.
 //   - (0.0.14) Load diagnostics, cards 12-17 of that row, one card each
-//     (cards 18-19 stay black):
+//     (card 18: red when the core gave up waiting for the Pocket's ok to Ready
+//     to run, 0x0140, after 5 s, as on a Core Settings reload (2026-10-31);
+//     card 19 stays black):
 //       12  the command that timed out: black none, blue get filename
 //           (0x0190), red open file (0x0192), tan read (0x0180)
 //       13  core_bridge_cmd's target command state: black idle, yellow
@@ -69,6 +71,7 @@ module test_pattern (
     input  wire logic        d_req,
     input  wire logic        d_upd,
     input  wire logic [1:0]  d_phase,
+    input  wire logic        rtr_gaveup,      // (2026-10-31) Ready to run given up (see above)
     output logic      [3:0]  colour
 );
 
@@ -116,6 +119,8 @@ module test_pattern (
             colour = d_upd ? 4'd5 : 4'd0;
         else if (cx == 5'd17)
             colour = d_phase == 2'd2 ? 4'd5 : d_phase == 2'd1 ? 4'd9 : 4'd0;
+        else if (cx == 5'd18)                                       // Ready to run given up
+            colour = rtr_gaveup ? 4'd2 : 4'd0;
         else if (cx >= 5'd12)
             colour = 4'd0;
         else if (cx == 5'd3)                                        // the CFG fetch

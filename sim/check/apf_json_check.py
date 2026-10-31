@@ -405,11 +405,11 @@ def main():
     jlp = slots[6]
     check(jlp.get("nonvolatile") is True and int(jlp["parameters"], 16) == 0x84 and "filename" not in jlp,
           "JLP flash: nonvolatile, one file per game (0x84)")
-    check(int(jlp["address"], 16) == 0x20000000, "JLP flash at 0x20000000 (core_top's bridge map; reads 0 until step 11)")
+    check(int(jlp["address"], 16) == 0x20000000, "JLP flash at 0x20000000 (core_top's bridge map, intv_jlp_nv)")
     dt = re.findall(r"\.JLP_IDX\s*\(\s*(\d+)\s*\)", core_top)
-    dw = re.findall(r"dt_addr <= 10'\(2 \* JLP_IDX \+ 1\);\s*\n\s*dt_data <= 32'd(\d+);", dtab)
-    check(dt == ["6"] and dw == ["0"],
-          f"core_top reports JLP flash (slot index 6) as 0 bytes until step 11 (apf_datatable): {dt} {dw}")
+    dw = re.findall(r"dt_addr <= 10'\(2 \* JLP_IDX \+ 1\);\s*\n\s*dt_data <= 32'\(js_b\) \* 32'd(\d+);", dtab)
+    check(dt == ["6"] and dw == ["1536"],
+          f"core_top reports JLP flash (slot index 6) as the cartridge's sectors x 1,536 bytes (apf_datatable, step 11): {dt} {dw}")
     ss = re.search(r"localparam \[31:0\] SS_ADDR = 32'h([0-9A-Fa-f]+);", core_top)
     ss = int(ss.group(1), 16) if ss else None
     check(ss == 0x50000000 and all(int(s["address"], 16) >> 24 != ss >> 24 for s in slots),

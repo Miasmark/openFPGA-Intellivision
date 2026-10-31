@@ -510,11 +510,29 @@ module tb_savestate;
 
     logic [7:0] blob [153600];
 
+    // the JLP's flash store (build step 11) is not machine state: a state load keeps the flash
+    // (JLP_NOTES 5.2). A blob is written with the store as it was at the save's freeze
+    // (FILE.flash, $writememh) and a load puts that store back first, so a load into a core
+    // whose flash moved on (a fresh core, D's) compares with the straight run
+    logic [15:0]  fl_snap [12288];
+    logic [127:0] fe_snap;
+    logic [127:0] fe_arr [1];
+    bit           fl_took;
+
     task automatic do_save(input longint c, input string kind, input string fname, input bit burst = 1'b0);
         logic [15:0] code;
         logic [31:0] v;
         int polls, f, n;
         wait_cyc(c);
+        fl_took = 1'b0;
+        fork begin
+            int k;
+            k = 0;
+            while (!core.ssc.ss_en && k < 40 * 14934 * 48) begin @(negedge clk); k++; end
+            for (int i = 0; i < 12288; i++) fl_snap[i] = core.machine.jlp.store[i];
+            fe_snap = core.machine.jlp.empt;
+            fl_took = 1'b1;
+        end join_none
         host_on();
         br_wr(32'hF8000020, 32'd1);
         // the command word set up, then its write strobe at the moment
@@ -555,6 +573,10 @@ module tb_savestate;
         if (f == 0) begin fail($sformatf("cannot write %s", fname)); return; end
         for (int i = 0; i < 153600; i++) $fwrite(f, "%c", blob[i]);
         $fclose(f);
+        if (!fl_took) fail($sformatf("%s: the flash store was not taken at the freeze", fname));
+        $writememh({fname, ".flash"}, fl_snap);
+        fe_arr[0] = fe_snap;
+        $writememh({fname, ".empt"}, fe_arr);
         $fdisplay(fd, "SAVE ok %0d %s", cyc, fname);
     endtask
 
@@ -631,6 +653,15 @@ module tb_savestate;
             blob[i] = ch < 0 ? 8'd0 : 8'(ch);
         end
         $fclose(f);
+        f = $fopen({fname, ".flash"}, "r");
+        if (f != 0) $fclose(f);
+        if (f != 0 && expect_s == "ok") begin       // (a load meant to be refused keeps the flash)
+            logic [127:0] fe [1];
+            $readmemh({fname, ".flash"}, fl_snap);
+            $readmemh({fname, ".empt"}, fe);
+            for (int i = 0; i < 12288; i++) core.machine.jlp.store[i] = fl_snap[i];
+            core.machine.jlp.empt = fe[0];
+        end
         host_on();
         for (int i = 0; i < 38400; i++)
             br_wr(32'h50000000 + 32'(4 * i), {blob[4*i], blob[4*i+1], blob[4*i+2], blob[4*i+3]});

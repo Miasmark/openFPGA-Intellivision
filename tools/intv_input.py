@@ -57,8 +57,11 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   D-pad reaches all 16 disc directions (the owner's "Precision controls",
   2026-10-26; PGA Golf aims with all 16). The chords and the turned disc
   work together (L + up + A = disc NNE and key 5). R beats L. Y alone,
-  L+Y, Start and Select do nothing yet (Select is kept for the on-screen
-  keypad, DESIGN.md 9 step 13).
+  L+Y and Start do nothing yet; Select opens the on-screen keypad (build
+  step 13, tools/osk.py: hands() takes the keypads and the profile).
+- Keypad mode Auto (3, the default from step 13): the game profile's mode,
+  and in its Layer modes the profile's side actions on A / B / X; Layer
+  without a profile.
 - Keypad mode Face-button ring (1): D-pad = disc; the face buttons are a
   second D-pad on the ring, by position on the Pocket (X up = 2, B down = 8,
   Y left = 4, A right = 6; X+A = 3, X+Y = 1, B+A = 9, B+Y = 7); L = top side
@@ -214,8 +217,9 @@ class Hand:
             self.dir((DPAD_DIR[(v, h)] + turn) % 16)
 
 
-def virtual(key, joy, mode, hand=None):
-    """One Pocket controller slot in keypad mode `mode` -> Hand."""
+def virtual(key, joy, mode, hand=None, sides=("lr", "ll", "top")):
+    """One Pocket controller slot in keypad mode `mode` -> Hand; sides: the side actions of
+    A, B, X in the Layer modes (a game profile's in Auto, build step 13)."""
     h = hand or Hand()
     if key >> 28 not in (1, 2, 3):
         return h
@@ -237,7 +241,7 @@ def virtual(key, joy, mode, hand=None):
                     h.key(k)
         else:
             h.dpad(*dp, turn=TURN_L if b[L1] else 0)
-            for btn, k, kl in ((A, "lr", 5), (B, "ll", "C"), (X, "top", 0)):
+            for btn, k, kl in ((A, sides[0], 5), (B, sides[1], "C"), (X, sides[2], 0)):
                 if b[btn]:
                     h.key(kl if b[L1] else k)
         if mode == RSTICK and analog:
@@ -321,18 +325,36 @@ def code_mame(h):
     return res
 
 
-def hands(v):
-    """v: dict with key1 joy1 key2 joy2 key3 joy3 trig3 mode swap -> (p1, p2)."""
-    mode = v["mode"] if v["mode"] in (FACE, RSTICK) else LAYER
-    p1 = virtual(v["key1"], v["joy1"], mode)
-    keyboard(v["key3"], v["joy3"], v["trig3"], p1, v.get("ecs", 0))
-    p2 = virtual(v["key2"], v["joy2"], mode)
-    return p1, p2
+AUTO = 3                                    # Keypad Mode 3: the game profile's (build step 13)
 
 
-def ports(v, mame=False):
+def hands(v, osk=None, prof=None):
+    """v: dict with key1 joy1 key2 joy2 key3 joy3 trig3 mode swap -> (p1, p2). osk: the two
+    on-screen keypads (tools/osk.py Player, build step 13): the buttons they take are masked
+    and their keys pressed; prof: the game's profile (tools/osk.py), used in mode Auto (3)."""
+    sides = ("lr", "ll", "top")
+    mode = v["mode"]
+    if mode == AUTO:
+        mode = prof["mode"] if prof else LAYER
+        if prof:
+            sides = prof["sides"]
+    elif mode not in (FACE, RSTICK):
+        mode = LAYER
+    hs = []
+    for n, (k, j) in enumerate(((v["key1"], v["joy1"]), (v["key2"], v["joy2"]))):
+        if osk:
+            k &= ~osk[n].buttons_mask() & 0xFFFFFFFF
+        h = virtual(k, j, mode, sides=sides)
+        if osk and osk[n].key() is not None:
+            h.key(osk[n].key())
+        hs.append(h)
+    keyboard(v["key3"], v["joy3"], v["trig3"], hs[0], v.get("ecs", 0))
+    return hs[0], hs[1]
+
+
+def ports(v, mame=False, osk=None, prof=None):
     """(pad_r, pad_l): $01FE (port A, right) and $01FF (port B, left)."""
-    p1, p2 = hands(v)
+    p1, p2 = hands(v, osk, prof)
     c = code_mame if mame else code
     left, right = (p2, p1) if v["swap"] & 1 else (p1, p2)
     return c(right), c(left)

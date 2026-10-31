@@ -78,7 +78,7 @@ module tb_timing;
     pocket_video video (
         .clk_sys(clk_sys), .ce_pix(ce_pix), .hcnt(hcnt), .vline(vline),
         .border_on(border[0]), .blank(!live),
-        .in_pf(in_pf), .pf_x(pf_x), .pf_y(pf_y), .colour(colour),
+        .in_pf(in_pf), .pf_x(pf_x), .pf_y(pf_y), .colour(colour), .ovl(2'd0),
         .clk_vid(clk_vid),
         .video_rgb(video_rgb), .video_de(video_de), .video_skip(video_skip),
         .video_hs(video_hs), .video_vs(video_vs)

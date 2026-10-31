@@ -44,6 +44,8 @@ module intv_core #(
     output logic [11:0]      slot_st,
     output logic [1:0]       len_st,
     output logic             machine_reset,
+    output logic [31:0]      cart_crc_o,      // the cartridge's CRC-32, and loaded (intv_profile, step 13)
+    output logic             cart_ready_o,
 
     input  wire logic [7:0]  pad_r,
     input  wire logic [7:0]  pad_l,
@@ -299,6 +301,9 @@ module intv_core #(
     end
 
     /* verilator lint_off UNUSEDSIGNAL */
+    assign cart_crc_o   = cart_crc;
+    assign cart_ready_o = cart_ready;
+
     wire unused = cart_busy | cart_hit | (|cart_err) | (|cart_fmt_err) | (|cart_layout) | (|cart_flags)
                 | (|cbus_attr) | cbus_paged | (|pg_sel) | frozen | ecs_rom_ok;
     /* verilator lint_on UNUSEDSIGNAL */

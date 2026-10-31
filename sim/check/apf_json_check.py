@@ -482,10 +482,10 @@ def main():
     pw = re.search(r"reg\s+\[1:0\]\s+set_kp_mode\s*=\s*2'd(\d);", core_top)
     check(len(kp) == 1 and pw and int(kp[0]["address"], 16) & 0xFFF == 0x208
           and re.search(r"12'h208:\s*set_kp_mode\s*<=\s*bridge_wr_data\[1:0\];", core_top) is not None
-          and kp[0]["defaultval"] == int(pw.group(1)) == 0
-          and [(o["value"], o["name"].split()[0]) for o in kp[0]["options"]] == [(0, "Layer"), (1, "Face-button"), (2, "Right")]
-          and "kp_mode,       // 0 Layer, 1 Face-button ring, 2 Right stick" in inp,
-          "Keypad Mode: core_top's set_kp_mode at 0x208 (power-up Layer), 0 Layer / 1 Face-button ring / 2 Right stick as intv_input.sv")
+          and kp[0]["defaultval"] == int(pw.group(1)) == 3
+          and [(o["value"], o["name"].split()[0]) for o in kp[0]["options"]] == [(3, "Auto"), (0, "Layer"), (1, "Face-button"), (2, "Right")]
+          and "kp_mode,       // 0 Layer, 1 Face-button ring, 2 Right stick, 3 Auto (the game's profile)" in inp,
+          "Keypad Mode: core_top's set_kp_mode at 0x208 (power-up Auto, build step 13), 3 Auto / 0 Layer / 1 Face-button ring / 2 Right stick as intv_input.sv")
     sw = [v for v in var if v["name"] == "Swap Controllers"]
     pw = re.search(r"reg\s+set_swap\s*=\s*1'b([01]);", core_top)
     check(len(sw) == 1 and pw and int(sw[0]["address"], 16) & 0xFFF == 0x20C

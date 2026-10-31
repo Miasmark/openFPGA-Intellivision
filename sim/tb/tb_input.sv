@@ -196,6 +196,13 @@ module tb_input;
         .ecs_ovr_74 ( bus[2:1] ),
         .synth_74   ( bus[0] ),
         .ecs_full   ( ecs_full ),
+        .frame      ( 1'b0 ),           // the keypads never step here (tb_osk tests them)
+        .prof_ok    ( 1'b0 ),
+        .prof_mode  ( 2'd0 ),
+        .prof_sides ( 6'd0 ),
+        .osk_open   ( ),
+        .osk_cur    ( ),
+        .osk_held   ( ),
         .pad_r      ( pad_r ),
         .pad_l      ( pad_l ),
         .ecs_keys   ( ecs_keys ),

@@ -60,6 +60,9 @@ module pocket_video #(
     output logic [7:0]       pf_y,        // 0..191 inside the playfield
     // from the picture source, for the same pixel (combinational)
     input  wire logic [3:0]  colour,
+    // the on-screen keypads over the playfield (intv_osk_draw, build step 13), for the same
+    // pixel: 0 none, 1 white, 2 dark, 3 yellow
+    input  wire logic [1:0]  ovl,
 
     input  wire logic        clk_vid,
     output logic [23:0]      video_rgb,
@@ -100,7 +103,9 @@ module pocket_video #(
             p_hs  <= hcnt == 9'(HS_X);
             p_vs  <= hcnt == 9'd0 && vline == 9'd0;
             if (de_now)
-                p_rgb <= blank ? 24'd0 : pal_rgb;
+                p_rgb <= blank ? 24'd0
+                       : !in_pf || ovl == 2'd0 ? pal_rgb
+                       : ovl == 2'd1 ? 24'hFFFFFF : ovl == 2'd2 ? 24'h000000 : 24'hFFD800;
             else if (p_de)
                 p_rgb <= {8'd0, 2'd0, border_on, 13'd0};   // scaler slot 0 or 1
             else

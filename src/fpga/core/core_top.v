@@ -409,7 +409,7 @@ localparam [31:0] SS_SIZE = 32'd153600;
 
 // Settings, written by the host from interact.json (clk_74a).
     reg             set_border = 1'b1;      // Border: 1 = show (slot 1), 0 = playfield only (slot 0)
-    reg     [1:0]   set_kp_mode = 2'd0;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick
+    reg     [1:0]   set_kp_mode = 2'd3;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick, 3 Auto (by game)
     reg             set_swap = 1'b0;        // Swap Controllers: 1 = player 1 on the right controller
     reg             set_pause = 1'b1;       // Pause in Menu: 1 = the machine freezes while the menu is open
     reg     [1:0]   set_ecs = 2'd0;         // ECS: 0 Auto, 1 On, 2 Off (taken at the next reset or load; step 9)
@@ -788,6 +788,11 @@ end
 ////////////////////////////////////////////////////////////////////////////////
 
     wire    [7:0]   pad_r, pad_l;
+    // the on-screen keypads and the game profile (build step 13, below)
+    wire            osk_frame, prof_ok;
+    wire    [1:0]   prof_mode, osk_open;
+    wire    [5:0]   prof_sides;
+    wire    [7:0]   osk_cur, osk_held;
     wire    [63:0]  ecs_keys;
     wire            ecs_synth, ecs_full;
     wire    [1:0]   ecs_ovr;
@@ -807,6 +812,13 @@ intv_input input_map (
     .ecs_ovr_74 ( set_ecs ),
     .synth_74   ( set_synth ),
     .ecs_full   ( ecs_full ),
+    .frame      ( osk_frame ),
+    .prof_ok    ( prof_ok ),
+    .prof_mode  ( prof_mode ),
+    .prof_sides ( prof_sides ),
+    .osk_open   ( osk_open ),
+    .osk_cur    ( osk_cur ),
+    .osk_held   ( osk_held ),
     .pad_r      ( pad_r ),
     .pad_l      ( pad_l ),
     .ecs_keys   ( ecs_keys ),
@@ -825,6 +837,8 @@ intv_input input_map (
 ////////////////////////////////////////////////////////////////////////////////
 
     wire            machine_reset;
+    wire    [31:0]  cart_crc;
+    wire            cart_ready;
     wire    [11:0]  slot_st;
     wire    [1:0]   cart_len_st;
     wire            ce_pix, live;
@@ -847,6 +861,8 @@ intv_core machine_side (
     .slot_st            ( slot_st ),
     .len_st             ( cart_len_st ),
     .machine_reset      ( machine_reset ),
+    .cart_crc_o         ( cart_crc ),
+    .cart_ready_o       ( cart_ready ),
     .pad_r              ( pad_r ),
     .pad_l              ( pad_l ),
     .ecs_override       ( ecs_ovr ),
@@ -930,6 +946,36 @@ test_pattern pattern (
     .colour     ( pat_colour )
 );
 
+// Build step 13: the game profile (by the cartridge's CRC) and the
+// on-screen keypads drawn over the playfield (tools/osk.py; intv_input
+// steps them at each frame's start).
+    wire    [71:0]  prof_labels;
+    wire    [1:0]   osk_ovl;
+    assign osk_frame = ce_pix && hcnt == 9'd0 && vline == 9'd0;
+
+intv_profile profile (
+    .clk        ( clk_sys ),
+    .crc        ( cart_crc ),
+    .ready      ( cart_ready ),
+    .ok         ( prof_ok ),
+    .mode       ( prof_mode ),
+    .sides      ( prof_sides ),
+    .labels     ( prof_labels )
+);
+
+intv_osk_draw osk_draw (
+    .clk        ( clk_sys ),
+    .ce_pix     ( ce_pix ),
+    .pf_x       ( pf_x ),
+    .pf_y       ( pf_y ),
+    .osk_open   ( osk_open ),
+    .osk_cur    ( osk_cur ),
+    .osk_held   ( osk_held ),
+    .prof_ok    ( prof_ok ),
+    .labels     ( prof_labels ),
+    .ovl        ( osk_ovl )
+);
+
 // The STIC's picture once the machine runs, else the test pattern (its
 // slot indicators say what is missing). machine_reset changes only at
 // loads and resets.
@@ -946,6 +992,7 @@ pocket_video video (
     .pf_x       ( pf_x ),
     .pf_y       ( pf_y ),
     .colour     ( colour ),
+    .ovl        ( osk_ovl ),
     .clk_vid    ( clk_vid ),
     .video_rgb  ( video_rgb ),
     .video_de   ( video_de ),

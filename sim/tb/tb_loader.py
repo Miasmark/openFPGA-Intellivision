@@ -665,8 +665,8 @@ PLANTS = [
      "assign mem_own = 1'b0 && (cph == 2'd0", 'CFG fetch: the struct RAM port never given to the steps'),
     # (2026-10-31) the fetch not waiting for Ready to run's ok (0.0.14's flow): its first command
     # queues behind the unacked 0x0140 and the late ack (RTRDLY) runs the watchdog out
-    ('fetch_before_rtr', 'apf_datatable.sv', "end else if (rtr_ok || 32'(rtr_n) == 32'(RTR_SAFE)) begin",
-     "end else if (1'b1) begin", 'the CFG fetch before Ready to run\'s ok'),
+    ('fetch_before_rtr', 'apf_datatable.sv', "end else if (rtr_ok) begin",
+     "end else if (1'b1) begin", 'the CFG fetch before Ready to run\'s ok (or its give-up)'),
     ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
      "end else if (!got_cart && !rescan) begin", 'the CFG entry taken for the cartridge without a cartridge entry'),
 ]

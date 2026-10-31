@@ -172,7 +172,9 @@ HW_IMAGES = [('hw_steal', ('hw', 'hw_steal'), None, 460, (0xFF, 0xFF), 'stic'),
              ('hw_intlate', ('hw', 'hw_intlate'), None, 230, (0xFF, 0xFF), 'stic'),
              ('hw_rowcopy', ('hw', 'hw_rowcopy'), None, 1150, (0xFF, 0xFF), 'stic'),
              ('hw_cpuodd', ('hw', 'hw_cpuodd'), None, 60, (0xFF, 0xFF), 'stic'),
-             ('hw_ecskeys', ('hw', 'hw_ecskeys'), None, 60, (0xFF, 0xFF), 'stic')]
+             ('hw_ecskeys', ('hw', 'hw_ecskeys'), None, 60, (0xFF, 0xFF), 'stic'),
+             ('hw_frame', ('hw', 'hw_frame'), None, 720, (0xFF, 0xFF), 'stic'),
+             ('hw_steal2', ('hw', 'hw_steal2'), None, 130, (0xFF, 0xFF), 'stic')]
 # step 10: the Intellivoice of an image: the menu override ('on', 'off'), level, DAC sound. Images
 # not listed run with it Off (the RTL's override 2; the model without one)
 VOICE_OF = {'voicetest': dict(ovr='on', level=4, dac=False),

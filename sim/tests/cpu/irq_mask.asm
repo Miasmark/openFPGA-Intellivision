@@ -3,10 +3,11 @@
 ; high state prior to taking the interrupt, the CPU will ignore the
 ; interrupt"). JE is interruptible and enables at once (wiki Jump, CP1610).
 ; Pulse 1: cycles 20-30 while I=0, gone by 36. After EIS nothing happens.
-; Pulse 2: from 80 while I=0, still low when JE ends at 98: taken there.
+; Pulse 2: from 80 while I=0, still low when JE ends at 99 (13 cycles: the jumps are one
+; cycle longer than S1's 12 in the console fit F, docs/TIMING_FIT.md): taken there.
 ;! intrm 20-30 80-
 ;! expect e1: CYC=52 INTS=0 I=1
-;! expect isr: CYC=107 [$0300]=next INTS=1 I=1
+;! expect isr: CYC=108 [$0300]=next INTS=1 I=1
 ;! expect done: INTS=1
         ORG     $5000
 start:  MVII    #$0300, R6      ; 0-8
@@ -24,7 +25,7 @@ e1:     NOP                     ; 52-58
         DIS                     ; 70-74
         NOP                     ; 74-80 request latched at 80, masked
         NOP                     ; 80-86
-        JE      next            ; 86-98, enables: taken at 98
+        JE      next            ; 86-99, enables: taken at 99
 next:   NOP
 done:   NOP
 

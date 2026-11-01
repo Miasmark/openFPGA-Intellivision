@@ -424,7 +424,20 @@ class _SweepBus(TestBus):
         self.intak_log = []
 
 
-def sweep_cycles():
+def f_extra(op, sdbd):
+    """docs/TIMING_FIT.md, family F (the console fit of 2026-11-01), written here apart from
+    cp1610.f_extra: the jump family 13 cycles, PULR R7 (MVI@ R6, R7) 12, SDBD + MVI@ R4 or
+    R5, R7 15 (the instruction's own 11 after SDBD's 4)."""
+    if op == 0x004:
+        return 1
+    if op in (0x2B7,) or (sdbd and op in (0x2A7, 0x2AF)):
+        return 1
+    return 0
+
+
+def sweep_cycles(timing="f"):
+    """The cycles of every opcode: timing "doc" exactly the documents' (S1 / wiki and G82),
+    timing "f" (the core's) the documents' plus F's extra cycle where TIMING_FIT says."""
     fails, n = [], 0
     for op in range(0x400):
         for sdbd in (False, True):
@@ -436,7 +449,7 @@ def sweep_cycles():
                 words = ([0x001] if sdbd else []) + [op, 0x0010, 0x0123]
                 for k, w in enumerate(words):
                     bus.mem[base + k] = w
-                cpu = cp1610.CP1610(bus)
+                cpu = cp1610.CP1610(bus, timing=timing)
                 cpu.r[6] = 0x0300
                 for r in range(1, 6):
                     cpu.r[r] = 0x0200 + r
@@ -460,13 +473,14 @@ def sweep_cycles():
                 if sdbd:
                     cpu.step()
                 ev = cpu.step()
-                want = doc_cycles(op, taken, sdbd)
+                fx = f_extra(op, sdbd) if timing == "f" else 0
+                want = doc_cycles(op, taken, sdbd) + fx
                 n += 1
                 if ev.cycles != want:
                     fails.append("op $%03X%s%s: %d cycles, want %d" % (
                         op, " sdbd" if sdbd else "", " taken" if taken else "",
                         ev.cycles, want))
-                g = g82_cycles(op, taken, sdbd)    # a third source (G82 p.45, p.52-53)
+                g = g82_cycles(op, taken, sdbd) + fx   # a third source (G82 p.45, p.52-53)
                 if ev.cycles != g:
                     fails.append("op $%03X%s%s: %d cycles, G82 %d" % (
                         op, " sdbd" if sdbd else "", " taken" if taken else "",
@@ -474,7 +488,12 @@ def sweep_cycles():
                 if ev.interruptible != doc_interruptible(op):
                     fails.append("op $%03X: interruptible=%s, want %s" % (
                         op, ev.interruptible, doc_interruptible(op)))
-    return "builtin: cycles (S1/wiki and G82) and interruptibility of all 1024 opcodes", fails, n
+    return ("builtin: cycles (S1/wiki and G82%s) and interruptibility of all 1024 opcodes, timing %s"
+            % (" + TIMING_FIT F" if timing == "f" else "", timing), fails, n)
+
+
+def sweep_cycles_doc():
+    return sweep_cycles("doc")
 
 
 def sweep_buslog():
@@ -508,11 +527,15 @@ PHASES = [
     ("MVO@ R0, R1", [0x248], F + ["BAR", "NACT", "DW", "DWS", "NACT"]),
     ("MVI@ R1, R0", [0x288], F + ["BAR", "NACT", "DTB", "NACT"]),
     ("MVII", [0x2B8, 0x1234], F + F),
-    ("J", [0x004, 0x0300, 0x0000], F + F + F),
+    # TIMING_FIT F: one NACT more at the end of a jump, PULR R7, SDBD + MVI@ R4 / R5, R7
+    ("J", [0x004, 0x0300, 0x0000], F + F + F + ["NACT"]),
+    ("PULR R7", [0x2B7], F + ["NACT"] * 3 + F + ["NACT"]),
     ("B taken", [0x200, 0x0000], F + F + ["NACT"]),
     ("NOPP", [0x208, 0x0000], F + ["BAR", "NACT", "DTB"]),
     ("SDBD; MVI@ R4, R0", [0x001, 0x2A0],
      F + F + ["BAR", "NACT", "DTB", "BAR", "NACT", "DTB"]),
+    ("SDBD; MVI@ R4, R7", [0x001, 0x2A7],
+     F + F + ["BAR", "NACT", "DTB", "BAR", "NACT", "DTB", "NACT"]),
 ]
 
 
@@ -595,7 +618,7 @@ def main(argv=None):
     for f in files:
         results.append(run_asm_test(f, a.trace, a.verbose))
     if not a.no_builtin and not a.files and not a.k:
-        for fn in (sweep_cycles, sweep_buslog, sweep_phases, sweep_roundtrip):
+        for fn in (sweep_cycles, sweep_cycles_doc, sweep_buslog, sweep_phases, sweep_roundtrip):
             results.append(fn())
     bad = 0
     total = 0

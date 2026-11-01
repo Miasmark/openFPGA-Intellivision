@@ -23,7 +23,9 @@ Model
     INTAK) is recorded with its cycle, so the RTL CPU can be checked in
     lockstep later.
   - Cycle counts are the documented ones (S1 p.53-58, wiki opcode pages);
-    the phase sequences that make them up are in _seq_* below.
+    the phase sequences that make them up are in _seq_* below. Timing "f"
+    (the default, the core's) adds the console fit's three longer cases
+    (f_extra; docs/TIMING_FIT.md); timing "doc" keeps the documents' counts.
 
 Bus object (duck typed; only read and write are required):
   read(addr, cycle, kind) -> int    kind: 'fetch', 'operand', 'adar', 'data'
@@ -46,11 +48,30 @@ import argparse
 import sys
 
 __all__ = ["CP1610", "Event", "UndefinedBehaviour", "disassemble",
-           "trace_header", "trace_line", "INTERRUPT_CYCLES"]
+           "trace_header", "trace_line", "INTERRUPT_CYCLES", "f_extra"]
 
 S_FLAG, Z_FLAG, O_FLAG, C_FLAG = 8, 4, 2, 1     # SZOC, as GSWD's nibble
 INTERRUPT_CYCLES = 9    # S1 p.35: INTAK NACT DW DWS NACT IAB NACT NACT NACT
 BUSRQ_EXIT = 2          # NACT cycles after BUSRQ* is seen high (S1 p.36, G82 p.29)
+TIMINGS = ("f", "doc")  # CP1610(timing=): the console's family F, or the documents' counts
+
+
+def f_extra(op, dbd):
+    """The cycles timing "f" adds to an instruction's documented count (docs/TIMING_FIT.md,
+    the console fit F of 2026-11-01; one NACT at the end of the instruction):
+      J, JE, JD, JSR, JSRE, JSRD ($004)     13, not 12 (the fit lengthened the whole family)
+      PULR R7 (MVI@ R6, R7)                  12, not 11
+      SDBD + MVI@ R4 / R5, R7                15, not 14 (the EXEC dispatcher's jump; hw_frame2)
+    The console's interrupt path (each ISR has one JSR and one PULR R7) and hw_frame2's SDBD
+    JUMP 15 need them; which other jumps or loads into R7 are longer too is not observable
+    (TIMING_FIT "Not observable")."""
+    if op == 0x004:
+        return 1
+    if op >= 0x240 and (op >> 6) & 7 == 2 and op & 7 == 7:
+        m = (op >> 3) & 7
+        if m == 6 or (dbd and m in (4, 5)):
+            return 1
+    return 0
 
 BRANCH_NAMES = ["B", "BC", "BOV", "BPL", "BEQ", "BLT", "BLE", "BUSC",
                 "NOPP", "BNC", "BNOV", "BMI", "BNEQ", "BGE", "BGT", "BESC"]
@@ -184,14 +205,23 @@ class CP1610:
                   stops at once (wiki HLT)
       buslog      record every bus phase in self.buslog as
                   (cycle, phase, addr, data)
+      timing      'f' (default): the console's family F (docs/TIMING_FIT.md; the
+                  core's cp1610.sv): f_extra() adds one NACT at the end of the
+                  jumps ($004), PULR R7 and SDBD + MVI@ R4 / R5, R7; 'doc': the
+                  documented counts (S1, G82, the wiki), as MAME's CPU runs them
+                  (the MAME comparisons: tools/intv_system.py mode "mame",
+                  tools/lockstep.py)
     """
 
     def __init__(self, bus=None, strict=False, sdbd_r6="wiki", hlt="manual",
-                 buslog=False):
+                 buslog=False, timing="f"):
         if sdbd_r6 not in ("wiki", "mame"):
             raise ValueError("sdbd_r6 must be 'wiki' or 'mame'")
         if hlt not in ("manual", "immediate"):
             raise ValueError("hlt must be 'manual' or 'immediate'")
+        if timing not in TIMINGS:
+            raise ValueError("timing must be 'f' or 'doc'")
+        self.timing = timing
         self.bus = bus if bus is not None else _DefaultBus()
         self.strict = strict
         self.sdbd_r6 = sdbd_r6
@@ -562,6 +592,8 @@ class CP1610:
 
         if self.D and op != 0x001:
             self.D = 0
+        if self.timing == "f" and f_extra(op, dbd):
+            self._idle(1)               # TIMING_FIT F: one more NACT at the end
         ev.words = words
         ev.cycles = self._t
         ev.text = disassemble(words + [0, 0], pc0, sdbd=bool(dbd))[0]

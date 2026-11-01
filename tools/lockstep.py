@@ -306,6 +306,7 @@ def run(name, recs, mem, context=8, keep_going=False, max_div=20, max_lump=0,
         **cpu_opts):
     res = Result(name)
     bus = LockBus(mem)
+    cpu_opts.setdefault("timing", "doc")    # MAME's CPU: the documented counts (TIMING_FIT F is not MAME's)
     cpu = CP1610(bus=bus, **cpu_opts)
     hist = collections.deque(maxlen=context)
     n = len(recs)

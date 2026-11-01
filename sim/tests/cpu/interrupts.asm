@@ -9,7 +9,9 @@
 ;! intrm 100-
 ;! expect n14: CYC=96
 ;! expect isr: CYC=111 R6=$0301 [$0300]=n15 I=1 INTS=1
-;! expect done: CYC=158 INTS=1 R6=$0300
+; PULR R7 is 12 cycles, not S1's 11: the console fit F (docs/TIMING_FIT.md), so done
+; is at 159.
+;! expect done: CYC=159 INTS=1 R6=$0300
 ;! cycles n14 isr = 15
         ORG     $5000
 start:  MVII    #$0300, R6      ; 0-8
@@ -38,4 +40,4 @@ done:   NOP
 
         ORG     $6000
 isr:    NOP
-        PULR    R7              ; return
+        PULR    R7              ; return (12 cycles, TIMING_FIT F)

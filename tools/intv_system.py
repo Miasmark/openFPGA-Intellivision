@@ -42,12 +42,16 @@ the RTL:
 
 Frame timing (DESIGN 2.4; MAME stic.h:47-50): a frame is FRAME = 14,934 CPU
 cycles; it starts with VBlank, and INTRM is held for the first VBLANK =
-3,790 cycles. The same window is the STIC's bus-copy window (MAME
-intv_m.cpp:660-666, 643-647): STIC registers and GRAM are open to the CPU
-inside it, or at any time while the STIC handshake is clear. A write to
-STIC register $20 (display enable) sets the handshake; the start of every
-frame clears it (MAME stic.cpp:1111-1116, 1270-1274). Closed accesses read
-the address offset and drop writes (MAME intv_m.cpp:484-512). The RTL
+3,790 cycles. A write to STIC register $20 (display enable) sets the
+handshake; the start of every frame clears it (MAME stic.cpp:1111-1116,
+1270-1274). Mode "mame": the same 3,790 cycles are the STIC's bus-copy
+window (MAME intv_m.cpp:660-666, 643-647): STIC registers and GRAM are open
+to the CPU inside it, or at any time while the handshake is clear; closed
+accesses read the address offset and drop writes (MAME intv_m.cpp:484-512).
+Modes "stic" and "none" (the console's family F, docs/TIMING_FIT.md): the
+window is cycles 0-3,790 (WINDOW), the handshake at its end is the frame's
+display enable, and the registers and GRAM are closed only after the window
+of a frame whose display is on; closed reads give $0000. The RTL
 releases the CPU from reset so that its reset IAB is the last cycle of a
 frame: model cycle 0 (the first fetch) is cycle 0 of a frame.
 
@@ -96,7 +100,7 @@ import stic as sticm  # noqa: E402
 import psg as psgm  # noqa: E402
 import intv_input as inm  # noqa: E402
 import ecs as ecsm  # noqa: E402
-from stic import FRAME, VBLANK, STIC_DEF, STIC_REGS, STIC_DER, STIC_GMR  # noqa: E402,F401
+from stic import FRAME, VBLANK, WINDOW, STIC_DEF, STIC_REGS, STIC_DER, STIC_GMR  # noqa: E402,F401
 
 VEC_RESET, VEC_INTR = 0x1000, 0x1004
 
@@ -229,7 +233,10 @@ def press_keys(presses, k):
 
 
 class FrameTiming:
-    """Frame k starts at cycle k x FRAME (the RTL's timing)."""
+    """Frame k starts at cycle k x FRAME (the RTL's timing). INTRM is held for
+    cycles 0-3,789 (VBLANK), the register window is open in cycles 0-3,790
+    (WINDOW: docs/TIMING_FIT.md, family F, the STIC's events one cycle later
+    against INTRM than MAME's)."""
 
     first = 0                           # frame 0 starts at cycle 0
 
@@ -237,9 +244,10 @@ class FrameTiming:
         return c // FRAME
 
     def vb(self, c):
-        return c % FRAME < VBLANK
+        return c % FRAME < WINDOW
 
-    line = vb                           # INTRM: the same window
+    def line(self, c):                  # INTRM
+        return c % FRAME < VBLANK
 
     def start(self, k):
         return k * FRAME
@@ -402,7 +410,18 @@ class SystemBus:
         self.vid.advance(t, boundary=True)
 
     def stic_open(self, cycle):
-        return self.vb(cycle) or not self.handshake(cycle)
+        """STIC registers and GRAM open to the CPU. Mode "mame": in VBlank or while the
+        handshake is clear (MAME intv_m.cpp:484-512). Modes "stic" and "none" (the
+        console, docs/TIMING_FIT.md): in the window, and all frame in a frame whose
+        display is off; closed from the window's end to the next frame start only in
+        a frame whose display is on (the handshake latched at the window's end), so a
+        $20 write after the window does not close them (hw_frame2)."""
+        if self.vb(cycle):
+            return True
+        if self.vid.mode == "mame":
+            return not self.handshake(cycle)
+        cur = self.vid.cur
+        return cur is None or not cur.get("en", False)
 
     # -- CPU hooks -------------------------------------------------------
     def intrm(self, cycle):
@@ -450,7 +469,10 @@ class SystemBus:
         elif 0x3000 <= a <= 0x37FF:
             v &= 0xFF00 | self.grom[a - 0x3000]
         elif 0x3800 <= a <= (0x3BFF if self.mame_map else 0x3FFF):
-            v &= self.gram[a & 0x1FF] if self.stic_open(cycle) else a & 0x1FF
+            if self.stic_open(cycle):
+                v &= self.gram[a & 0x1FF]
+            else:                       # MAME: the offset; the core: $0000 as the STIC's (TIMING_FIT)
+                v &= a & 0x1FF if self.vid.mode == "mame" else 0
         if self.voice is not None and self.voice.on and 0x80 <= a <= 0x81:
             v &= self.voice.access(self._t(cycle), ('R', a))
         if self.ecs is not None and self.ecs.owns(a):
@@ -610,14 +632,18 @@ def make_ecs(cart, ecs, bios_dir=None, mame=False):
 
 
 def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none", cfg_path=None,
-                ecs=None, mame_ecs=False, jlp_flash=None):
+                ecs=None, mame_ecs=False, jlp_flash=None, cpu_timing=None):
+    """cpu_timing: the CPU model's counts (tools/cp1610.py timing); default "doc" (MAME's)
+    for stic_mode "mame", else "f" (the console fit, the core's)."""
     ex, gr = bios_paths(bios_dir)
     cart = load_cart(cart_path, cfg_path)
     dev = make_ecs(cart[0] if cart else None, ecs, bios_dir, mame_ecs)
     bus = SystemBus(load_words(ex), open(gr, "rb").read(),
                     cart[0] if cart else None, timing, stic_mode, ecs=dev,
                     jlp=make_jlp(cart[0] if cart else None, jlp_flash))
-    cpu = CP1610(bus=bus, buslog=buslog)
+    if cpu_timing is None:
+        cpu_timing = "doc" if stic_mode == "mame" else "f"
+    cpu = CP1610(bus=bus, buslog=buslog, timing=cpu_timing)
     return bus, cpu
 
 
@@ -699,7 +725,7 @@ def mame_compare(trace_path, bios_dir=None, cart_path=None, context=6,
     reads are taken from the trace."""
     tm = ListTiming([]) if timing == "trace" else MameTiming()
     bus, cpu = make_system(bios_dir, cart_path, tm, buslog=False, stic_mode=stic_mode, ecs=ecs,
-                           mame_ecs=True, cfg_path=cfg_path)
+                           mame_ecs=True, cfg_path=cfg_path, cpu_timing="doc")
     bus.mame_map = True
     if presses:
         bus.presses = parse_presses(presses)

@@ -46,8 +46,11 @@ Registers (CPU side, unchanged from the step-3 stub)
   sets the handshake, the start of every frame clears it (MAME
   stic.cpp:1111-1116, 1270-1274). Reading $21 selects Color Stack mode,
   writing it Foreground/Background mode (wiki STIC "Display Background").
-  Closed accesses read the address offset and drop writes (MAME
-  intv_m.cpp:484-512); open = bus-copy window or handshake clear.
+  Mode "mame": closed accesses read the address offset and drop writes
+  (MAME intv_m.cpp:484-512); open = bus-copy window or handshake clear.
+  Modes "stic" and "none" (the console, docs/TIMING_FIT.md): closed reads
+  give $0000; open = the window (cycles 0-3,790) or the frame's display
+  off (tools/intv_system.py SystemBus.stic_open).
 
 Background (rendered once per frame, for the frame's active display)
   BACKTAB words come from the 20-word row FIFO in System RAM, loaded by
@@ -77,20 +80,21 @@ Picture
   61). So a model frame and a MAME snapshot compare pixel for pixel; the
   RTL's raster placement is fixed in the RTL lane, not here.
 
-Timing (cycles = CPU cycles from the frame start = SR1 / VBlank start)
-  mode "stic" (the hardware model, DESIGN 2.4 and STIC_NOTES T1-T6):
-    - INTRM and the bus-copy window: cycles 0-3789 (as step 3).
-    - frame BUSRQ 3790-3831 (42 cycles; MAME stic.h:49) if the display
-      is enabled at 3790.
-    - row fetch r: BUSRQ from R = 3876 + 114 x VDR + 912 x r for 114 cycles
-      (one scanline of warning, one of fetch; wiki STIC Bus Request), for
-      every r with R + 114 <= 14934 (12 fetches, 13 with VDR = 0; GI 1980
-      p.5-10: "SR2 is issued thirteen or fourteen times per picture frame
-      depending on picture offset", the frame BUSRQ being the first). The
-      fetch of row r is cycle R + 57 (MAME stic.h:51 FIRST_FETCH = 3933).
-      The row loads only if the CPU acknowledged (BUSAK) by the fetch
-      cycle; otherwise the FIFO keeps the previous row (wiki STIC Bus
-      Request). The FIFO's address counter restarts at 0 on INTAK and
+Timing (cycles = CPU cycles from the frame start = SR1 / VBlank start = INTRM)
+  mode "stic" (the hardware model: the console fit F of docs/TIMING_FIT.md,
+  2026-11-01, on the hardware measurement cartridges of docs/HW_TESTS.md;
+  STIC_NOTES T1-T6 has the documents' figures it replaced):
+    - INTRM: cycles 0-3,789; the register window: cycles 0-3,790 (WINDOW),
+      the display enable (the handshake) latched at its end.
+    - frame BUSRQ 3,792-3,891 (100 cycles) if the display is enabled.
+    - row fetch r (r = 0-11, any VDR; no 13th: TIMING_FIT F, against GI
+      1980 p.5-10's "thirteen or fourteen times"): BUSRQ from R = 3,926 +
+      114 x VDR + 912 x r for 107 cycles (released at R + 107; the CPU
+      resumes 2 NACTs later). The row is copied at the fetch cycle R + 50
+      (3,976 + 912 r: the CPU is stopped from its grant to the release, so
+      only the deadline is seen): it loads only if the CPU acknowledged
+      (BUSAK) by then; otherwise the FIFO keeps the previous row (wiki STIC
+      Bus Request). The FIFO's address counter restarts at 0 on INTAK and
       steps by 20 per loaded row (RA-3-9600, GI 1980 p.5-18).
   mode "mame": MAME as it runs (STIC_NOTES T2): no BUSRQ is seen by the
     CPU (MAME's adjust_icount runs outside the CPU's timeslice); row r is
@@ -105,8 +109,8 @@ Pictures in modes "stic" and "none" (the RTL, src/fpga/core/intv_stic.sv;
 build step 4) differ from mode "mame" in what decides a frame's picture,
 because the RTL draws line by line and cannot look ahead:
   - the display enable is taken at the end of the VBlank window (after
-    the CPU's accesses in cycles 0-3789), not at the frame's end: a $20
-    write after cycle 3,789 leaves that frame blank (STIC_NOTES D8);
+    the CPU's accesses in cycles 0-3,790), not at the frame's end: a $20
+    write after cycle 3,790 leaves that frame blank (STIC_NOTES D8);
   - every border pixel shows register $2C as it is when the pixel is
     drawn (STIC_NOTES D17): a write in CPU cycle t (timing cycles) shows
     from pixel position 4 t + 5 on (pixel clocks from the frame start, 228
@@ -126,20 +130,26 @@ INTAK in modes "stic" and "none", at every vblank in mode "mame".
 import bisect
 
 FRAME = 14934            # CPU cycles per frame (57 x 262; DESIGN 2.4)
-VBLANK = 3790            # INTRM / bus-copy window (MAME stic.h:50)
+VBLANK = 3790            # INTRM (all modes); mode "mame": the bus-copy window too (MAME stic.h:50)
+WINDOW = 3791            # modes stic/none: the register window, cycles 0-3,790; the display
+                         # enable is latched at its end (docs/TIMING_FIT.md, family F)
 LINE = 57                # CPU cycles per scanline (MAME stic.h:47)
 CARD_ROWS, CARD_COLS = 12, 20
-FRAME_BUSRQ = 42         # MAME stic.h:49 ("approximate")
+FRAME_BUSRQ_AT = 3792    # mode stic: the request after VBlank, 3,792-3,891 (TIMING_FIT F)
+FRAME_BUSRQ = 100
+MAME_FRAME_BUSRQ = 42    # MAME stic.h:49 ("approximate")
 SYSRAM_WORDS = 352
 BCR_PIX = 5              # a $2C write in cycle t shows from pixel clock 4 t + 5 (see above)
 HPIX = 4 * LINE          # 228 pixel clocks a line
 PIC_LINE0, PIC_X0 = 46, 24   # picture (0, 0) = raster line 46, pixel clock 24
 BORDER = 16              # draw(): marks a border pixel, filled in later
-ROW0_REQ = 3876          # row 0 BUSRQ: FIRST_FETCH (MAME stic.h:51) - 1 line
+ROW0_REQ = 3926          # row 0 BUSRQ (VDR 0; TIMING_FIT F)
 ROW_PERIOD = 16 * LINE   # 912: one card row = 16 scanlines
-ROW_HOLD = 2 * LINE      # 114: request line + fetch line (wiki)
+ROW_HOLD = 107           # held 107 cycles, released at 4,033 + 912 r (TIMING_FIT F)
+FETCH_OFF = 50           # the row is copied at request + 50 (3,976 + 912 r), if granted by then
+ROW_REQS = CARD_ROWS     # 12 row requests whatever the vertical delay (no 13th; TIMING_FIT F)
 MAME_ROW_BUSRQ = 110     # MAME stic.h:48
-MAME_FIRST = 3933 - FRAME_BUSRQ   # MAME intv_m.cpp:673
+MAME_FIRST = 3933 - MAME_FRAME_BUSRQ   # MAME intv_m.cpp:673
 
 # picture layout (MAME stic.h:41-61)
 OV_L, OV_R, OV_T, OV_B = 13, 17, 12, 12
@@ -242,7 +252,9 @@ class Stic:
     def read(self, a, frame, open_):
         """CPU read of $0000-$003F (a = offset)."""
         if not open_:
-            return a                    # MAME intv_m.cpp:484-490
+            # MAME intv_m.cpp:484-490: the offset; the console reads $0000 (hw_frame2,
+            # docs/TIMING_FIT.md)
+            return a if self.mode == "mame" else 0
         if a == STIC_GMR:
             self.csmode = 1
         if a >= STIC_REGS:
@@ -274,15 +286,12 @@ class Stic:
     # -- BUSRQ (mode "stic") -------------------------------------------------
     def schedule(self, vdr):
         """[(kind, request cycle, release cycle, fetch cycle or None)] for a
-        frame with the display enabled, relative to the frame start."""
-        s = [("frame", VBLANK, VBLANK + FRAME_BUSRQ, None)]
-        r = 0
-        while True:
+        frame with the display enabled, relative to the frame start
+        (docs/TIMING_FIT.md, family F)."""
+        s = [("frame", FRAME_BUSRQ_AT, FRAME_BUSRQ_AT + FRAME_BUSRQ, None)]
+        for r in range(ROW_REQS):
             req = ROW0_REQ + 2 * LINE * vdr + ROW_PERIOD * r
-            if req + ROW_HOLD > FRAME:
-                break
-            s.append(("row%d" % r, req, req + ROW_HOLD, req + LINE))
-            r += 1
+            s.append(("row%d" % r, req, req + ROW_HOLD, req + FETCH_OFF))
         return s
 
     def busrq(self, cycle):
@@ -321,7 +330,7 @@ class Stic:
         while True:
             cur = self.cur
             if cur is not None:
-                if cur["defer"] and cur["start"] + VBLANK <= t:
+                if cur["defer"] and cur["start"] + WINDOW <= t:
                     self.window_end()
                 self._advance_rows(t)
             k = self.next_frame

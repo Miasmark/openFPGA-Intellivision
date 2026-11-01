@@ -15,7 +15,8 @@
 ;! expect s3: I=1
 ;! expect s4: I=0
 ;! expect done: R5=done I=0 R6=$0300
-;! cycles j1 s0 = 12
+; JSR: 13 cycles, S1's 12 plus the console fit F's one (docs/TIMING_FIT.md)
+;! cycles j1 s0 = 13
 ;! cycles s0 q1 = 7
         ORG     $5000
 start:  MVII    #$0300, R6

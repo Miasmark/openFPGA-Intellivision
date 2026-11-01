@@ -69,6 +69,7 @@ module tb_timing;
         // the load diagnostics (0.0.14): open file timed out, waiting for Ready to run's ok,
         // all complete seen, no 0x0082, a 0x008A, waiting for the fetch
         .fetch_to(3'b010), .tstate(4'd14), .d_ac(1'b1), .d_req(1'b0), .d_upd(1'b1), .d_phase(2'd1),
+        .rtr_gaveup(1'b0),      // 0.0.20's input (test pattern card 18): not given up
         .colour(colour)
     );
 

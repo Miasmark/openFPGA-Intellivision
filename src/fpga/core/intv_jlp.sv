@@ -171,20 +171,16 @@ module intv_jlp #(
     logic [15:0] cr_v = 16'd0;
 
     // ------------------------------------------------------------ flash
-    logic [15:0] store [12288];
+    // the store (intv_jlp_store: a true dual port; A the engine's, B the slot's, words inverted)
     logic [15:0] st_q;
     logic [13:0] st_a = 14'd0;
     logic        st_we = 1'b0;
     logic [15:0] st_d = 16'd0;
-    always_ff @(posedge clk) begin
-        if (st_we) store[st_a] <= st_d;
-        st_q <= store[st_a];
-    end
     logic [15:0] nv_qi;
-    always_ff @(posedge clk) begin
-        if (nv_we) store[nv_addr] <= ~nv_wdata;
-        nv_qi <= store[nv_addr];
-    end
+    intv_jlp_store flash (
+        .clk(clk),
+        .a_addr(st_a), .a_we(st_we), .a_d(st_d), .a_q(st_q),
+        .b_addr(nv_addr), .b_we(nv_we), .b_d(~nv_wdata), .b_q(nv_qi));
     assign nv_q = ~nv_qi;
 
     /* verilator lint_off UNUSEDSIGNAL */

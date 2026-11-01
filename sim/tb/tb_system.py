@@ -102,7 +102,7 @@ CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
-       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp_store.sv', 'intv_jlp.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
@@ -183,7 +183,12 @@ HW_IMAGES = [('hw_steal', ('hw', 'hw_steal'), None, 460, (0xFF, 0xFF), 'stic'),
              ('hw_intlate', ('hw', 'hw_intlate'), None, 230, (0xFF, 0xFF), 'stic'),
              ('hw_rowcopy', ('hw', 'hw_rowcopy'), None, 1150, (0xFF, 0xFF), 'stic'),
              ('hw_cpuodd', ('hw', 'hw_cpuodd'), None, 60, (0xFF, 0xFF), 'stic'),
-             ('hw_ecskeys', ('hw', 'hw_ecskeys'), None, 60, (0xFF, 0xFF), 'stic')]
+             ('hw_ecskeys', ('hw', 'hw_ecskeys'), None, 60, (0xFF, 0xFF), 'stic'),
+             ('hw_frame', ('hw', 'hw_frame'), None, 720, (0xFF, 0xFF), 'stic'),
+             ('hw_steal2', ('hw', 'hw_steal2'), None, 130, (0xFF, 0xFF), 'stic'),
+             ('hw_frame2', ('hw', 'hw_frame2'), None, 120, (0xFF, 0xFF), 'stic'),
+             ('hw_grant', ('hw', 'hw_grant'), None, 130, (0xFF, 0xFF), 'stic'),
+             ('hw_grantx', ('hw', 'hw_grantx'), None, 80, (0xFF, 0xFF), 'stic')]
 # step 10: the Intellivoice of an image: the menu override ('on', 'off'), level, DAC sound. Images
 # not listed run with it Off (the RTL's override 2; the model without one)
 VOICE_OF = {'voicetest': dict(ovr='on', level=4, dac=False),

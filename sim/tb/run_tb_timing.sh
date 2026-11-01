@@ -72,7 +72,7 @@ plant raster_run intv_timing.sv "        end else begin          // the raster n
 # the machine resumes at once instead of at its saved position
 plant nophase intv_timing.sv "    assign live    = run && {vcnt, hcnt, sub} == mpos;" "    assign live    = run;"
 # the picture not blanked while frozen
-plant noblank pocket_video.sv "p_rgb <= blank ? 24'd0 : pal_rgb;" "p_rgb <= pal_rgb;"
+plant noblank pocket_video.sv "p_rgb <= blank ? 24'd0" "p_rgb <= 1'b0 ? 24'd0"
 # an out-of-frame state word accepted: the machine would never resume
 plant ss_nocheck intv_timing.sv "else if (ss_we && ss_hit && ss_ok)" "else if (ss_we && ss_hit)"
 # live ignores sub: caught by the restore and by the skewed VBlank freeze

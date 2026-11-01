@@ -5,8 +5,8 @@ owner's Model 2609 (PiRTO II, CRT) on the hardware measurement cartridges of doc
 hw_steal (1), hw_intlate (2), hw_rowcopy (3), hw_steal2 (7), hw_frame / hw_frame2 (6, 9),
 hw_grant / hw_grantx (10, 11). The fit runs the Python model as a simulator with what-if
 options (a copy of the tools outside the repository) and searches its parameters against all
-console screens together. Nothing here is in the model or the RTL yet; this is the list of
-what to change.
+console screens together. The model (modes `stic` and `none`) and the RTL follow F since
+2026-11-01 (branch timingF; "Changes to make" below, as done; mode `mame` unchanged).
 
 ## The fitted family F
 
@@ -48,6 +48,17 @@ the same loops count normally in hw_grantx; hw_grant alone writes into its cartr
   relative to INTRM).
 
 ## Changes to make
+
+Done on branch timingF (2026-11-01) as listed, with these details: the STIC's positions are
+folded one cycle later against INTRM (INTRM stays 0-3,789; the register window is 0-3,790);
+the fetch is at request + 50 (`FETCH_OFF`); the CPU's extra cycle is a NACT at the end of the
+whole jump family ($004), PULR R7 (with or without SDBD) and SDBD + MVI@ R4 or R5, R7, in the
+model's timing `f` (timing `doc` keeps the documents' counts for the MAME comparisons); closed
+GRAM reads give $0000 as the STIC's; the RTL's card engine builds a line at pixel clocks
+176-195 of the line before (after the row copy, now at the line's slot 43); no new save state
+(the STIC's `en_l` is the window's latch, the CPU's `jpt` marks a read's extra cycle).
+On the model, hw_frame (section 6 of HW_TESTS) does not show F's "NO EDGE": with a late $20
+write leaving the registers open, its polls see "open" at once and count one pass a frame.
 
 **Model** (tools/):
 - stic.py: rows 12 with any VDR (`schedule`: no 13th request); ROW0_REQ 3,926, ROW_HOLD 107

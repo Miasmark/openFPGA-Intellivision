@@ -85,6 +85,21 @@ accounts for every cycle.
 Where the three extra cycles of a stack read sit inside the instruction is
 not documented; the model puts them before the read (estimated).
 
+**The console's counts (family F, 2026-11-01).** The timing fit of
+docs/TIMING_FIT.md (the owner's Model 2609 on the cartridges of
+docs/HW_TESTS.md) needs three instructions one cycle longer than all the
+documents: SDBD + MVI@ R4, R7 15 cycles with the SDBD, not 14 (hw_frame2's
+SDBD JUMP; the EXEC dispatcher's jump), and two more cycles on the interrupt
+path (hw_steal's display-off count), modelled as JSR 13 and PULR R7 (MVI@ R6,
+R7) 12: every ISR has one of each. The model's timing `f` (the default, and
+cp1610.sv) adds one NACT at the end of: the whole $004 family (J, JE, JD,
+JSR, JSRE, JSRD: the fit lengthened them all), PULR R7 (with or without
+SDBD), and SDBD + MVI@ R4 or R5, R7 (`f_extra`). Which other loads into R7
+are longer, and whether the two interrupt-path cycles are in JSR / PULR R7
+or in an 11-cycle interrupt sequence, is not observable (TIMING_FIT). The
+model's timing `doc` keeps the documents' counts for the MAME comparisons
+(MAME's CPU runs them: mode `mame`, `mame_compare`, `lockstep.py`).
+
 ### Interruptibility, interrupts, bus requests
 
 - Not interruptible: HLT SDBD EIS DIS TCI CLRC SETC, all shifts and SWAP,
@@ -287,7 +302,12 @@ bus phase per `ce` (one CPU cycle). No tristate: a 3-bit phase code
   instruction's effect lands at its last cycle, pointer updates at the
   decode (the model's order: pointer first, then the result, so
   `MVI@ R4, R4` gives the data and `ADD@ R5, R5` adds to the incremented
-  pointer). Cycle counts are the model's.
+  pointer). Cycle counts are the model's (timing `f`): a jump goes from
+  its last word's NACT to `S_IDLE` for F's extra NACT and ends there; PULR
+  R7 and SDBD + MVI@ R4 / R5, R7 write R7 at the read, as before, then
+  take the same `S_IDLE` cycle, marked by `jpt` (a read's "done" flag in
+  that cycle; cleared at a read's decode), so the state layout is
+  unchanged.
 - **Reset.** One IAB cycle loads the PC (S1 p.21), then the first fetch.
   The model does not count that cycle; its cycle 0 is the fetch's BAR.
 - **Request lines** (active high in the core) are sampled at the `ce`
@@ -373,7 +393,11 @@ that was not), since BUSAK stays low from one wait into the next.
 `run_cpu_tests.py`'s opcode sweep holds every opcode's cycles against two
 independent transcriptions: `doc_cycles` (S1 and the wiki) and
 `tools/g82_cycles.py` (G82 p.45 and the double byte data listings, p.52-53,
-whose 14 cycles are SDBD's 4 plus 10). All 1,420 cases agree with both.
+whose 14 cycles are SDBD's 4 plus 10). All 1,420 cases agree with both in
+timing `doc`; in timing `f` they agree with both plus the sweep's own
+transcription of TIMING_FIT F (the jumps, PULR R7, SDBD + MVI@ R4 / R5, R7:
++1). Three hand-written expectations take F's counts (interrupts.asm,
+irq_mask.asm, jumps.asm: noted there).
 
 ## Assembler
 

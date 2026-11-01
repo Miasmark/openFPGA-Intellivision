@@ -25,8 +25,13 @@ MAME's STIC timing constants are "based on Joe Zbiciak's documentation"
 class (MAME stic.cpp:1139-1201), a write to $20 sets the handshake for the
 current frame, frame start clears it (MAME stic.cpp:1111-1116, 1270-1274),
 reading $21 selects Color Stack mode and writing it Foreground/Background
-(WIKI STIC; S9 stic.txt:339, 447), closed accesses read the offset and drop
-writes (MAME intv_m.cpp:484-512), open = bus-copy window or handshake clear.
+(WIKI STIC; S9 stic.txt:339, 447). Mode `mame`: closed accesses read the
+offset and drop writes (MAME intv_m.cpp:484-512), open = bus-copy window or
+handshake clear. Modes `stic` and `none` (the console fit F of
+docs/TIMING_FIT.md, 2026-11-01): closed reads give $0000 (hw_frame2), open =
+the register window (cycles 0-3,790) or the frame's display off: closed
+only from the window's end to the frame's end in a frame whose handshake
+was set at the window's end, so a later $20 write does not close them.
 A MOB's own collision bit always reads 0 (MAME stic.cpp:1258-1266).
 
 **Background.** BACKTAB words reach the STIC through System RAM's 20-word row
@@ -65,15 +70,19 @@ stic.h:39-61, all "approximate" there), so model pictures and MAME snapshots
 compare pixel for pixel. The RTL's raster placement is decided in the RTL
 work, against GI80's 167 x 105 object grid (see D14).
 
-**Timing**, in CPU cycles from the frame start (SR1 / VBlank start, cycle 0),
-mode `stic` (the hardware model):
+**Timing**, in CPU cycles from the frame start (SR1 / VBlank start = INTRM,
+cycle 0), mode `stic` (the hardware model). Since 2026-11-01 it is the
+console fit F (docs/TIMING_FIT.md: the owner's Model 2609 on the hardware
+measurement cartridges of docs/HW_TESTS.md); the documents' figures it
+replaced are in brackets and in section 2:
 
 | Event | Cycles | Source |
 |---|---|---|
-| INTRM held, bus-copy window | 0-3,789 | MAME stic.h:50; step 3 (DESIGN 2.4) |
-| frame BUSRQ (ends bus copy on hardware) | request 3,790-3,831 if the display is enabled at 3,790 | MAME stic.h:49 ("approximate"); GI80 p.5-10 (13 or 14 SR2 per frame) |
-| row fetch r BUSRQ | request from R = 3,876 + 114 x VDR + 912 x r for 114 cycles, while R + 114 <= 14,934 (12 rows; 13 when VDR = 0) | WIKI STIC_Bus_Request (one scanline of warning, then the fetch line); MAME stic.h:51 (first fetch 3,933 = R + 57); GI80 p.5-10 |
-| row r copied | at the CPU's BUSAK if that comes by R + 57 (the fetch line); else the FIFO keeps the previous row | WIKI STIC_Bus_Request; GI80 p.5-18 |
+| INTRM held | 0-3,789 | MAME stic.h:50; step 3 (DESIGN 2.4) |
+| register window (bus copy); display enable and VDR latched at its end | 0-3,790 [0-3,789] | F (the STIC one cycle later against INTRM than MAME's events) |
+| frame BUSRQ (ends bus copy on hardware) | request 3,792-3,891 if the display is enabled [3,790-3,831] | F (hw_steal2, hw_steal, hw_rowcopy) [MAME stic.h:49, "approximate"] |
+| row fetch r BUSRQ | request from R = 3,926 + 114 x VDR + 912 x r for 107 cycles, r = 0-11 with any VDR [3,876 + ..., 114 cycles, 13 rows with VDR = 0] | F (hw_steal, hw_steal2, hw_intlate, hw_rowcopy) [WIKI STIC_Bus_Request; MAME stic.h:51; GI80 p.5-10] |
+| row r copied | at the CPU's BUSAK if that comes by R + 50 (3,976 + 912 r) [R + 57]; else the FIFO keeps the previous row | F (the deadline; the CPU is stopped from its grant to the release, so the copy point itself is not seen); WIKI STIC_Bus_Request; GI80 p.5-18 |
 | FIFO address counter | 0 at INTAK, +20 per loaded row | GI80 p.5-18 |
 | frame drawn | at the next frame start, with the registers, GRAM and colour-stack mode of that moment and the rows loaded during the frame; border pixels from $2C as it was at each pixel (D17), so the picture is complete at line 24 of the next frame | registers and GRAM are closed during the display when it is enabled, so this equals drawing line by line |
 
@@ -105,16 +114,16 @@ documented; the log lists each card's 8 bytes once (D15).
 
 | # | Topic | Sources | Model |
 |---|---|---|---|
-| T1 | BUSRQ cycles per card row | MAME 110 (stic.h:48); WIKI 114 (DESIGN 2.4, L-WIKI); WIKI STIC_Bus_Request: requested one scanline ahead, released when the row is loaded (= 2 x 57) | request held 114 cycles; the CPU loses 114 minus its latency to the next interruptible boundary (MAME's 110 looks like 114 minus an average latency of 4), plus, since build step 9b, the 2 NACT cycles after each wait (S1 p.36, G82 Fig. 16; docs/CPU_NOTES.md) |
+| T1 | BUSRQ cycles per card row | MAME 110 (stic.h:48); WIKI 114 (DESIGN 2.4, L-WIKI); WIKI STIC_Bus_Request: requested one scanline ahead, released when the row is loaded (= 2 x 57); the console (TIMING_FIT F): the CPU resumes at 4,035 + 912 r | 107 cycles from 3,926 + 912 r, then the 2 NACT cycles of the exit (S1 p.36, G82 Fig. 16; docs/CPU_NOTES.md); until 2026-11-01 114 cycles from 3,876 + 912 r |
 | T2 | Does the CPU lose the BUSRQ cycles at all in MAME? | MAME subtracts 12 x 110 + 42 (+ 110 when VDR = 0) with `adjust_icount` in the vblank interrupt (intv_m.cpp:668, 680), but `adjust_icount` acts only while the CPU is executing (diexec.h:159) and the vblank callback runs from a timer between time slices; MAME's traces show every instruction at its own cycle count and about 14,934.7 CPU cycles between vblanks (docs/CPU_NOTES.md "MAME lockstep"; step-4 traces: Beamrider 200 frames, no gap anywhere) | mode `mame` steals nothing (to follow MAME's traces); mode `stic` steals as the hardware should; jzIntv, run as a black box, steals them and mostly follows mode `stic` where it parts from MAME (section 7) |
-| T3 | Extra row fetch with VDR = 0 | MAME +110 cycles (intv_m.cpp:678-681); S9 14,934 - 13,518 = 1,416, i.e. +54 over VDR > 0 (interrupts.txt:126-128); GI80 p.5-10: SR2 "thirteen or fourteen times per picture frame depending on picture offset" | a 13th request when it fits before the frame end (VDR = 0 only): about +110, as MAME |
-| T4 | Frame BUSRQ | MAME 42 cycles "just after end of vblank and before first row fetch (approximate)" (stic.h:49); no other source gives a figure; GI80's 13/14 SR2 per frame fits 12/13 row fetches plus one | 42-cycle request at 3,790 when the display is enabled |
-| T5 | When rows are copied | MAME's row timers fire at vblank + 3,891 + 114 x VDR + 802 x r *real* time (intv_m.cpp:672-675): the stolen cycles are taken off a real-time delay, so row 11 lands at 12,713 instead of 3,933 + 11 x 912 = 13,965 | `stic`: 3,933 + 114 x VDR + 912 x r (the BUSAK cycle); `mame`: MAME's times. Visible only when a program writes BACKTAB during the display |
-| T6 | VBlank windows | STIC registers ~2,000 (S9 interrupts.txt:64) or ~2,900 (WIKI VBlank_Period_1); GRAM/GROM 3,780-3,790 (S9 interrupts.txt:63, 130), ~3,796 (WIKI VBlank_Period_2), 3,790 (MAME stic.h:50); both open the whole frame while the display is not enabled (WIKI) | 3,790 for both, as step 3 (DESIGN 13.4 stays open: own test ROM) |
+| T3 | Extra row fetch with VDR = 0 | MAME +110 cycles (intv_m.cpp:678-681); S9 14,934 - 13,518 = 1,416, i.e. +54 over VDR > 0 (interrupts.txt:126-128); GI80 p.5-10: SR2 "thirteen or fourteen times per picture frame depending on picture offset"; the console (TIMING_FIT F: hw_intlate, hw_steal, hw_steal2): none | 12 requests with any VDR (F); until 2026-11-01 a 13th when it fitted (VDR = 0) |
+| T4 | Frame BUSRQ | MAME 42 cycles "just after end of vblank and before first row fetch (approximate)" (stic.h:49); no other source gives a figure; GI80's 13/14 SR2 per frame fits 12/13 row fetches plus one; the console (TIMING_FIT F): 100 cycles, separate from row 0's | 3,792-3,891 when the display is enabled (F); until 2026-11-01 42 cycles from 3,790 |
+| T5 | When rows are copied | MAME's row timers fire at vblank + 3,891 + 114 x VDR + 802 x r *real* time (intv_m.cpp:672-675): the stolen cycles are taken off a real-time delay, so row 11 lands at 12,713 instead of 3,933 + 11 x 912 = 13,965; the console (hw_rowcopy): min(19, 24 - step) | `stic`: the BUSAK cycle, by 3,976 + 114 x VDR + 912 x r (F; 3,933 + ... until 2026-11-01); `mame`: MAME's times. Visible only when a program writes BACKTAB during the display |
+| T6 | VBlank windows | STIC registers ~2,000 (S9 interrupts.txt:64) or ~2,900 (WIKI VBlank_Period_1); GRAM/GROM 3,780-3,790 (S9 interrupts.txt:63, 130), ~3,796 (WIKI VBlank_Period_2), 3,790 (MAME stic.h:50); both open the whole frame while the display is not enabled (WIKI); the console (hw_frame2): $2C closed mid-frame with the display on, open with it off and after a late $20 write | 3,791 for both (cycles 0-3,790, F), and the whole frame when the display is off; until 2026-11-01 3,790, and closed whenever the handshake was set |
 | T7 | INTRM length | 3,790 (MAME stic.h:50); "exactly 3,791" (WIKI VBlank_Interrupt) | 3,790 (step 3) |
 | T8 | Bus copy start and end | System RAM enters bus copy on INTAK and leaves it at the first BUSAK (GI80 p.5-18; WIKI Bus_Copy); MAME: from the vblank for 3,790 cycles, whether or not the CPU takes the interrupt (intv_m.cpp:643-647, 665, 669) | the first 3,790 cycles of the frame (step 3's decision, kept; DESIGN 13.4) |
 | T9 | FIFO address counter reset | at the decoded interrupt (INTAK) (GI80 p.5-18); MAME: at every vblank (intv_m.cpp:666) | `stic`: INTAK; `mame`: vblank. With interrupts off for a frame the hardware counter is not reset; past System RAM the model reads $3FFF (the real counter's width is unknown) |
-| T10 | Rows when the CPU does not acknowledge | the FIFO replays the previous row, pushing the picture down (WIKI STIC_Bus_Request); a late BUSAK during the fetch line would load part of a row (GI80: SR3 copies a card only while BUSAK is low) | all or nothing at the fetch cycle (R + 57); a partial row is not modelled |
+| T10 | Rows when the CPU does not acknowledge | the FIFO replays the previous row, pushing the picture down (WIKI STIC_Bus_Request); a late BUSAK during the fetch line would load part of a row (GI80: SR3 copies a card only while BUSAK is low) | all or nothing at the fetch cycle (R + 50, F; R + 57 until 2026-11-01); a partial row is not modelled |
 | T11 | Frame length | 14,934 = 57 x 262 cycles (S9; DESIGN 2.4); MAME: 59.92 Hz at 894,886 Hz = 14,934.68 cycles (intv.cpp:445, 456), so MAME's frames drift 0.68 cycles a frame against the hardware's | `stic`/`none`: 14,934 (RTL timing); `mame`: MAME's, frame k at the first boundary at or after floor(k x 14,934.68) |
 | T12 | CPU clock | 3,579,545 / 4 = 894,886.25 Hz; MAME's device clock is the integer 894,886 Hz | MAME's figure inside `MameTiming` only |
 
@@ -124,10 +133,10 @@ documented; the log lists each card's 8 bytes once (D15).
 |---|---|---|---|
 | D6 | Colour of the strip uncovered by a horizontal/vertical delay | S9: the object field outside the 20 x 12 cards "is filled in with the background color, as defined by the given display mode" (stic.txt:121-125, 150-154); MAME draws the border colour over it (stic.cpp:1104, 1106: the left/top border boxes are 13 + HDR / 12 + VDR wide) | border colour (MAME). Not covered by a MAME match that can tell them apart; settle with our own STIC test ROM on hardware |
 | D7 | Picture when the display is not enabled | S9: "the display will blank" (interrupts.txt:74-76); MAME fills the frame with the border colour (stic.cpp:1132-1135) | border colour (MAME); hardware colour unknown (black is as likely) |
-| D8 | When a write to $20 enables the display | S9 and WIKI: during VBlank period 1; MAME: any write while the STIC is open, including during the display of a frame that is not enabled (the handshake is clear, so the registers are open) | MAME (step 3). In mode `stic` the BUSRQ schedule is fixed at cycle 3,790, so a frame enabled later fetches no rows and shows the FIFO's last row |
+| D8 | When a write to $20 enables the display | S9 and WIKI: during VBlank period 1; MAME: any write while the STIC is open, including during the display of a frame that is not enabled (the handshake is clear, so the registers are open) | modes `stic` / `none`: the handshake at the window's end (cycle 3,790) is the frame's display enable; a later write leaves the frame blank, with no row fetches, and the registers open (hw_frame2, TIMING_FIT F) |
 | D9 | Mode select through $4021/$8021/$C021 | an access to any alias reaches the STIC (WIKI Bus_Copy; DESIGN 2.6); MAME maps the STIC at $0000-$003F only | aliases switch the mode (step 3); the EXEC with no cartridge writes them (D18) |
 | D10 | GRAM at reset | MAME clears the first 64 bytes of GRAM on every reset (stic.cpp:487-491); RAM keeps its contents through a reset on hardware (no source says otherwise) | GRAM kept (power-on: zero) |
-| D11 | 13th row fetch (VDR = 0) | GI80/S9 imply it; MAME fetches 12 rows | `stic`: loads System RAM $02F0-$0303 into the FIFO (counter at 240), never shown |
+| D11 | 13th row fetch (VDR = 0) | GI80/S9 imply it; MAME fetches 12 rows; the console fits 12 (TIMING_FIT F) | none since 2026-11-01 (until then `stic` loaded System RAM $02F0-$0303 into the FIFO, never shown) |
 | D12 | Unmasked colour-stack value in Colored Squares | MAME uses the whole stored register value for colour 7 (stic.cpp:684: `m_stic_registers[]` holds the unmasked write); its palette maps it back to colour & 15 (intv.cpp:92-119) | 4-bit register value; same pixels |
 | D13 | 160th pixel column | not displayed (GI80 p.5-10; WIKI STIC); MAME covers it with the right border | right border from x = 13 + 159 |
 | D14 | Picture framing | GI80: object grid 167 x 105 (NTSC) of which 159 x 96 visible; MAME overscan 13/17/12/12 "approximate" (stic.h:39-44) | MAME's framing for the comparison; RTL to decide |
@@ -289,8 +298,9 @@ Commands (lane scripts outside the repository drive these):
 ## 4 The RTL (build step 4)
 
 `src/fpga/core/intv_stic.sv` replaces the step-3 register stub
-(`intv_stic_regs.sv`; its read masks, handshake, mode latch and closed
-accesses are kept unchanged). It follows the model in modes `stic` (BUSRQ
+(`intv_stic_regs.sv`; its read masks, handshake and mode latch are kept;
+closed accesses as the console since TIMING_FIT F: reads $0000, open =
+window or the frame's display off). It follows the model in modes `stic` (BUSRQ
 on, as the core runs) and `none` (`busrq_en` = 0, benches only).
 
 **Timing as built** (CPU cycles from the frame start, 57 a line; the frame
@@ -298,11 +308,11 @@ position is the raster's, `intv_timing`):
 
 | What | When | Notes |
 |---|---|---|
-| frame latches: display enable, VDR | the ce that ends cycle 3,789, after that cycle's write | the model's `window_end` |
-| frame BUSRQ | 3,790-3,831 when enabled | T4 |
-| row r BUSRQ | lines 68 + 2 VDR + 16 r and the next, while they fit (12 rows, 13 with VDR = 0) | T1, T3 |
-| row r copy | the start of line 69 + 2 VDR + 16 r, if BUSAK is low in that cycle (or BUSRQ is off): 20 words from System RAM's port B, two clk_sys a word, done 41 clk_sys after the cycle starts (the CPU's next write could come at 48) | T10: all or nothing |
-| card engine | pixel clocks 8-27 of line L build line L + 1 into a two-bank line buffer, one card a pixel clock: row-buffer word, GROM / GRAM byte, colours, stack | |
+| frame latches: display enable, VDR | the ce that ends cycle 3,790 (`WIN_CYCLES` - 1), after that cycle's write | the model's `window_end`; the display enable is also the register window's latch (`open = vb \|\| !en_l`) |
+| frame BUSRQ | 3,792-3,891 when enabled (`FRAME_RQ_AT`, `FRAME_RQ`) | T4 |
+| row r BUSRQ | 107 slots (`ROW_HOLD`) from slot 50 (`REQ_SLOT`) of line 68 + 2 VDR + 16 r, r = 0-11 (`ROWS`) | T1, T3 |
+| row r copy | slot 43 of line 69 + 2 VDR + 16 r (`ROW_FETCH` = 50 after the request), if BUSAK is low in that cycle (or BUSRQ is off): 20 words from System RAM's port B, two clk_sys a word, done 41 clk_sys after the cycle starts (the CPU's next write could come at 48) | T10: all or nothing |
+| card engine | pixel clocks 176-195 (`E0`; 8-27 until TIMING_FIT F moved the copy to slot 43) of line L build line L + 1 into a two-bank line buffer, one card a pixel clock: row-buffer word, GROM / GRAM byte, colours, stack | |
 | picture | line buffer shown from pixel clock 37 (playfield x 0) of lines 70-261; border elsewhere | D14 below |
 | border pixels | register $2C live: a write in cycle t shows from pixel clock 4 t + 5 | D17 |
 
@@ -311,8 +321,8 @@ cannot depend on what the CPU does after it is shown. Where MAME's
 draw-at-vblank and the hardware can differ, the RTL (and the model in
 modes `stic` / `none`) takes:
 
-- the display enable at the end of the VBlank window: a $20 write after
-  cycle 3,789 leaves that frame blank (D8; MAME draws it). This is the
+- the display enable at the end of the register window: a $20 write after
+  cycle 3,790 leaves that frame blank (D8; MAME draws it). This is the
   first enabled frame of most games (one picture);
 - the border colour live, pixel by pixel (D17): a write in VBlank shows
   from that pixel on, in the lower border of the picture before (picture
@@ -320,7 +330,7 @@ modes `stic` / `none`) takes:
   in a blank frame the CPU may change it anywhere. The model therefore
   hands a picture out only at line 24 of the next frame;
 - CSR, HDR, CBR, the mode and GRAM live: closed to the CPU from cycle
-  3,790 when the display is enabled, unused when it is not.
+  3,791 when the display is enabled, unused when it is not.
 
 Mode `mame` keeps MAME's semantics, so the MAME comparisons of section 3
 are unchanged.
@@ -328,7 +338,7 @@ are unchanged.
 **Framing (D14).** RTL picture n (the model's numbering) is raster lines
 46-261 of frame n - 1 and 0-23 of frame n, pixel clocks 24-212: MAME's
 13/17 pixel and 24/24 line border around the 159 x 192 playfield, which
-starts at pixel clock 37 and line 70 (the first fetch, 3,933, is line 69).
+starts at pixel clock 37 and line 70 (the first fetch, 3,976, is line 69).
 The Pocket shows the playfield (160 x 192, slot 0) or the playfield with 3
 pixels left, 4 right and 9 lines above and below (167 x 210, slot 1;
 `pocket_video`); the bottom border lines are the next frame's VBlank lines
@@ -408,7 +418,7 @@ stic.cpp:539-603, 777-851, 1111-1131):
 **When the bits are set.** The hardware sets them while it draws the
 frame; MAME sets them all at its vblank, when it draws the frame (stic.cpp:1111-1131). The model ORs them in when
 it draws the frame (modes `stic` and `none`: at the frame's end; mode `mame`: at MAME's vblank boundary). With
-the display enabled the registers are closed from cycle 3,790 to the frame's
+the display enabled the registers are closed from cycle 3,791 to the frame's
 end, so the CPU cannot tell the two apart; with the display not enabled
 nothing is drawn and no bit is set (MAME screenrefresh does the same,
 stic.cpp:1132-1135). The RTL may set them pixel by pixel.
@@ -551,8 +561,8 @@ sources go (section 6).
 `none`; 5.1, M1-M5) pixel for pixel and bit for bit. How it is built:
 
 **When the registers are read.** MOBs and collisions exist only in frames
-whose display is enabled at the end of the VBlank window. From then
-(cycle 3,790) to the frame's end the MOB registers, HDR / VDR / CBR, the
+whose display is enabled at the end of the register window. From then
+(cycle 3,791) to the frame's end the MOB registers, HDR / VDR / CBR, the
 mode and GRAM are closed to the CPU, so whatever the RTL reads in that time
 is what the model's `draw()` reads at the frame's end. Picture lines 8-23
 (raster 54-69) and the lines below the raster can hold MOB pixels too, but

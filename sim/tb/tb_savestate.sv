@@ -531,7 +531,7 @@ module tb_savestate;
             int k;
             k = 0;
             while (!core.ssc.ss_en && k < 40 * 14934 * 48) begin @(negedge clk); k++; end
-            for (int i = 0; i < 12288; i++) fl_snap[i] = core.machine.jlp.store[i];
+            for (int i = 0; i < 12288; i++) fl_snap[i] = core.machine.jlp.flash.store[i];
             fe_snap = core.machine.jlp.empt;
             fl_took = 1'b1;
         end join_none
@@ -661,7 +661,7 @@ module tb_savestate;
             logic [127:0] fe [1];
             $readmemh({fname, ".flash"}, fl_snap);
             $readmemh({fname, ".empt"}, fe);
-            for (int i = 0; i < 12288; i++) core.machine.jlp.store[i] = fl_snap[i];
+            for (int i = 0; i < 12288; i++) core.machine.jlp.flash.store[i] = fl_snap[i];
             core.machine.jlp.empt = fe[0];
         end
         host_on();

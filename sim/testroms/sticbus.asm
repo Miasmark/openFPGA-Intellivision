@@ -32,10 +32,12 @@
 ;     of f = 9 then returns into dla and that of f = 17 into dlb: a fixed
 ;     delay, then 12 shifts and a branch. The CPU cannot stop after a
 ;     shift, so it acknowledges the row request that came during the
-;     shifts at the end of the branch: exactly the fetch cycle R + 57 of
-;     row 0 in dla (frame 10, VDR 4: the row loads) and R + 58 in dlb
+;     shifts at the end of the branch: exactly the fetch cycle R + 50 of
+;     row 0 in dla (frame 10, VDR 4: the row loads) and R + 51 in dlb
 ;     (frame 19, VDR 0: the row is missed). The constants are tuned with
-;     the model; tb_system checks that both happen (STICBUS_DEADLINE).
+;     the model (retuned for the console fit F, docs/TIMING_FIT.md: the
+;     deadline was R + 57); tb_system checks that both happen
+;     (STICBUS_DEADLINE).
 ; SPDX-License-Identifier: MIT
 
         ROMW    10
@@ -203,19 +205,17 @@ del:    DECR    R2
 
 ; the deadline tests (see the header)
 sloop:  B       sloop
-dla:    MVII    #247, R2        ; tuned: the block ends at a row's R + 57
+dla:    MVII    #246, R2        ; tuned: the block ends at a row's R + 50
 dla_d:  DECR    R2
         BNEQ    dla_d
+        NOP                     ; 12 cycles: tuned (TIMING_FIT F: the deadline R + 50)
         NOP
-        NOP
-        CLRC                    ; 4 cycles: tuned (build step 9b: 2 NACT after each bus request)
         BNEQ    dla             ; not taken (7 cycles)
         B       dl_blk
-dlb:    MVII    #217, R2        ; tuned: the block ends at a row's R + 58
+dlb:    MVII    #216, R2        ; tuned: the block ends at a row's R + 51
 dlb_d:  DECR    R2
         BNEQ    dlb_d
-        CLRR    R1              ; 6 cycles: tuned (build step 9b: 2 NACT after each bus request)
-dl_blk: SLL     R0
+dl_blk: SLL     R0, 2           ; 74 cycles of shifts (one of 8: the two cases tune 1 cycle apart)
         SLL     R0
         SLL     R0
         SLL     R0

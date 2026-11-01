@@ -68,7 +68,8 @@
 module intv_machine #(
     parameter int         H_TOTAL   = 228,
     parameter int         V_TOTAL   = 262,
-    parameter int         VB_CYCLES = 3790,
+    parameter int         VB_CYCLES = 3790,     // INTRM
+    parameter int         WIN_CYCLES = 3791,    // the STIC's register window (TIMING_FIT F)
     parameter logic [7:0] SS_CPU  = 8'h02,
     parameter logic [7:0] SS_BUS  = 8'h03,
     parameter logic [7:0] SS_STIC = 8'h04,
@@ -199,7 +200,7 @@ module intv_machine #(
         .ebca, .ebci(1'b0), .tci, .pcit, .halted, .fetch,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_cpu));
 
-    intv_bus #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .VB_CYCLES(VB_CYCLES),
+    intv_bus #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .VB_CYCLES(VB_CYCLES), .WIN_CYCLES(WIN_CYCLES),
                .SS_ID(SS_BUS)) bus (
         .clk, .mreset, .ce, .hcnt, .vcnt, .hold, .frame_end,
         .phase, .dout, .din, .intrm,
@@ -214,7 +215,7 @@ module intv_machine #(
     assign exec_addr = addr[11:0];
     assign grom_addr = addr[10:0];
 
-    intv_stic #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .VB_CYCLES(VB_CYCLES),
+    intv_stic #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .WIN_CYCLES(WIN_CYCLES),
                 .SS_ID(SS_STIC), .SS_ROW(SS_ROW), .SS_LINE(SS_LINE)) stic (
         .clk, .reset(mreset), .ce, .ce_pix, .live, .hcnt, .vcnt,
         .vb, .frame_end, .a(addr), .wdata(dout), .rd, .we(stic_we),

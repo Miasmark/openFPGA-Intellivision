@@ -32,16 +32,19 @@
 //   $00E0-$00E3, $00F0-$00FF, $4000-$47FF
 //                           the ECS when attached (intv_ecs: ecs_hit,
 //                           ecs_q); the cartridge does not answer there
-// STIC registers and GRAM are open to the CPU in the bus-copy window
-// (VBlank) or while the STIC handshake is clear; otherwise a read gives
-// the address offset and a write is dropped (MAME intv_m.cpp:484-512).
+// STIC registers and GRAM are open to the CPU as intv_stic says
+// (stic_open: in the register window, and all frame when the frame's
+// display is off: the console fit F, docs/TIMING_FIT.md); otherwise a read
+// gives $0000 (the console, hw_frame2; MAME: the address offset,
+// intv_m.cpp:484-512) and a write is dropped.
 //
 // Frame timing. vcnt / hcnt are the machine's position (intv_timing; they
 // are only used under ce, i.e. while the machine is live). A frame is
 // V_TOTAL x H_TOTAL / 4 CPU cycles, slot 0 the first CPU cycle of VBlank
 // (vcnt 0). INTRM is held during the first VB_CYCLES slots (DESIGN 2.4:
-// 3,790; MAME stic.h:50), and that is the bus-copy window too (MAME
-// intv_m.cpp:660-666). The CPU samples its request lines at the ce that
+// 3,790; MAME stic.h:50); the STIC's register window (vb) is one slot
+// longer, WIN_CYCLES = 3,791 (the console fit F: the STIC's events one
+// cycle later against INTRM than MAME's). The CPU samples its request lines at the ce that
 // starts a cycle (cp1610.sv), so intrm gives the value for the slot after
 // the one ending; vb is the window of the slot now running. Both come from
 // the position alone, so they need no state.
@@ -76,7 +79,8 @@
 module intv_bus #(
     parameter int         H_TOTAL   = 228,      // pixel clocks per line
     parameter int         V_TOTAL   = 262,      // lines per frame
-    parameter int         VB_CYCLES = 3790,     // INTRM / bus-copy window
+    parameter int         VB_CYCLES = 3790,     // INTRM
+    parameter int         WIN_CYCLES = 3791,    // the STIC's register window (TIMING_FIT F)
     parameter logic [7:0] SS_ID     = 8'h03
 ) (
     input  wire logic        clk,
@@ -100,7 +104,7 @@ module intv_bus #(
     output logic [15:0]      a,               // latched address
     output logic             rd,              // ce of a read phase (DTB, ADAR)
     output logic             wr,              // ce of DW
-    output logic             vb,              // bus-copy window, this slot
+    output logic             vb,              // the register window, this slot
     output logic             scr_we, psg_we, sys_we, gram_we, stic_we,
 
     // from the devices
@@ -150,7 +154,7 @@ module intv_bus #(
     wire logic        last = slot == 16'(FRAME - 1);
     wire logic        vb_next = last || slot < 16'(VB_CYCLES - 1);
     assign intrm     = vb_next;
-    assign vb        = slot < 16'(VB_CYCLES);
+    assign vb        = slot < 16'(WIN_CYCLES);
     assign frame_end = ce && last;
 
     // -------------------------------------------------------------- decode
@@ -184,7 +188,7 @@ module intv_bus #(
             if (sel_sys)  din &= sys_q;
             if (sel_exec) din &= {6'd0, exec_q};
             if (sel_grom) din &= {8'hFF, grom_q};
-            if (sel_gram) din &= stic_open ? {8'h00, gram_q} : {7'd0, a[8:0]};
+            if (sel_gram) din &= stic_open ? {8'h00, gram_q} : 16'd0;   // closed: $0000 (TIMING_FIT)
             if (cart_hit) din &= cart_q;
             if (ecs_hit)  din &= ecs_q;
         end
@@ -247,7 +251,8 @@ module intv_bus #(
     end
 
     initial begin
-        if (H_TOTAL % 4 != 0 || VB_CYCLES < 2 || VB_CYCLES >= V_TOTAL * (H_TOTAL / 4))
+        if (H_TOTAL % 4 != 0 || VB_CYCLES < 2 || VB_CYCLES >= V_TOTAL * (H_TOTAL / 4)
+            || WIN_CYCLES < VB_CYCLES || WIN_CYCLES >= V_TOTAL * (H_TOTAL / 4))
             $error("intv_bus: parameter out of range");
     end
 

@@ -8,37 +8,44 @@
 // the jzIntv documentation; MAME stic.cpp / intv_m.cpp read for facts only,
 // BSD-3, no code) and every place where the sources disagree.
 //
-// CPU side (unchanged from the step-3 stub intv_stic_regs): the registers
-// read and write as MAME's stic_device::read / write do (MAME
-// stic.cpp:1139-1309); a write to $20 sets the handshake for the frame and
-// the frame's end clears it (stic.cpp:1111-1116, 1270-1274); open = vb ||
-// !handshake (MAME intv_m.cpp:484-512); closed reads give the offset and
-// closed writes are dropped; a register keeps only the bits it reads back
+// CPU side: the registers read and write as MAME's stic_device::read /
+// write do (MAME stic.cpp:1139-1309); a write to $20 sets the handshake for
+// the frame and the frame's end clears it (stic.cpp:1111-1116, 1270-1274).
+// The register window (the console fit F, docs/TIMING_FIT.md; hw_frame2):
+// open = vb || !en_l, i.e. in the window (slots 0 .. WIN_CYCLES - 1) and all
+// frame in a frame whose display is off; closed from the window's end to
+// the frame's end only when the handshake was set at the window's end (a
+// $20 write later does not close it). Closed reads give $0000 (MAME: the
+// offset) and closed writes are dropped; a register keeps only the bits it reads back
 // (MXR $3800 | 11 bits, MYR $3000 | 12, MAR 14, MCR $3C00 | 10 without the
 // MOB's own collision bit, CSR0-3 and BCR $3FF0 | 4, HDR / VDR $3FF8 | 3,
 // CBR $3FFC | 2, the rest $3FFF); writing $21 selects Foreground/Background
 // mode, reading $21 (or $4021 / $8021 / $C021) Color Stack mode. The
-// VBlank window, INTRM and the frame's end come from intv_bus (vb,
-// frame_end), which counts them from the same frame position.
+// register window and the frame's end come from intv_bus (vb, frame_end),
+// which counts them from the same frame position (INTRM there ends one
+// slot before the window).
 //
-// Frame (CPU cycles from the frame start, slot 0 = vcnt 0; 57 a line):
-//   - end of the VBlank window: at the ce that ends slot VB_CYCLES - 1 the
-//     STIC takes the frame's display enable (the handshake) and vertical
-//     delay, after the CPU's accesses up to that slot (en_l, vdr_l). A $20
-//     write later in the frame leaves it blank (STIC_NOTES D8, our choice).
-//   - BUSRQ (to the CPU, when busrq_en): 42 cycles from VB_CYCLES (MAME
-//     stic.h:49), then for every card row r two whole lines from line
-//     68 + 2 VDR + 16 r while they fit in the frame (12 rows, 13 when VDR
-//     = 0; one line of warning and the fetch line: wiki STIC_Bus_Request,
-//     MAME stic.h:51, GI 1980 p.5-10). The CPU samples its request lines
-//     at the ce that ends a cycle, so busrq gives the value for the next
-//     slot (as intv_bus does for INTRM).
-//   - row fetch r, at the start of line 69 + 2 VDR + 16 r: if the CPU
+// Frame (CPU cycles from the frame start, slot 0 = vcnt 0; 57 a line; the
+// console fit F of docs/TIMING_FIT.md, 2026-11-01):
+//   - end of the register window: at the ce that ends slot WIN_CYCLES - 1
+//     (3,790) the STIC takes the frame's display enable (the handshake) and
+//     vertical delay, after the CPU's accesses up to that slot (en_l,
+//     vdr_l). A $20 write later in the frame leaves it blank (STIC_NOTES
+//     D8) and the registers open.
+//   - BUSRQ (to the CPU, when busrq_en): slots FRAME_RQ_AT (3,792) ..
+//     + FRAME_RQ - 1 (3,891), then for every card row r = 0 .. ROWS - 1 (12
+//     with any VDR) ROW_HOLD (107) slots from slot REQ_SLOT (50) of line
+//     REQ_LINE + 2 VDR + 16 r (68 + ...: 3,926 + 114 VDR + 912 r). The CPU
+//     samples its request lines at the ce that ends a cycle, so busrq gives
+//     the value for the next slot (as intv_bus does for INTRM).
+//   - row fetch r, ROW_FETCH (50) slots after its request's start (3,976 +
+//     114 VDR + 912 r: line 69 + 2 VDR + 16 r, slot 43): if the CPU
 //     acknowledged (busak during the fetch cycle) or BUSRQ is off
 //     (busrq_en = 0, the step-3 system), the 20 BACKTAB words at the FIFO's
 //     address counter are copied from System RAM (port B) into the row
-//     buffer, two clk_sys a word, finished long before the CPU's next
-//     cycle; then the counter steps by 20 (it stops once it has passed
+//     buffer, two clk_sys a word, finished before the CPU's next cycle
+//     (pixel clock 176 of the line, where the card engine starts the row's
+//     first line); then the counter steps by 20 (it stops once it has passed
 //     System RAM: words past $035F read $3FFF). Otherwise the row buffer
 //     keeps the previous row (wiki STIC_Bus_Request). INTAK clears the
 //     counter (RA-3-9600, GI 1980 p.5-18).
@@ -50,7 +57,8 @@
 //     everything outside the playfield and every line of a frame whose
 //     display is not enabled (MAME stic.cpp:1102-1108, 1132-1135;
 //     STIC_NOTES D6, D7, D13).
-//   - one line ahead, at pixel clocks E0 .. E0 + 19 of line L, a card a
+//   - one line ahead, at pixel clocks E0 .. E0 + 19 of line L (176 .. 195,
+//     after the row copy at the line's slot 43), a card a
 //     pixel clock, the STIC builds line L + 1 into a line buffer (two
 //     banks of 20 entries: pattern byte, foreground and background
 //     colour): BACKTAB word from the row buffer, its pattern byte for the
@@ -85,7 +93,7 @@
 // them; card bits 6-7 count only for a GROM card in Color Stack mode
 // (M2); a pattern byte gives 8 pixels, 16 with XSIZE, XFLIP mirrors them.
 // The MOB registers, GRAM and the mode are closed to the CPU from the end
-// of the VBlank window (win_end) to the frame's end when the display is
+// of the register window (win_end) to the frame's end when the display is
 // enabled (the only frames with MOBs), so every MOB read below sees what
 // the model's draw() sees at the frame's end. Three users share the
 // GROM / GRAM ports, by the raster position:
@@ -143,12 +151,17 @@
 module intv_stic #(
     parameter int         H_TOTAL   = 228,
     parameter int         V_TOTAL   = 262,
-    parameter int         VB_CYCLES = 3790,
+    parameter int         WIN_CYCLES = 3791,  // the register window, slots 0-3,790 (TIMING_FIT F)
     parameter int         PF_X0     = 37,     // pixel clock of the playfield's first pixel
     parameter int         PF_LINE   = 70,     // first playfield line (vcnt)
     parameter int         REQ_LINE  = 68,     // row 0 BUSRQ line with VDR = 0
-    parameter int         FRAME_RQ  = 42,     // frame BUSRQ cycles (MAME stic.h:49)
-    parameter int         E0        = 8,      // pixel clock of the first card built
+    parameter int         REQ_SLOT  = 50,     // ... from this slot of the line (3,926)
+    parameter int         ROW_HOLD  = 107,    // row BUSRQ slots (released at 4,033 + 912 r)
+    parameter int         ROW_FETCH = 50,     // the row copy: slots after the request's start
+    parameter int         ROWS      = 12,     // row requests a frame, any VDR
+    parameter int         FRAME_RQ_AT = 3792, // the request after VBlank: first slot
+    parameter int         FRAME_RQ  = 100,    // ... and its slots
+    parameter int         E0        = 176,    // pixel clock of the first card built
     parameter int         MF        = 196,    // pixel clock of the first MOB's line fetch
     parameter logic [7:0] SS_ID     = 8'h04,
     parameter logic [7:0] SS_ROW    = 8'h0C,
@@ -163,7 +176,7 @@ module intv_stic #(
     input  wire logic [8:0]  vcnt,
 
     // CPU side
-    input  wire logic        vb,              // bus-copy window, this CPU cycle
+    input  wire logic        vb,              // register window, this CPU cycle
     input  wire logic        frame_end,
     /* verilator lint_off UNUSEDSIGNAL */
     input  wire logic [15:0] a,               // latched bus address
@@ -230,7 +243,7 @@ module intv_stic #(
     endfunction
 
     wire logic [5:0] n = a[5:0];
-    assign open = vb || !hs;
+    assign open = vb || !en_l;                 // TIMING_FIT F: the latched display enable
     wire logic wr_ok = we && open;
     logic [7:0] c_wr;                         // the CPU writes collision register $18 + i
     always_comb
@@ -239,7 +252,7 @@ module intv_stic #(
 
     always_comb begin
         if (!open)
-            q = {10'd0, n};
+            q = 16'd0;                        // the console (hw_frame2; MAME: the offset)
         else if (n < 6'(NREG))
             q = {2'b00, fixed(n) | (r[n] & keep(n))};
         else
@@ -266,16 +279,20 @@ module intv_stic #(
     logic [2:0] vdr_l = 3'd0;
     wire logic       hs_eff  = hs || (wr_ok && n == 6'h20);
     wire logic [2:0] vdr_eff = wr_ok && n == 6'h31 ? wdata[2:0] : r[6'h31][2:0];
-    wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);
+    wire logic       win_end = ce && slot == 16'(WIN_CYCLES - 1);
 
     // ------------------------------------------------------------- BUSRQ
-    // row requests, the fetch: line d = nl - REQ_LINE - 2 VDR from the row
-    // 0 request; rows every 16 lines, request lines d % 16 = 0 and 1
+    // row requests, the fetch (all for the next slot): line d = nl -
+    // REQ_LINE - 2 VDR from the row 0 request's line, rows every 16 lines;
+    // rp = the slot's place in its row's 16 lines
     wire logic signed [10:0] d = 11'(nl) - 11'(REQ_LINE) - 11'({vdr_l, 1'b0});
-    wire logic row_rq   = en_l && d >= 0 && d[3:1] == 3'd0;
-    wire logic fetch_n  = en_l && d >= 0 && d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);
-    wire logic frame_rq = slot_n >= 16'(VB_CYCLES) && slot_n < 16'(VB_CYCLES + FRAME_RQ)
-                       && (slot_n == 16'(VB_CYCLES) ? hs_eff : en_l);
+    wire logic [6:0]  h_n   = l_end ? 7'd0 : hcnt[8:2] + 7'd1;
+    wire logic [9:0]  rp    = 10'(d[3:0]) * 10'(CPL) + 10'(h_n);
+    wire logic in_rows  = en_l && d >= 0 && d[10:4] < 7'(ROWS);
+    wire logic row_rq   = in_rows && rp >= 10'(REQ_SLOT) && rp < 10'(REQ_SLOT + ROW_HOLD);
+    wire logic fetch_n  = in_rows && rp == 10'(REQ_SLOT + ROW_FETCH);
+    wire logic frame_rq = slot_n >= 16'(FRAME_RQ_AT) && slot_n < 16'(FRAME_RQ_AT + FRAME_RQ)
+                       && (slot_n == 16'(WIN_CYCLES) ? hs_eff : en_l);
     assign busrq = busrq_en && (frame_rq || row_rq);
 
     // ------------------------------------------------- row fetch, row buffer
@@ -653,7 +670,9 @@ module intv_stic #(
 
     initial begin
         if (H_TOTAL % 4 != 0 || PF_X0 < 14 || PF_X0 + 160 > H_TOTAL || E0 + 20 > H_TOTAL
-            || MF < PF_X0 + 159 || MF + 9 > H_TOTAL || E0 < 1 || PF_LINE + 192 != V_TOTAL)
+            || MF < PF_X0 + 159 || MF + 9 > H_TOTAL || E0 < 1 || PF_LINE + 192 != V_TOTAL
+            || E0 < 4 * ((REQ_SLOT + ROW_FETCH) % (H_TOTAL / 4) + 1)
+            || REQ_SLOT + ROW_HOLD > 16 * (H_TOTAL / 4) || FRAME_RQ_AT < WIN_CYCLES)
             $error("intv_stic: parameter out of range");
     end
 

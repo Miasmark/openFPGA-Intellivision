@@ -116,5 +116,11 @@ plant mvo_ptr_old $F "                        tmp_n = r[f_m] + 16'd1; // the poi
 plant jump_ii3_keep $F "if (tmp[1:0] == 2'd1 || tmp[1:0] == 2'd3) fI_n = 1'b1;" "if (tmp[1:0] == 2'd1) fI_n = 1'b1;" tests 0
 plant sdbd_dir_word $F "lo_n = din[7:0]; ea_n = ea + 16'd1; st_n = S_R2BAR;" "lo_n = din[7:0]; ea_n = ea; st_n = S_R2BAR;" tests 0
 
+# the console fit F (docs/TIMING_FIT.md): a jump 12 cycles again, PULR R7 11, SDBD + MVI@ R4 / R5,
+# R7 14 (the documents' counts); and the F read's extra cycle lost by a state restore
+plant jsr_12 $F "cnt_n = 2'd0; st_n = S_IDLE;    // 13 cycles (TIMING_FIT F)" "fin = 1'b1; fin_ok = 1'b1;" sweep 0
+plant pulr7_11 $F "(f_m == 3'd6 || (dbd && f_m[2:1] == 2'b10))" "(dbd && f_m[2:1] == 2'b10)" sweep 0
+plant sdbd_jump_14 $F "(f_m == 3'd6 || (dbd && f_m[2:1] == 2'b10))" "f_m == 3'd6" sweep 0
+plant ss_jpt $F "{taken, sda, dbd, jpt} <= ss_wdata[28:25];" "{taken, sda, dbd} <= ss_wdata[28:26];" fuzz 1
 echo "TB_CPU_ALL $([ $rc = 0 ] && echo pass || echo FAIL)"
 exit $rc

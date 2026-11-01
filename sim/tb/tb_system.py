@@ -521,8 +521,9 @@ PIC_BYTES = 4 + PIC_W * PIC_H // 2
 KIND = {'GROM': 0, 'GRAM': 1, 'squares': 2}
 FNV0, FNVP = 0x811C9DC5, 0x01000193
 # systest section 7: (phase, address, frame slot) of each probe
-SECT7 = [('DW', 0x002B, 3788), ('DTB', 0x3850, 3789), ('DTB', 0x002A, 3790), ('DW', 0x3851, 3791),
-         ('DW', 0x3852, 3789), ('DW', 0x0030, 3790), ('DTB', 0x002B, 3789), ('DTB', 0x3E53, 3790),
+# (the window's probes one slot later than before TIMING_FIT F: the window is cycles 0-3,790)
+SECT7 = [('DW', 0x002B, 3789), ('DTB', 0x3850, 3790), ('DTB', 0x002A, 3791), ('DW', 0x3851, 3792),
+         ('DW', 0x3852, 3790), ('DW', 0x0030, 3791), ('DTB', 0x002B, 3790), ('DTB', 0x3E53, 3791),
          ('DW', 0x4018, FRAME - 1)]          # p11: $18 written in a display-off frame's last slot
 SECT7_START = 7 * FRAME
 TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
@@ -567,10 +568,11 @@ def capture(bus):
         pics[n] = bytes(pic)
         sinfo[n] = stic_expect(info)
         bus.moblog[n] = list(info['mobs'])
-        # BUSAK against the row's fetch cycle R + 57 (sticbus's deadline cases)
+        # BUSAK against the row's fetch cycle R + 50 (sticbus's deadline cases; TIMING_FIT F,
+        # R + 57 before)
         for r, rel, ok, _ in info['fetches']:
-            if rel is not None and r < 13:
-                fc = stic.ROW0_REQ + 2 * stic.LINE * info['vdr'] + stic.ROW_PERIOD * r + stic.LINE
+            if rel is not None and r < stic.ROW_REQS:
+                fc = stic.ROW0_REQ + 2 * stic.LINE * info['vdr'] + stic.ROW_PERIOD * r + stic.FETCH_OFF
                 bus.deadline.append((n, r, rel - fc, ok))
     bus.deadline = []
     bus.moblog = {}
@@ -1299,24 +1301,26 @@ def rt_runs(exp):
             ('rt2', ['+rt=2', '+rtcyc=%d' % (5 * FRAME + 600), '+rtsub=30', '+rton=20000']),
             ('rt3', ['+rt=1', '+rtcyc=%d' % (5 * FRAME + 6000), '+rtsub=3'])]
     # with the display on: the fetch cycles of loaded rows in frames 3 on
-    # (row r of frame k at k FRAME + 3933 + 114 VDR + 912 r)
+    # (row r of frame k at k FRAME + 3976 + 114 VDR + 912 r: TIMING_FIT F, 3933 before)
     fl = []
     for n, (g, *_) in sorted(exp.sinfo.items()):
         k = n - 1
         st = [s for s in exp.bus.vid.stats if s['n'] == n]
         if k >= 3 and st and st[0]['enabled'] and (k + 2) * FRAME < exp.ncyc:
-            fl += [(k, r, k * FRAME + 3933 + 114 * st[0]['vdr'] + 912 * r) for r, ok, _, _ in g if ok]
+            fl += [(k, r, k * FRAME + stic.ROW0_REQ + stic.FETCH_OFF + 114 * st[0]['vdr'] + 912 * r)
+                   for r, ok, _, _ in g if ok]
     if fl:
         rt4 = [f for f in fl if f[1] == 3][0][2]
         rt5 = [f for f in fl if f[1] == 6][-1][2]
         # reset restore 17 clk_sys into the row copy (word 8 of 20); a later
-        # state, restored from 3 cycles into the fetch line plus 30 clk_sys:
+        # state, restored from 3 cycles after the fetch plus 30 clk_sys:
         # the CPU in BUSAK, the card engine building the row's first line
+        # (pixel clocks 176-195 since TIMING_FIT F: the fetch is in slot 43)
         runs += [('rt4', ['+rt=1', '+rtcyc=%d' % rt4, '+rtsub=17']),
                  ('rt5', ['+rt=2', '+rtcyc=%d' % (rt5 + 3), '+rtsub=30', '+rton=20000'])]
     # with MOBs (build step 5), frames 3 on with the display on and a MOB
     # drawn or interacting: rt6 = reset restore inside the collision sweep
-    # (it runs from the end of the VBlank window, cycle 3,790, for about 7
+    # (it runs from the end of the register window, cycle 3,791, for about 7
     # lines: here 3 lines and 20 cycles in, plus 17 clk_sys); rt7 = rewind
     # restore inside a line's MOB fetch (pixel clocks 196-203 = cycles 49
     # and 50 of the line; here 1 + 5 clk_sys into cycle 50) on a line
@@ -1329,7 +1333,7 @@ def rt_runs(exp):
             mk.append((k, ml))
     if mk:
         k = mk[0][0]
-        runs.append(('rt6', ['+rt=1', '+rtcyc=%d' % (k * FRAME + stic.VBLANK + 3 * stic.LINE + 20),
+        runs.append(('rt6', ['+rt=1', '+rtcyc=%d' % (k * FRAME + stic.WINDOW + 3 * stic.LINE + 20),
                              '+rtsub=17']))
         for k, ml in reversed(mk):
             tops = [e[5] + stic.PIC_LINE0 for e in ml if 70 <= e[5] + stic.PIC_LINE0 <= 254]
@@ -1355,12 +1359,12 @@ def rt_runs(exp):
     return runs
 
 
-def sweep_clock(line, e0=8, mf=196):
+def sweep_clock(line, e0=176, mf=196):
     """clk_sys from the frame start (12 a pixel clock, 48 a CPU cycle) at
     which intv_stic.sv's collision sweep starts the pairs of picture line
     `line`: it starts the clock after the ce that ends the VBlank window,
     takes two clocks a MOB (the second only where g_ok), then one a pair."""
-    c = stic.VBLANK * 48
+    c = stic.WINDOW * 48
     ly, m, ph, pairs = 8, 0, 0, 0
     while True:
         h = (c // 12) % (4 * stic.LINE)
@@ -1538,9 +1542,25 @@ PLANTS = [
                                           "if (hold && slot == 16'(FRAME - 2 - CPL))")], 'astrosmash', None),
     ('iab_always_1004', 'intv_bus.sv', [("din = iab_rst ? 16'h1000 : 16'h1004;", "din = 16'h1004;")],
      'nocart', None),
+    # TIMING_FIT F's CPU counts back to the documents': a jump 12 cycles, PULR R7 11, SDBD +
+    # MVI@ R4 / R5, R7 14 (the EXEC's dispatcher has all three)
+    ('jsr_12', 'cp1610.sv', [("cnt_n = 2'd0; st_n = S_IDLE;    // 13 cycles (TIMING_FIT F)",
+                              "fin = 1'b1; fin_ok = 1'b1;")], 'nocart', None),
+    ('pulr7_11', 'cp1610.sv', [("(f_m == 3'd6 || (dbd && f_m[2:1] == 2'b10))", "(dbd && f_m[2:1] == 2'b10)")],
+     'nocart', None),
+    ('sdbd_jump_14', 'cp1610.sv', [("(f_m == 3'd6 || (dbd && f_m[2:1] == 2'b10))", "f_m == 3'd6")],
+     'nocart', None),
     ('stic_mxr_mask', 'intv_stic.sv', [("if (n < 6'h08)       fixed = 14'h3800;",
                                              "if (n < 6'h08)       fixed = 14'h3000;")], 'nocart', None),
-    ('stic_always_open', 'intv_stic.sv', [("assign open = vb || !hs;", "assign open = 1'b1;")],
+    ('stic_always_open', 'intv_stic.sv', [("assign open = vb || !en_l;", "assign open = 1'b1;")],
+     'systest', None),
+    # TIMING_FIT F's register window: closed by the handshake alone (MAME's rule: a late $20
+    # write in a display-off frame closes it; systest section 5 writes $20 late in frame 0)
+    ('window_on_handshake', 'intv_stic.sv', [("assign open = vb || !en_l;", "assign open = vb || !hs;")],
+     'systest', None),
+    # a closed STIC read gives the offset (MAME's rule), not $0000 (systest sections 6, 7)
+    ('stic_closed_offset', 'intv_stic.sv', [("            q = 16'd0;                        // the console",
+                                             "            q = {10'd0, n};                   // the console")],
      'systest', None),
     ('stic_no_aliases', 'intv_bus.sv', [("assign stic_we = wr && a[13:6] == 8'd0;",
                                          "assign stic_we = wr && a[15:6] == 10'd0;")], 'systest', None),
@@ -1590,11 +1610,12 @@ PLANTS = [
                                               "if (rd && a[13:0] == 14'h0021)")], 'systest', None),
     ('csmode_wr_kept', 'intv_stic.sv', [("                if (n == 6'h21)\n                    csmode <= 1'b0;\n",
                                               "")], 'systest', None),
-    # the end of the bus-copy window and of INTRM (systest section 7)
-    ('vb_end_p1', 'intv_bus.sv', [("assign vb        = slot < 16'(VB_CYCLES);",
-                                   "assign vb        = slot < 16'(VB_CYCLES + 1);")], 'systest', None),
-    ('vb_end_m1', 'intv_bus.sv', [("assign vb        = slot < 16'(VB_CYCLES);",
-                                   "assign vb        = slot < 16'(VB_CYCLES - 1);")], 'systest', None),
+    # the end of the register window and of INTRM (systest section 7); vb_end_m1 is the
+    # window before TIMING_FIT F (ending with INTRM)
+    ('vb_end_p1', 'intv_bus.sv', [("assign vb        = slot < 16'(WIN_CYCLES);",
+                                   "assign vb        = slot < 16'(WIN_CYCLES + 1);")], 'systest', None),
+    ('vb_end_m1', 'intv_bus.sv', [("assign vb        = slot < 16'(WIN_CYCLES);",
+                                   "assign vb        = slot < 16'(WIN_CYCLES - 1);")], 'systest', None),
     ('intrm_end_p1', 'intv_bus.sv', [("vb_next = last || slot < 16'(VB_CYCLES - 1);",
                                       "vb_next = last || slot < 16'(VB_CYCLES);")], 'systest', None),
     ('intrm_end_m1', 'intv_bus.sv', [("vb_next = last || slot < 16'(VB_CYCLES - 1);",
@@ -1663,9 +1684,9 @@ PLANTS = [
                                           ("default: ss_rdata = {24'd0, tph, ehold, eatt, estep};",
                                            "default: ss_rdata = {24'd0, 2'd0, ehold, eatt, estep};")],
      'psgtest', ['rt9']),
-    # a closed GRAM read gives 11 offset bits (systest reads through $3A00 / $3E00)
-    ('gram_closed_11', 'intv_bus.sv', [("din &= stic_open ? {8'h00, gram_q} : {7'd0, a[8:0]};",
-                                        "din &= stic_open ? {8'h00, gram_q} : {5'd0, a[10:0]};")],
+    # a closed GRAM read gives the offset (MAME's 9 bits), not $0000 (systest sections 6, 7)
+    ('gram_closed_offset', 'intv_bus.sv', [("din &= stic_open ? {8'h00, gram_q} : 16'd0;",
+                                            "din &= stic_open ? {8'h00, gram_q} : {7'd0, a[8:0]};")],
      'systest', None),
     # the STIC (build step 4): pictures, row fetches, card rows, BUSRQ. An
     # image ('screen', name, pictures) runs the frame gate's image that far.
@@ -1681,11 +1702,14 @@ PLANTS = [
                                      "wire logic [2:0] hd  = r[6'h30][2:0] - {2'd0, r[6'h30][2:0] != 3'd0};")],
      'sticbus', None),
     ('top_ext_off', 'intv_stic.sv', [("&& !(cbr[1] && vcnt < 9'(PF_LINE + 16))", "")], ('screen', 'diner', 30), None),
-    ('row_busrq_3lines', 'intv_stic.sv', [("wire logic row_rq   = en_l && d >= 0 && d[3:1] == 3'd0;",
-                                           "wire logic row_rq   = en_l && d >= 0 && d[3:0] <= 4'd2;")],
+    # TIMING_FIT F's requests: a row held 108 cycles, the frame request 101, or run into
+    # row 0's request (one request from 3,792 to row 0's release, as candidates SI-A / SI-B)
+    ('row_hold_108', 'intv_stic.sv', [("rp < 10'(REQ_SLOT + ROW_HOLD);", "rp < 10'(REQ_SLOT + ROW_HOLD + 1);")],
      'astrosmash', None),
-    ('frame_busrq_43', 'intv_stic.sv', [("parameter int         FRAME_RQ  = 42,", "parameter int         FRAME_RQ  = 43,")],
+    ('frame_busrq_101', 'intv_stic.sv', [("parameter int         FRAME_RQ  = 100,", "parameter int         FRAME_RQ  = 101,")],
      'astrosmash', None),
+    ('frame_rq_merged_row0', 'intv_stic.sv', [("parameter int         FRAME_RQ  = 100,",
+                                               "parameter int         FRAME_RQ  = 134,")], 'astrosmash', None),
     ('pattern_select_swapped', 'intv_stic.sv', [("wire logic [7:0] pat = w[11] ? gram_q : grom_q;",
                                                  "wire logic [7:0] pat = w[11] ? grom_q : gram_q;")],
      ('screen', 'towerofdoom', 15), None),
@@ -1695,16 +1719,16 @@ PLANTS = [
                                       "wire logic squares = 1'b0;")], ('screen', 'sewersam', 15), None),
     ('fifo_no_intak_clear', 'intv_stic.sv', [("            if (intak)\n                cnt <= 9'd0;\n", "")],
      'astrosmash', None),
-    ('fetch_late_line', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
-                                          "d[3:0] == 4'd2 && hcnt[8:2] == 7'(CPL - 1);")], 'astro_nobusrq', None),
+    ('fetch_late_line', 'intv_stic.sv', [("rp == 10'(REQ_SLOT + ROW_FETCH);",
+                                          "rp == 10'(REQ_SLOT + ROW_FETCH + CPL);")], 'astro_nobusrq', None),
     ('enable_live', 'intv_stic.sv', [("wire logic pf_line = en_l &&", "wire logic pf_line = hs &&")],
      'sticbus', None),
     # the border colour: a cycle late, or latched per frame at the window end (D17)
     ('border_cycle_late', 'intv_stic.sv', [("    wire logic [3:0] bcr = r[6'h2C][3:0];",
                                             "    logic [3:0] bcr = 4'd0;\n    always_ff @(posedge clk) if (ce) bcr <= r[6'h2C][3:0];")],
      'sticbus', None),
-    ('border_frame_latch', 'intv_stic.sv', [("    wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);",
-                                             "    wire logic       win_end = ce && slot == 16'(VB_CYCLES - 1);\n"
+    ('border_frame_latch', 'intv_stic.sv', [("    wire logic       win_end = ce && slot == 16'(WIN_CYCLES - 1);",
+                                             "    wire logic       win_end = ce && slot == 16'(WIN_CYCLES - 1);\n"
                                              "    logic [3:0] bcr_fl = 4'd0;\n"
                                              "    always_ff @(posedge clk) if (win_end) bcr_fl <= r[6'h2C][3:0];"),
                                             ("pix <= pf_line && pf_x ? (mob_show ? {l_a[12], l_a[2:0]} : pf_c) : bcr;",
@@ -1746,11 +1770,10 @@ PLANTS = [
     ('left_ext_off', 'intv_stic.sv', [("cbr[0] ? 4'd8 : {1'b0, hd}", "{1'b0, hd}")], 'sticbus', None),
     ('pixel_order_reversed', 'intv_stic.sv', [("lb_q[5'd15 - {2'b0, xx[2:0]}]", "lb_q[5'd8 + {2'b0, xx[2:0]}]")],
      'sticbus', None),
-    ('frame_busrq_always', 'intv_stic.sv', [("&& (slot_n == 16'(VB_CYCLES) ? hs_eff : en_l);", ";")], 'nocart', None),
-    ('row13_dropped', 'intv_stic.sv', [("wire logic row_rq   = en_l && d >= 0 && d[3:1] == 3'd0;",
-                                        "wire logic row_rq   = en_l && d >= 0 && d < 11'sd192 && d[3:1] == 3'd0;"),
-                                       ("wire logic fetch_n  = en_l && d >= 0 &&",
-                                        "wire logic fetch_n  = en_l && d >= 0 && d < 11'sd192 &&")], 'astrosmash', None),
+    ('frame_busrq_always', 'intv_stic.sv', [("&& (slot_n == 16'(WIN_CYCLES) ? hs_eff : en_l);", ";")], 'nocart', None),
+    # a 13th row request (and fetch) where it fits (VDR 0, as before TIMING_FIT F; cut at the
+    # frame's end here)
+    ('row_13th', 'intv_stic.sv', [("d[10:4] < 7'(ROWS);", "d[10:4] < 7'(ROWS + 1);")], 'astrosmash', None),
     ('cs_grom_64', 'intv_stic.sv', [("wire logic [10:0] c_grom = csmode ? {w[10:3], py} : {2'b00, w[8:3], py};",
                                      "wire logic [10:0] c_grom = {2'b00, w[8:3], py};")], 'astrosmash', None),
     ('squares_advance', 'intv_stic.sv', [("            e_bits = 8'hF0;\n",
@@ -1763,12 +1786,12 @@ PLANTS = [
                                                "                        cp_ph <= 1'b0;\n                    end else if (cnt < 9'(SYSW))\n"
                                                "                        cnt <= cnt + 9'd20;\n")], 'sticbus', None),
     # the row-load deadline: BUSAK checked one cycle early, one late (sticbus dlb), two late
-    ('fetch_deadline_m1', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
-                                            "d[3:0] == 4'd0 && hcnt[8:2] == 7'(CPL - 2);")], 'sticbus', None),
-    ('fetch_deadline_p1', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
-                                            "d[3:0] == 4'd1 && hcnt[8:2] == 7'd0;")], 'sticbus', None),
-    ('fetch_deadline_p2', 'intv_stic.sv', [("d[3:0] == 4'd1 && hcnt[8:2] == 7'(CPL - 1);",
-                                            "d[3:0] == 4'd1 && hcnt[8:2] == 7'd1;")], 'sticbus', None),
+    ('fetch_deadline_m1', 'intv_stic.sv', [("rp == 10'(REQ_SLOT + ROW_FETCH);",
+                                            "rp == 10'(REQ_SLOT + ROW_FETCH - 1);")], 'sticbus', None),
+    ('fetch_deadline_p1', 'intv_stic.sv', [("rp == 10'(REQ_SLOT + ROW_FETCH);",
+                                            "rp == 10'(REQ_SLOT + ROW_FETCH + 1);")], 'sticbus', None),
+    ('fetch_deadline_p2', 'intv_stic.sv', [("rp == 10'(REQ_SLOT + ROW_FETCH);",
+                                            "rp == 10'(REQ_SLOT + ROW_FETCH + 2);")], 'sticbus', None),
     ('ss_cs_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];", "8'h36: pix <= ss_wdata[7:4];")],
      'sticbus', ['rt4', 'rt5']),
     ('ss_cs_row_lost', 'intv_stic.sv', [("8'h36: {pix, cs_row, cs} <= ss_wdata[7:0];",
@@ -2091,11 +2114,11 @@ def main():
                       sum(1 for g, *_ in e.sinfo.values() for f in g if f[1]),
                       sum(1 for g, *_ in e.sinfo.values() for f in g if not f[1])))
             if prog == 'sticbus.asm':
-                # the row-load deadline: BUSAK exactly at R + 57 loads, at R + 58 misses
+                # the row-load deadline: BUSAK exactly at R + 50 loads, at R + 51 misses
                 dl = [(d, ok) for _, _, d, ok in e.bus.deadline]
                 miss = [x for x in ((0, True), (1, False)) if x not in dl]
-                print('  sticbus deadline: BUSAK at R + 57 (loaded) %d, at R + 58 (missed) %d%s' % (
-                    dl.count((0, True)), dl.count((1, False)),
+                print('  sticbus deadline: BUSAK at R + %d (loaded) %d, at R + %d (missed) %d%s' % (
+                    stic.FETCH_OFF, dl.count((0, True)), stic.FETCH_OFF + 1, dl.count((1, False)),
                     '' if not miss else ' FAIL: missing %s' % miss))
                 if miss or any((d <= 0) != ok for d, ok in dl):
                     fails.append('STICBUS_DEADLINE')

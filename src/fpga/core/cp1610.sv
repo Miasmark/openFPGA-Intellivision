@@ -54,7 +54,12 @@
 // owner's Model 2609 (hw_cpuodd, 2026-10-31): SDBD with direct mode takes
 // the address as double byte data from the next two words (then one read
 // there); jump with II=11 enables interrupts (as JE); MVO@ with the pointer
-// (R4-R6) as source writes the incremented pointer. Two options are inputs (tie them in the
+// (R4-R6) as source writes the incremented pointer. From the console fit F
+// (docs/TIMING_FIT.md, 2026-11-01; tools/cp1610.py f_extra): one NACT more
+// at the end of J / JSR and the rest of $004 (13 cycles), of PULR R7 (MVI@
+// R6, R7: 12) and of SDBD + MVI@ R4 / R5, R7 (15 with the SDBD); the
+// registers are written as before, the request lines sampled after the
+// extra cycle (S_IDLE with cnt 0: fin there). Two options are inputs (tie them in the
 // core; the bench runs both ways):
 //   cfg_hlt_imm       0: HLT halts after the next interruptible instruction
 //                        (G82 p.33; S1 p.56 said "next instruction")
@@ -77,7 +82,8 @@
 //   word 0 {R1, R0}   word 1 {R3, R2}   word 2 {R5, R4}   word 3 {R7, R6}
 //   word 4 {tmp, ea}  (data and address of the sequence in progress)
 //   word 5 [9:0] ir, [17:10] lo (SDBD low byte), [22:18] st (cycle state),
-//          [24:23] cnt (idle cycles left - 1), [25] jpt (jump word 3),
+//          [24:23] cnt (idle cycles left - 1), [25] jpt (jump word 3; a
+//          read: its extra F cycle, the read done),
 //          [26] dbd (this instruction follows SDBD), [27] sda (SDBD + direct:
 //          the address's reads, 0 at an instruction boundary; until 0.0.11
 //          "halt after this instruction"), [28] taken (branch)
@@ -181,6 +187,8 @@ module cp1610 #(
     wire logic cls_mvo    = cls_ext && ir[8:6] == 3'd1;
     wire logic cls_rd     = cls_ext && ir[8:6] != 3'd1;
     wire logic dbl        = cls_rd && dbd && f_m != 3'd0;   // SDBD read (two locations)
+    // TIMING_FIT F: PULR R7 (MVI@ R6, R7) and SDBD + MVI@ R4 / R5, R7 end with one NACT more
+    wire logic f_tail     = f_o == 3'd2 && f_r == 3'd7 && (f_m == 3'd6 || (dbd && f_m[2:1] == 2'b10));
 
     // ---------------------------------------------------------- bus outputs
     always_comb begin
@@ -405,6 +413,7 @@ module cp1610 #(
                         st_n = S_WBAR;
                     end
                 end else begin                  // reads (cls_rd)
+                    jpt_n = 1'b0;               // set once the read is done, if F adds a cycle
                     if (f_m == 3'd0 && dbd) begin   // SDBD + direct: the address from two words
                         ea_n = r[7]; r_n[7] = r[7] + 16'd2; sda_n = 1'b1; st_n = S_RBAR;
                     end else if (f_m == 3'd0) begin // direct
@@ -424,6 +433,8 @@ module cp1610 #(
             S_IDLE: begin
                 if (cnt != 2'd0) begin
                     cnt_n = cnt - 2'd1;
+                end else if (cls_jump || (cls_rd && jpt)) begin
+                    fin = 1'b1; fin_ok = 1'b1;  // F's extra NACT (TIMING_FIT): the end
                 end else if (cls_rd) begin      // stack read: pre-decrement
                     ea_n = r[6] - 16'd1;
                     r_n[6] = r[6] - (dbd ? 16'd2 : 16'd1);
@@ -457,7 +468,7 @@ module cp1610 #(
                 if (cls_jump && !jpt) begin
                     jpt_n = 1'b1; ea_n = r[7]; r_n[7] = r[7] + 16'd1; st_n = S_RBAR;
                 end else if (cls_jump) begin
-                    fin = 1'b1; fin_ok = 1'b1;
+                    cnt_n = 2'd0; st_n = S_IDLE;    // 13 cycles (TIMING_FIT F)
                 end else if (cls_branch) begin
                     cnt_n = 2'd0; st_n = S_IDLE;
                 end else begin
@@ -523,7 +534,11 @@ module cp1610 #(
                 r_n[7] = r[7] + (tmp ^ {16{ir[5]}});
         end
         if (ex_rd) begin
-            fin = 1'b1; fin_ok = 1'b1;
+            if (f_tail) begin                   // TIMING_FIT F: one NACT more, then the end
+                cnt_n = 2'd0; jpt_n = 1'b1; st_n = S_IDLE;
+            end else begin
+                fin = 1'b1; fin_ok = 1'b1;
+            end
         end
         if ((ex_idle && !cls_branch) || ex_rd) begin
             if (x_we) r_n[ridx] = res;

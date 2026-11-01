@@ -39,6 +39,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) i
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_ecs.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) sp0256.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_voice.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_jlp_store.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_jlp.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_jlp_nv.sv]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) intv_machine.sv]

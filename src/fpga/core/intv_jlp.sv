@@ -171,31 +171,16 @@ module intv_jlp #(
     logic [15:0] cr_v = 16'd0;
 
     // ------------------------------------------------------------ flash
-    logic [15:0] store [12288];
+    // the store (intv_jlp_store: a true dual port; A the engine's, B the slot's, words inverted)
     logic [15:0] st_q;
     logic [13:0] st_a = 14'd0;
     logic        st_we = 1'b0;
     logic [15:0] st_d = 16'd0;
-    // A true dual-port block RAM in Quartus's template: each port reads its own write's data
-    // (new data) in the write's clock. Old data on a port that writes is not a mode the M10K
-    // has in true dual port, and 0.0.21's first fit failed on it (Error 276003: the store left
-    // as registers). Nothing reads a port in a clock it writes: the engine reads st_q one
-    // clock after an address with no write (E_RD_A -> E_RD_W), the slot nv_q in N_R1 / N_R3.
-    always_ff @(posedge clk) begin
-        if (st_we) begin
-            store[st_a] <= st_d;
-            st_q <= st_d;
-        end else
-            st_q <= store[st_a];
-    end
     logic [15:0] nv_qi;
-    always_ff @(posedge clk) begin
-        if (nv_we) begin
-            store[nv_addr] <= ~nv_wdata;
-            nv_qi <= ~nv_wdata;
-        end else
-            nv_qi <= store[nv_addr];
-    end
+    intv_jlp_store flash (
+        .clk(clk),
+        .a_addr(st_a), .a_we(st_we), .a_d(st_d), .a_q(st_q),
+        .b_addr(nv_addr), .b_we(nv_we), .b_d(~nv_wdata), .b_q(nv_qi));
     assign nv_q = ~nv_qi;
 
     /* verilator lint_off UNUSEDSIGNAL */

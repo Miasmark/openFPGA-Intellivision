@@ -332,12 +332,14 @@ hw_rowcopy, hw_steal2, hw_frame2, hw_grant). Cycles from INTRM (the CPU's VBlank
 - the request at the end of VBlank 3,792-3,892 (100 cycles), separate from row 0's;
 - the display enable latched at 3,791 (the end of the register window).
 
-Residuals: hw_steal 33431 / 30280 (in every phase of a 1,000-frame run, the first included),
+Refitted with hw_grantx (counts and PCs) included, F stays the best point found. Residuals:
+hw_steal 33431 / 30280 (in every phase of a 1,000-frame run, the first included),
 hw_intlate 1C 1B 1B 1B 1B 1B, hw_rowcopy all 24 steps, hw_frame2's V, W, U rows (14934, 15): all
 exact. hw_steal2: 5 passes in 30 (ON k = 2 +1, 8 -1, A -1, B -1; OFF k = 7 +1). hw_grant: 11 in 27
 (ON k = 0 -1, 1 +1, 2 +2, 3 -1, 6 -1, 7 -1, A +1, D -1; OFF A +2), its three 000s not explained
-(section 11). Read-back: a closed STIC register reads $0000; the registers close only in a frame
-with the display on (section 9).
+(section 11). hw_grantx: 3 counts off by one in 12, 3 cut positions one instruction off in 12.
+Read-back: a closed STIC register reads $0000; the registers close only in a frame with the
+display on (section 9). The changes this implies, with their evidence: docs/TIMING_FIT.md.
 
 ## 9. hw_frame2: the frame length from the VBlank interrupt alone; what $2C reads return
 
@@ -463,6 +465,21 @@ interrupt came right after the ISR returned or the loop never ran).
 |---|---|---|---|---|---|---|
 | **today's core** | **0F5 50F7 / 10F 50FB** | **0C9 5104 / 0DD 510A** | **0E0 510C / 0F4 510C** | **0CF 5121 / 0DD 5121** | **090 5131 / 09B 5131** | **1DD 5135 / 214 5136** |
 | F (section 8) | 0F7 50F7 / 10F 50F7 | 0C9 510A / 0DD 510A | 0E1 510C / 0F3 510C | 0D0 5121 / 0DD 5118 | 091 5131 / 09A 5131 | 1E2 5135 / 214 5135 |
+| **console (2026-11-01; N = 14)** | **0F7 50FB / 10F 50F7** | **0C9 510A / 0DD 510A** | **0E1 510C / 0F4 510C** | **0D0 5121 / 0DD 5121** | **090 5131 / 09A 5132** | **1E3 5135 / 214 5135** |
+
+No zeros: the loops of hw_grant's probes 5 and 9 count normally here, at F's counts (F's
+residuals: counts 8 OFF -1, A ON +1, 0 ON -1; the cut lands one instruction off at 4 ON, 9 OFF
+and A OFF). So the three 000s on hw_grant are not a property of those loops or of the grant
+rule; they come from something only hw_grant does. What differs: hw_grant has three loops with
+MVOI (k = 6, C, D) that write into seven of the cartridge's own words ($5129, $512D, $516E,
+$5174, $517D, $5181, $5185, each MVOI's operand, never run); hw_grantx has none. Mapped as RAM
+those writes change only data words, so either the PiRTO II reacts to writes into the cartridge
+in some other way, or (with the same effect on the table) an extra interrupt right after an ISR
+swallowed those frames: a count of 0 means the loop never ran before the interrupt. hw_grant's
+27 non-zero values agree with F to within 2 passes (section 8), and the loops shared with
+hw_grantx agree with it there, so they are kept. A hw_grant with the MVOI stores replaced by
+MVO@ to System RAM (the same 9-cycle non-interruptible store) would show whether the cartridge
+writes cause the zeros.
 
 ## On the RTL
 

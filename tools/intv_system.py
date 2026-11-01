@@ -675,6 +675,7 @@ def mame_compare(trace_path, bios_dir=None, cart_path=None, context=6,
     bus, cpu = make_system(bios_dir, cart_path, tm, buslog=False, stic_mode=stic_mode, ecs=ecs,
                            mame_ecs=True, cfg_path=cfg_path)
     bus.mame_map = True
+    cpu.mvo_ptr = "mame"
     if presses:
         bus.presses = parse_presses(presses)
     if voice_zero:
@@ -818,6 +819,8 @@ def system_for(mode, bios_dir=None, cart_path=None, buslog=False, ecs=None, cfg_
     bus, cpu = make_system(bios_dir, cart_path, tm, buslog=buslog, stic_mode=mode, ecs=ecs,
                            mame_ecs=mode == "mame", cfg_path=cfg_path)
     bus.mame_map = mode == "mame"
+    if mode == "mame":
+        cpu.mvo_ptr = "mame"
     return bus, cpu, mode == "mame"
 
 

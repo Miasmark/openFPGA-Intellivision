@@ -362,6 +362,7 @@ module tb_savestate;
         if (core.ssc.ld_applied) begin
             cram_hash("MA");
             bank_hash("KA");
+            jram_hash("JA");
             if (rcyc_next >= 0) begin
                 set_val <= rcyc_next;
                 set_req <= 1'b1;
@@ -404,6 +405,15 @@ module tb_savestate;
             if (sram.mem[17'h18000 + 17'(i)] != 16'd0) nz++;
         end
         $fdisplay(fd, "%s %0d %08x %0d", tag, cyc, h, nz);
+    endtask
+
+    // the JLP RAM region (version 5): its 8,000 cells in the SRAM at JLP_BASE, hashed as the
+    // blob's (tb_savestate.py checks the JA line after every load against the blob's cells)
+    task automatic jram_hash(input string tag);
+        logic [31:0] h;
+        h = 32'h811C9DC5;
+        for (int i = 0; i < 8000; i++) h = fnv(h, {16'd0, sram.mem[17'h1C000 + 17'(i)]});
+        $fdisplay(fd, "%s %0d %08x", tag, cyc, h);
     endtask
 
     task automatic bank_hash(input string tag);

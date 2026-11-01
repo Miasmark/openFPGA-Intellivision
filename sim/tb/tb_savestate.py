@@ -813,6 +813,9 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 want_m = '%08x %d' % blob_cram(blob)
                 if len(applied) != 1 or ' '.join(applied[0].split()[2:4]) != want_m:
                     q.append('cart RAM after the load %s, blob %s' % (applied, want_m))
+                ja, want_j = run.tagged('JA'), '%08x' % cram_hash(ss.jram_of(open(blob, 'rb').read()))
+                if len(ja) != 1 or ja[0].split()[2] != want_j:
+                    q.append('JLP RAM after the load %s, blob %s' % (ja, want_j))
                 ka, want_k = run.tagged('KA'), '%08x' % blob_bank(blob)
                 if len(ka) != 1 or ka[0].split()[2] != want_k:
                     q.append('bank registers after the load %s, blob %s' % (ka, want_k))
@@ -935,7 +938,7 @@ PLANTS = [
     # ran before: the cartridge's flash rows and results after the load move)
     ('ss_jram_lost', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
                                          "                m_we = 1'b1;\n                m_a  = cram_a;")],
-     'jlpfls', 'psgtest', AFTER),
+     'jlpfls', 'psgtest', r'(: JLP RAM after the load |after: frame)'),
 ]
 # build step 11: the JLP flash slot (intv_jlp_nv, data slot 0x106) end to end. N: the cartridge's
 # .sav written at 0x20000000 after its load, as the Pocket does (the flash the model's own run from

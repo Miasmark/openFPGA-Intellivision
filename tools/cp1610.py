@@ -186,6 +186,11 @@ class CP1610:
                   (cycle, phase, addr, data)
     """
 
+    # mvo_ptr: MVO@ R4-R6 with the pointer as its own source: "console" (default) writes the
+    # incremented pointer (the owner's Model 2609, hw_cpuodd); "mame" the old value, as MAME
+    # (cp1610.cpp cp1610_mvoat_i), for the MAME-compatible runs (Ice Trek uses MVO@ R4, R4)
+    mvo_ptr = "console"
+
     def __init__(self, bus=None, strict=False, sdbd_r6="wiki", hlt="manual",
                  buslog=False):
         if sdbd_r6 not in ("wiki", "mame"):
@@ -726,7 +731,7 @@ class CP1610:
                 a = r[m]
                 if rg == m and m >= 4:
                     self._undefined("MVO@ with the pointer as source (S1 p.55: not supported)")
-                    if m < 7:   # the incremented pointer is written (the owner's Model 2609, hw_cpuodd)
+                    if m < 7 and self.mvo_ptr == "console":   # the incremented pointer (Model 2609)
                         v = (a + 1) & 0xFFFF
                 self._write_seq(a, v)
                 if m == 7:

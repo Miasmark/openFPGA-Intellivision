@@ -57,8 +57,15 @@ model's timing `f` (timing `doc` keeps the documents' counts for the MAME compar
 GRAM reads give $0000 as the STIC's; the RTL's card engine builds a line at pixel clocks
 176-195 of the line before (after the row copy, now at the line's slot 43); no new save state
 (the STIC's `en_l` is the window's latch, the CPU's `jpt` marks a read's extra cycle).
-On the model, hw_frame (section 6 of HW_TESTS) does not show F's "NO EDGE": with a late $20
-write leaving the registers open, its polls see "open" at once and count one pass a frame.
+On the model, hw_frame (section 6 of HW_TESTS) does not show the console's "NO EDGE": its first
+poll loop (`ms_cl`) waits for the registers to close after a $20 write in VBlank of a frame with
+interrupts off, and in F that frame's display is on, so they close at 3,791 and the program goes
+on (with a late $20 write leaving the registers open, its later polls then see "open" at once
+and count one pass a frame: FAIL 0, S_F = S_I = 224). The console never saw them close. One
+reading that fits every result so far (a hypothesis, not in F): the $20 handshake enables the
+display only in a frame whose VBlank interrupt was taken (GI80 p.5-18: the bus copy starts at
+INTAK); hw_frame's measured frames have no INTAK, hw_frame2's display-on frames do. A test: a
+display-on frame entered with interrupts off ($20 in VBlank, no ISR), then a mid-frame $2C read.
 
 **Model** (tools/):
 - stic.py: rows 12 with any VDR (`schedule`: no 13th request); ROW0_REQ 3,926, ROW_HOLD 107

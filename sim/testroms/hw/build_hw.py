@@ -25,7 +25,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 BASE = 0x5000
-PROGS = ("hw_steal", "hw_intlate", "hw_rowcopy", "hw_cpuodd", "hw_ecskeys")
+PROGS = ("hw_steal", "hw_intlate", "hw_rowcopy", "hw_cpuodd", "hw_ecskeys", "hw_frame", "hw_steal2", "hw_frame2", "hw_grant", "hw_grantx")
 
 # for looking at the model's pictures only (approximate colours; the STIC's real palette is
 # a later capture, DESIGN 13)

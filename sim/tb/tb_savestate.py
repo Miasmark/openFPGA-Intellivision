@@ -934,10 +934,12 @@ PLANTS = [
     # when busy is up, so a busy forced to 0 would never ask for the save it should catch)
     ('ss_voice_busy_ignored', 'intv_ss_ctl.sv', [("&& !ce_cpu && !voice_busy", "&& !ce_cpu")],
      'voicetest', 'psgtest', AFTER + r'|: freeze inside a voice sample'),
-    # build step 11: a load writes the JLP RAM region over the cart RAM's (the JLP RAM keeps what
-    # ran before: the cartridge's flash rows and results after the load move)
-    ('ss_jram_lost', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
-                                         "                m_we = 1'b1;\n                m_a  = cram_a;")],
+    # build step 11: the JLP RAM region restored one cell off (a load writes cell j's word into
+    # cell j + 1). (Until 2026-11-01 the plant ss_jram_lost wrote the region through cram_a; but
+    # the JLP region follows the cart RAM's in the blob and in the SRAM, so cram_a there is
+    # jram_a, and that plant changed nothing.)
+    ('ss_jram_offset', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
+                                           "                m_we = 1'b1;\n                m_a  = in_jram ? jram_a + 17'd2 : cram_a;")],
      'jlpfls', 'psgtest', r'(: JLP RAM after the load |after: frame)'),
 ]
 # build step 11: the JLP flash slot (intv_jlp_nv, data slot 0x106) end to end. N: the cartridge's

@@ -181,6 +181,19 @@ would see row requests and FRAME would read noticeably low.
 So the console's FRAME CYC settles A against B at once (14,934 or 14,931), and IRQ ENTRY / COPY
 PATH tell a longer interrupt sequence (A) from a slower instruction in the dispatcher (A').
 
+**Console (2026-10-31): "NO EDGE (WINDOW)".** Within the poll limit (2,000 passes, about 7.5
+frames) the program never saw the sequence it waits for: a read of $2C whose low four bits are
+not 1 (closed), then one whose low bits are 1 (open). It enters the polls right after a
+display-on frame's ISR (its own $20 write may fall in VBlank too), so with the model's rules it
+sees "closed" at the end of that VBlank and "open" at the next frame start. Two ways the
+console can fail this, and this program cannot tell them apart: (a) $2C never reads back with
+the border colour in its low bits (a read of the colour registers does not return what MAME's
+rule, $3FF0 | colour, says: the model and MAME are wrong about the read value); or (b) $2C reads
+1 in its low bits at all times, in and out of VBlank, even in a display-on frame (the register
+window does not gate reads of $2C as modelled). Either way the model's rule for this read is
+wrong somewhere. hw_frame2 (section 9) prints the raw values of such reads, and times the frame
+without any register read.
+
 ## 7. hw_steal2: the shape of the bus requests
 
 STIC_NOTES T1, T4; CPU_NOTES (the bus request exit). hw_steal gives the cycles the requests take
@@ -219,6 +232,12 @@ ON passes (hex), k = 0 .. E:
 | M-A, hold 109 (exact on all three) | 361 361 26B 24E 235 209 1F5 1F5 1E1 198 15F 15F 26B 209 1E1 |
 | M-A' (hold 110, the dispatcher +3) | as M-A, hold 110 |
 | M-B (closest: ON 30279) | 361 360 26B 24E 235 206 1F5 1F4 1E1 195 160 15F 26A 206 1E1 |
+| X-A, X-B (section 8: the best fit of all four tests) | 365 365 26B 250 235 209 1F5 1F4 1E4 197 163 163 26A 209 1E3 |
+| Y-B (section 8: the best fit of this table alone) | 365 365 26B 24F 235 209 1F5 1F4 1E4 198 163 163 26A 209 1E3 |
+| **console (2026-10-31; N = 11 rounds, stable)** | **365 365 26A 24F 235 209 1F5 1F4 1E4 198 163 163 26A 209 1E3** |
+
+Console OFF: 3BE 3BE 2AD 28E 271 23F 229 228 215 1C1 184 184 2AC 23F 214 (X-A / X-B: 3BF at k = 0,
+the rest equal; Y-B: all equal).
 
 OFF passes: 3BF 3BE 2AD 28E 271 23F 229 229 215 1C2 185 185 2AC 23F 214 (today's core, A, A');
 B, SI and IR have 3BE at k = 0, SI and IR 1C1 at k = 9, B 184 at k = A and B. The exit NACTs cannot be told apart by any CPU-side count
@@ -271,18 +290,89 @@ counts' last digit also depends on the phase the console powered up in (the firs
 33432 in the model; M-A's ON phases 30280, 30279, 30280 over a long run), so a difference of one
 in a single phase does not decide.
 
+**Fitted to hw_steal2 as well (2026-10-31).** The console's hw_steal2 screen (section 7) is
+matched by none of the candidates above (M-A, hold 109, is closest: 3-4 passes short in the
+loops without MVO). A local search over the model's parameters (interrupt / frame family,
+BUSRQ grant rule, rows, the rows' release point and request lead, the frame request's start and
+length, INTRM sampling) against all four console results finds:
+
+- **Y-B**: B (frame 14,931, 9-cycle interrupt), BUSRQ granted only after interruptible
+  instructions (G82, as today's core), 12 rows, row r released at 4,029 + 912 r (requested at
+  3,922 + 912 r, 107 cycles, then 2 NACTs), the frame request 3,800-3,900, INTRM seen one cycle
+  early: hw_steal2 within one pass at one probe (k = 2), hw_rowcopy exact, but hw_steal ON
+  30299 and hw_intlate 1B 1B 1B 1B 1B 1B.
+- **X-A / X-B**: the same rows and frame request (A: released 4,032 + 912 r, requested 3,924 +
+  912 r for 108; frame request 3,802-3,902), and a grant rule between the two: BUSRQ granted after
+  any instruction except when the next one is not interruptible either (so after an MVO that
+  an interruptible instruction follows, not between two MVOs): hw_steal (33431 / 30280),
+  hw_intlate and hw_rowcopy exact, hw_steal2 off by one pass at k = 2, 3 and 9 and one OFF pass
+  at k = 0.
+
+The probes where the grant rules part: k = A, B (two MVOs in a row: the console loses as few
+cycles as with G82's rule) and hw_steal's loop (an MVO before an MVI: the console loses as many as
+with a grant after the MVO). No rule tried gives both exactly; a cartridge that varies what
+follows the MVO (MVI, NOP, B, another MVO) would settle it.
+
 Before family M, no variant tried matched all three (about 3,000 model runs: hold lengths, frame
 request starts, lengths and merging, exit NACTs, a 12-row case with the requests one line ahead,
 a request held a fixed time from BUSAK, BUSRQ after non-interruptible instructions with the rows
 one line ahead). hw_frame settles A / A' / B; hw_steal2 then tells the families and the holds apart.
 
+## 9. hw_frame2: the frame length from the VBlank interrupt alone; what $2C reads return
+
+STIC_NOTES T11; CPU_NOTES row 1. Replaces hw_frame's register-window timing (section 6: no edge
+on the console). As hw_intlate: a lock frame (display on, main in `sloop`) then a probe frame
+(display off) whose ISR (constant time) returns into probe k (24 + k cycles of padding, k =
+0..5), a path, a delay loop and a train of 60 x INCR R0; the next VBlank interrupt cuts the
+train, and the next ISR keeps idx = interrupted PC - train (hex). Over k = 0..5 the cut moves
+one cycle a probe, so a row's six indices give the cut against the train's start to the cycle:
+C = 6 x min + (the number of k one above it). Rows:
+
+- V: the path MVII + B; the train meets the next frame's interrupt;
+- W: DIS, a delay past the next frame's VBlank (that frame's interrupt is not taken: its request
+  is dropped when INTRM rises, CPU_NOTES), EIS, more delay: the train meets the interrupt one
+  frame later. Both ends are the same kind of event (the interrupt's sampling), so the interrupt
+  sequence is in neither: FRAME CYC = C(W) - C(V) + 14,933 is the frame length;
+- U: V with MVII + SDBD + MVI@ R4, R7 in front (the jump the EXEC's dispatcher makes to our ISR):
+  SDBD JUMP = C(V) - C(U) - 8, the cycles of SDBD + MVI@ R4, R7 (14 in the model).
+
+Then two diagnostic frames read $2C (border colour 1, set by every ISR): in VBlank and at cycle
+~5,000 of a display-on frame, in VBlank and at ~5,000 of a display-off frame, and right after a
+$20 write at that point (hw_frame's late write). Shown raw (4 hex digits). The model (MAME's
+rule): $3FF1 while the registers are open (VBlank, or the handshake clear), $002C (the address
+offset) while closed.
+
+Screen (about 1.5 s to the first, then every 3.1 s): V, W, U rows of six indices, FRAME CYC,
+SDBD JUMP, the five $2C reads, N.
+
+| candidate | V | W | U | FRAME CYC | SDBD JUMP |
+|---|---|---|---|---|---|
+| **today's core** | **1D 1D 1D 1D 1C 1C** | **1D 1D 1D 1D 1D 1C** | **19 19 19 19 19 19** | **14934** | **14** |
+| A (12-cycle interrupt) | 1D 1C 1C 1C 1C 1C | 1D 1D 1C 1C 1C 1C | 19 19 19 18 18 18 | 14934 | 14 |
+| A' (dispatcher's jump +3) | 1D 1C 1C 1C 1C 1C | 1D 1D 1C 1C 1C 1C | 18 18 18 18 18 18 | 14934 | 17 |
+| B (frame 14,931) | 1D 1C 1C 1C 1C 1C | 1C 1C 1C 1C 1C 1B | 19 19 19 18 18 18 | 14931 | 14 |
+| M-A (section 8) | 1C 1C 1C 1C 1B 1B | 1C 1C 1C 1C 1C 1B | 18 18 18 18 18 18 | 14934 | 14 |
+| M-B | 1C 1C 1C 1C 1B 1B | 1C 1C 1B 1B 1B 1B | 18 18 18 18 18 18 | 14931 | 14 |
+| X-A (section 8) | 1C 1C 1C 1C 1B 1B | 1C 1C 1C 1C 1C 1B | 18 18 18 18 18 18 | 14934 | 14 |
+| X-B (section 8) | 1C 1C 1C 1C 1B 1B | 1C 1C 1B 1B 1B 1B | 18 18 18 18 18 18 | 14931 | 14 |
+| Y-B (section 8) | 1C 1C 1C 1B 1B 1B | 1C 1B 1B 1B 1B 1B | 18 18 18 18 18 17 | 14931 | 14 |
+
+$2C reads in the model (all candidates): VBLANK ON 3FF1, MID ON 002C, VBLANK OFF 3FF1, MID OFF
+3FF1, AFTER LATE $20 002C. hw_steal's console OFF count fixes the frame length minus the
+interrupt sequence at 14,922 cycles (the main loop gets 14,487 of each frame; the ISR path's
+instructions take 435 in the model), so FRAME CYC and SDBD JUMP give the interrupt sequence: 14,934 and 14 say 12 cycles (A), 14,934 and
+17 the dispatcher's jump (A'), 14,931 and 14 a 9-cycle interrupt in a shorter frame (B). If the
+console keeps a masked interrupt request latched (taken at the EIS), W's indices come out far
+off (the cut inside the delay loop: FFxx) and FRAME CYC is meaningless: that answers CPU_NOTES'
+edge-latch question instead.
+
 ## On the RTL
 
-All seven run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2`; HW_IMAGES,
+All eight run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2,hw_frame2`; HW_IMAGES,
 never in `--all`: 60 to 1,150 frames each) with the RTL equal to the model on every bus phase and
 picture, straight and through the bench's save/restore round trips, at the core from 0.0.13
 (2026-10-29): hw_steal 460 frames, hw_intlate 230, hw_rowcopy 1,150 (to step 12), hw_cpuodd 60,
 hw_ecskeys 60 with ECS keys held (W; W+Q; W+Q+1; Shift+L) under Auto (attached); hw_frame (720
 frames, to its first result screen) and hw_steal2 (130 frames, the first round shown) likewise on
-2026-10-31 (`--only hw_frame,hw_steal2`). So the screens the owner photographs are the model's
-predictions above, exactly.
+2026-10-31 (`--only hw_frame,hw_steal2`), and hw_frame2 (120 frames, the first round shown). So
+the screens the owner photographs are the model's predictions above, exactly.

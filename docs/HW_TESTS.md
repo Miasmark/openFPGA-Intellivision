@@ -318,6 +318,27 @@ request starts, lengths and merging, exit NACTs, a 12-row case with the requests
 a request held a fixed time from BUSAK, BUSRQ after non-interruptible instructions with the rows
 one line ahead). hw_frame settles A / A' / B; hw_steal2 then tells the families and the holds apart.
 
+**The final fit, F (2026-11-01), against all six console results** (hw_steal, hw_intlate,
+hw_rowcopy, hw_steal2, hw_frame2, hw_grant). Cycles from INTRM (the CPU's VBlank request):
+
+- the frame 14,934 cycles (57 x 262), the interrupt sequence 9 cycles;
+- SDBD + MVI@ R4, R7 one cycle longer (15: hw_frame2), and two more cycles on the interrupt path
+  (the steal OFF count): modelled as JSR 13 and PULR R7 12 (the EXEC's dispatcher and our ISRs
+  have one of each; an 11-cycle interrupt sequence fits the same tests one point worse);
+- BUSRQ granted only after interruptible instructions (G82; hw_grant), as today's core;
+- 12 row requests, none at VDR = 0's 13th place: row r requested at 3,926 + 912 r for 107 cycles,
+  released at 4,033 + 912 r, the CPU resuming 2 NACTs later (4,035 + 912 r; the exit NACTs and
+  the release cannot be told apart, only their sum);
+- the request at the end of VBlank 3,792-3,892 (100 cycles), separate from row 0's;
+- the display enable latched at 3,791 (the end of the register window).
+
+Residuals: hw_steal 33431 / 30280 (in every phase of a 1,000-frame run, the first included),
+hw_intlate 1C 1B 1B 1B 1B 1B, hw_rowcopy all 24 steps, hw_frame2's V, W, U rows (14934, 15): all
+exact. hw_steal2: 5 passes in 30 (ON k = 2 +1, 8 -1, A -1, B -1; OFF k = 7 +1). hw_grant: 11 in 27
+(ON k = 0 -1, 1 +1, 2 +2, 3 -1, 6 -1, 7 -1, A +1, D -1; OFF A +2), its three 000s not explained
+(section 11). Read-back: a closed STIC register reads $0000; the registers close only in a frame
+with the display on (section 9).
+
 ## 9. hw_frame2: the frame length from the VBlank interrupt alone; what $2C reads return
 
 STIC_NOTES T11; CPU_NOTES row 1. Replaces hw_frame's register-window timing (section 6: no edge
@@ -357,8 +378,19 @@ SDBD JUMP, the five $2C reads, N.
 | X-B (section 8) | 1C 1C 1C 1C 1B 1B | 1C 1C 1B 1B 1B 1B | 18 18 18 18 18 18 | 14931 | 14 |
 | Y-B (section 8) | 1C 1C 1C 1B 1B 1B | 1C 1B 1B 1B 1B 1B | 18 18 18 18 18 17 | 14931 | 14 |
 
+| **console (2026-11-01; N = 13 and 14, identical)** | **1C 1C 1C 1B 1B 1B** | **1C 1C 1C 1C 1B 1B** | **18 18 18 18 17 17** | **14934** | **15** (decimal) |
+| F (section 8: the final fit) | 1C 1C 1C 1B 1B 1B | 1C 1C 1C 1C 1B 1B | 18 18 18 18 17 17 | 14934 | 15 |
+
 $2C reads in the model (all candidates): VBLANK ON 3FF1, MID ON 002C, VBLANK OFF 3FF1, MID OFF
-3FF1, AFTER LATE $20 002C. hw_steal's console OFF count fixes the frame length minus the
+3FF1, AFTER LATE $20 002C. **Console: 3FF1, 0000, 3FF1, 3FF1, 3FF1.** So (1) a closed STIC read
+returns $0000, not the address offset (MAME's rule, and ours, are wrong); (2) a $20 write after
+VBlank, with the display off, does not close the registers: they are closed only in a frame
+whose display is on (the handshake written during VBlank), from the end of VBlank to the next
+frame start. That is why hw_frame (section 6) saw no edge: it waited for a close the late write
+never makes. (3) W's indices are sane: the VBlank request masked by DIS was dropped when INTRM
+rose, not kept for the EIS (CPU_NOTES' edge rule holds). FRAME CYC 14934 settles the frame
+length (57 x 262, A not B), and SDBD JUMP 15 (the field is decimal: putdec) makes SDBD + MVI@
+R4, R7 one cycle longer than the model's 14. hw_steal's console OFF count fixes the frame length minus the
 interrupt sequence at 14,922 cycles (the main loop gets 14,487 of each frame; the ISR path's
 instructions take 435 in the model), so FRAME CYC and SDBD JUMP give the interrupt sequence: 14,934 and 14 say 12 cycles (A), 14,934 and
 17 the dispatcher's jump (A'), 14,931 and 14 a 9-cycle interrupt in a shorter frame (B). If the
@@ -400,6 +432,15 @@ ON passes, k = 0 .. E:
 | Y-B (G82 rule) | 1E4 111 10B 141 0F7 0CA 0F1 163 0E1 0D0 090 0E1 0B1 0B2 122 |
 | M-A (grant after any instruction) | 1E1 10F 109 13D 0F5 0C8 0ED 160 0DC 0C8 08C 0DD 0AE 0AE 121 |
 | X-B's structure with the "any" rule | 1E4 10F 10A 13E 0F6 0C8 0ED 160 0DD 0CA 08C 0DD 0AE 0AE 122 |
+| F (section 8: the final fit) | 1E3 112 10A 141 0F7 0CA 0F1 162 0E1 0D0 091 0E1 0B1 0B1 122 |
+| **console (2026-11-01; N = 18 and 19, identical)** | **1E4 111 108 142 0F7 0CA 0F2 163 0E1 000 090 0E1 0B1 0B2 122** |
+
+Console OFF: 215 12C 126 15F 110 000 106 184 0F4 000 098 0F4 0C0 0C0 140. The ON column is G82's
+(Y-B's within one or two at k = 2, 3, 6; X and M-A are off at k = 1, B, C): the bus is lent only
+after interruptible instructions, as G82 says and today's core does. Probe 9 (ON and OFF) and
+probe 5's OFF frame read 000, which no rule of the model gives (it predicts 0D0 / 0DD / 0DD):
+the loop's count was 0 when the next interrupt came, or the ISR read it from elsewhere; section 11
+looks at it.
 
 On one structure (X-B's) the rules differ by 41 passes in all (G82 against any), 14 (G82
 against look-ahead) and 27 (any against look-ahead), up to 6 at one probe: k = 6-A and D tell
@@ -408,14 +449,29 @@ today's structures: 43-50, 14-22, 22-30). The controls (k = 0, E) only move with
 structure. OFF passes are within one of 215 12C 126 15F 110 0DE 106 185 0F4 0DE 09B 0F4 0C0 0C0
 140 for all.
 
+## 11. hw_grantx: where the interrupt cuts hw_grant's probes 5 and 9
+
+hw_grant's frames with six of its loops: 4 (MVO MVII) x2, 5 (MVO SDBD MVII) x2, 8 (MVO MVO) x2 B,
+9 (MVO MVO) x2 NOP B, A (MVO MVO) x3 NOP NOP, 0 (control). The ISR keeps, per frame, the loop's
+count (the interrupted R0, as in hw_grant) and the interrupted PC; the screen shows both for the
+ON and OFF frame of each probe (hex: count, PC; ON yellow, OFF white) and the six loops'
+addresses (50F2, 50FD, 510C / 5117, 5123, 5134: a PC inside a loop's range means the interrupt cut
+it as intended; a PC at the probe's entry or padding, 5139-5173, or a count of 000, means the
+interrupt came right after the ISR returned or the loop never ran).
+
+| candidate | 4 ON / OFF | 5 | 8 | 9 | A | 0 |
+|---|---|---|---|---|---|---|
+| **today's core** | **0F5 50F7 / 10F 50FB** | **0C9 5104 / 0DD 510A** | **0E0 510C / 0F4 510C** | **0CF 5121 / 0DD 5121** | **090 5131 / 09B 5131** | **1DD 5135 / 214 5136** |
+| F (section 8) | 0F7 50F7 / 10F 50F7 | 0C9 510A / 0DD 510A | 0E1 510C / 0F3 510C | 0D0 5121 / 0DD 5118 | 091 5131 / 09A 5131 | 1E2 5135 / 214 5135 |
+
 ## On the RTL
 
-All nine run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2,hw_frame2,hw_grant`; HW_IMAGES,
+All ten run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2,hw_frame2,hw_grant,hw_grantx`; HW_IMAGES,
 never in `--all`: 60 to 1,150 frames each) with the RTL equal to the model on every bus phase and
 picture, straight and through the bench's save/restore round trips, at the core from 0.0.13
 (2026-10-29): hw_steal 460 frames, hw_intlate 230, hw_rowcopy 1,150 (to step 12), hw_cpuodd 60,
 hw_ecskeys 60 with ECS keys held (W; W+Q; W+Q+1; Shift+L) under Auto (attached); hw_frame (720
 frames, to its first result screen) and hw_steal2 (130 frames, the first round shown) likewise on
 2026-10-31 (`--only hw_frame,hw_steal2`), hw_frame2 (120 frames, the first round shown) and
-hw_grant (130 frames). So the screens the owner photographs are the model's predictions above,
-exactly.
+hw_grant (130 frames) and hw_grantx (80 frames). So the screens the owner photographs are the
+model's predictions above, exactly.

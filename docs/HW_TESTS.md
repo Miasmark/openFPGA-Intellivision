@@ -366,13 +366,56 @@ console keeps a masked interrupt request latched (taken at the EIS), W's indices
 off (the cut inside the delay loop: FFxx) and FRAME CYC is meaningless: that answers CPU_NOTES'
 edge-latch question instead.
 
+## 10. hw_grant: after which instructions the CPU lends the bus
+
+CPU_NOTES (interruptibility; G82 p.11 and 2.5.5: the bus is granted "only after the completion
+of an interruptable instruction"). The question of section 8: the console's hw_steal2 and
+hw_steal fit no single grant rule of the model. Three rules: **G82** (only after an
+interruptible instruction: today's core); **any** (after every instruction: the MAME fork);
+**look-ahead** (after every instruction except when the next is not interruptible either:
+X-A / X-B). Same frames as hw_steal2 (section 7): a lock frame, then ON frame k and OFF frame k
+entered at the same cycle, a padding of 30 cycles and loop k until the next interrupt; the
+loops vary what follows a non-interruptible MVO (or MVOI):
+
+| k | loop (MVO, MVOI not interruptible) | k | loop |
+|---|---|---|---|
+| 0 | INCR NOP NOP B (control) | 8 | INCR (MVO MVO) x2 B |
+| 1 | INCR MVO MVI NOP NOP B | 9 | INCR (MVO MVO) x2 NOP B |
+| 2 | INCR (MVO NOP) x2 B | A | INCR (MVO MVO) x3 NOP NOP B |
+| 3 | INCR MVO B NOP B | B | INCR MVO MVO MVI NOP NOP B |
+| 4 | INCR (MVO MVII) x2 B | C | INCR (MVO MVOI MVI) x2 B |
+| 5 | INCR (MVO SDBD MVII) x2 B | D | INCR (MVO MVOI) x3 B |
+| 6 | INCR (MVO MVOI) x2 B | E | INCR NOP x5 B (control) |
+| 7 | INCR MVO MVO B | | |
+
+(MVOI writes to its own operand word in the cartridge, which is never run.) Screen (2.5 s after
+each 0.75 s round): per probe the ON (yellow) and OFF (white) passes in hex; N = rounds.
+
+ON passes, k = 0 .. E:
+
+| candidate | ON |
+|---|---|
+| **today's core (G82 rule)** | **1DE 111 108 13B 0F5 0C9 0F0 161 0E0 0CF 090 0E0 0B0 0B0 11E** |
+| X-A / X-B (look-ahead rule) | 1E4 10F 10A 13E 0F6 0C9 0F1 163 0E1 0D0 090 0DD 0AF 0B2 122 |
+| Y-B (G82 rule) | 1E4 111 10B 141 0F7 0CA 0F1 163 0E1 0D0 090 0E1 0B1 0B2 122 |
+| M-A (grant after any instruction) | 1E1 10F 109 13D 0F5 0C8 0ED 160 0DC 0C8 08C 0DD 0AE 0AE 121 |
+| X-B's structure with the "any" rule | 1E4 10F 10A 13E 0F6 0C8 0ED 160 0DD 0CA 08C 0DD 0AE 0AE 122 |
+
+On one structure (X-B's) the rules differ by 41 passes in all (G82 against any), 14 (G82
+against look-ahead) and 27 (any against look-ahead), up to 6 at one probe: k = 6-A and D tell
+"any" from the other two, k = 1-5, B and C tell G82 from the other two (the same on M-A's and
+today's structures: 43-50, 14-22, 22-30). The controls (k = 0, E) only move with the frame's
+structure. OFF passes are within one of 215 12C 126 15F 110 0DE 106 185 0F4 0DE 09B 0F4 0C0 0C0
+140 for all.
+
 ## On the RTL
 
-All eight run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2,hw_frame2`; HW_IMAGES,
+All nine run in tb_system (`--only hw_steal,hw_intlate,hw_rowcopy,hw_cpuodd,hw_ecskeys,hw_frame,hw_steal2,hw_frame2,hw_grant`; HW_IMAGES,
 never in `--all`: 60 to 1,150 frames each) with the RTL equal to the model on every bus phase and
 picture, straight and through the bench's save/restore round trips, at the core from 0.0.13
 (2026-10-29): hw_steal 460 frames, hw_intlate 230, hw_rowcopy 1,150 (to step 12), hw_cpuodd 60,
 hw_ecskeys 60 with ECS keys held (W; W+Q; W+Q+1; Shift+L) under Auto (attached); hw_frame (720
 frames, to its first result screen) and hw_steal2 (130 frames, the first round shown) likewise on
-2026-10-31 (`--only hw_frame,hw_steal2`), and hw_frame2 (120 frames, the first round shown). So
-the screens the owner photographs are the model's predictions above, exactly.
+2026-10-31 (`--only hw_frame,hw_steal2`), hw_frame2 (120 frames, the first round shown) and
+hw_grant (130 frames). So the screens the owner photographs are the model's predictions above,
+exactly.

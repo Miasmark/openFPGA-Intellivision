@@ -102,7 +102,7 @@ CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
-       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp_store.sv', 'intv_jlp.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
@@ -1223,7 +1223,12 @@ def compare(name, run, got, exp):
     return probs
 
 
-def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pads, timeout=1200):
+def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pads, timeout=None):
+    # the run's wall-clock limit: 1,200 s, or 2 s a frame for the long runs (hw_rowcopy's 1,150
+    # frames hit 1,200 s on a busy VM twice: a time-out, not a mismatch); TB_SYSTEM_TIMEOUT
+    # overrides it
+    if timeout is None:
+        timeout = int(os.environ.get('TB_SYSTEM_TIMEOUT', 0)) or max(1200, 2 * (exp.ncyc // FRAME))
     log = os.path.join(work, 'run_%s.log' % tag)
     pic = os.path.join(work, 'run_%s.pic' % tag)
     cmd = [binary, '+exec=' + exec_path, '+grom=' + grom_path, '+cycles=%d' % exp.ncyc,

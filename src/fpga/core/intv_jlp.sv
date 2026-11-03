@@ -37,10 +37,10 @@
 // routine does) while the engine copies 96 words between the store and the
 // RAM in SRAM (the jm_* port; the SRAM is the cartridge port's otherwise) or
 // erases a sector (768 words). The engine is done in about 1,000 clk_sys,
-// long before BUSY (about 4,800). When a cartridge load starts (fl_clr) the
-// engine erases the whole store (12,288 clk_sys), so a game without a .sav
-// starts erased and never sees another's rows; the Pocket writes the new
-// game's .sav after that (intv_jlp_nv).
+// long before BUSY (about 4,800). When a load finishes without a .sav
+// (fl_clr, intv_core) the engine erases the whole store (12,288 clk_sys), so a
+// game without a .sav starts erased and never sees another's rows; a .sav the
+// Pocket wrote during the load (intv_jlp_nv, before "all complete") is kept.
 //
 // Save state (module id SS_ID, 28 words; tools/jlp.py Jlp.state, words 0-26):
 //   0  {busy cycles left[15:0], on}       1-12  the operands
@@ -59,7 +59,7 @@ module intv_jlp #(
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
-    input  wire logic        fl_clr,          // a cartridge load starts: the store erased (one clk)
+    input  wire logic        fl_clr,          // a load finished without a .sav: the store erased (one clk)
     input  wire logic [1:0]  mode,
     input  wire logic [4:0]  sect,
     input  wire logic        ce,
@@ -171,20 +171,16 @@ module intv_jlp #(
     logic [15:0] cr_v = 16'd0;
 
     // ------------------------------------------------------------ flash
-    logic [15:0] store [12288];
+    // the store (intv_jlp_store: a true dual port; A the engine's, B the slot's, words inverted)
     logic [15:0] st_q;
     logic [13:0] st_a = 14'd0;
     logic        st_we = 1'b0;
     logic [15:0] st_d = 16'd0;
-    always_ff @(posedge clk) begin
-        if (st_we) store[st_a] <= st_d;
-        st_q <= store[st_a];
-    end
     logic [15:0] nv_qi;
-    always_ff @(posedge clk) begin
-        if (nv_we) store[nv_addr] <= ~nv_wdata;
-        nv_qi <= store[nv_addr];
-    end
+    intv_jlp_store flash (
+        .clk(clk),
+        .a_addr(st_a), .a_we(st_we), .a_d(st_d), .a_q(st_q),
+        .b_addr(nv_addr), .b_we(nv_we), .b_d(~nv_wdata), .b_q(nv_qi));
     assign nv_q = ~nv_qi;
 
     /* verilator lint_off UNUSEDSIGNAL */

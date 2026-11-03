@@ -531,7 +531,7 @@ module tb_system;
             for (int w = 0; w < mod_n[m]; w++)
                 ss_read(mod_id[m], w, saved[m][w]);
         if (has_cart) cram_all(0);
-        for (int i = 0; i < 12288; i++) fl_saved[i] = dut.jlp.store[i];
+        for (int i = 0; i < 12288; i++) fl_saved[i] = dut.jlp.flash.store[i];
         fe_saved = dut.jlp.empt;
     endtask
 
@@ -574,7 +574,7 @@ module tb_system;
             wait_cycle(rtcyc + rton);
             freeze();
             $fdisplay(fd, "R frozen again at cycle %0d", cyc);
-            for (int i = 0; i < 12288; i++) dut.jlp.store[i] = fl_saved[i];
+            for (int i = 0; i < 12288; i++) dut.jlp.flash.store[i] = fl_saved[i];
             dut.jlp.empt = fe_saved;
         end
         // junk, so that nothing left from before can pass: straight into

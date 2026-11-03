@@ -397,6 +397,16 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to sram_a[14]
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to sram_a[16]
 # SRAM read data captured in the I/O input registers (core/core_constraints.sdc)
 set_instance_assignment -name FAST_INPUT_REGISTER ON -to sram_dq[*]
+# SRAM outputs from registers in the I/O cells (0.0.21's first trial fit: copies of
+# intv_sram's DQ output-enable register placed in the fabric missed the 10 ns output bound of
+# core_constraints.sdc by 0.5 ns)
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to sram_dq[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to sram_dq[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to sram_a[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to sram_oe_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to sram_we_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to sram_ub_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to sram_lb_n
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to port_tran_so_dir
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to clk_74a
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to cart_tran_bank3_dir

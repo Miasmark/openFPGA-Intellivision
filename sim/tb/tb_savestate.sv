@@ -362,6 +362,7 @@ module tb_savestate;
         if (core.ssc.ld_applied) begin
             cram_hash("MA");
             bank_hash("KA");
+            jram_hash("JA");
             if (rcyc_next >= 0) begin
                 set_val <= rcyc_next;
                 set_req <= 1'b1;
@@ -404,6 +405,15 @@ module tb_savestate;
             if (sram.mem[17'h18000 + 17'(i)] != 16'd0) nz++;
         end
         $fdisplay(fd, "%s %0d %08x %0d", tag, cyc, h, nz);
+    endtask
+
+    // the JLP RAM region (version 5): its 8,000 cells in the SRAM at JLP_BASE, hashed as the
+    // blob's (tb_savestate.py checks the JA line after every load against the blob's cells)
+    task automatic jram_hash(input string tag);
+        logic [31:0] h;
+        h = 32'h811C9DC5;
+        for (int i = 0; i < 8000; i++) h = fnv(h, {16'd0, sram.mem[17'h1C000 + 17'(i)]});
+        $fdisplay(fd, "%s %0d %08x", tag, cyc, h);
     endtask
 
     task automatic bank_hash(input string tag);
@@ -531,7 +541,7 @@ module tb_savestate;
             int k;
             k = 0;
             while (!core.ssc.ss_en && k < 40 * 14934 * 48) begin @(negedge clk); k++; end
-            for (int i = 0; i < 12288; i++) fl_snap[i] = core.machine.jlp.store[i];
+            for (int i = 0; i < 12288; i++) fl_snap[i] = core.machine.jlp.flash.store[i];
             fe_snap = core.machine.jlp.empt;
             fl_took = 1'b1;
         end join_none
@@ -661,7 +671,7 @@ module tb_savestate;
             logic [127:0] fe [1];
             $readmemh({fname, ".flash"}, fl_snap);
             $readmemh({fname, ".empt"}, fe);
-            for (int i = 0; i < 12288; i++) core.machine.jlp.store[i] = fl_snap[i];
+            for (int i = 0; i < 12288; i++) core.machine.jlp.flash.store[i] = fl_snap[i];
             core.machine.jlp.empt = fe[0];
         end
         host_on();
@@ -786,19 +796,10 @@ module tb_savestate;
             load_file(cfg_f, 4'd1, n);
             cfg_len = n; cfg_inlist = 1'b1;
         end
-        @(negedge clk);
-        len_valid = 1'b1;
-        repeat (64) @(negedge clk);           // the loader takes len_valid (synchronised) first
-        to = 0;
-        while (!(core.media.ready && !core.media.busy) && to < 4000000) begin @(negedge clk); to++; end
-        if (to >= 4000000) fail("loader not ready");
-        repeat (8) @(negedge clk);            // the results reach intv_cart's registers
-        $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
-        $fdisplay(fd, "L ecs mode %0d", core.ecs_mode);
-        $fdisplay(fd, "L voice mode %0d", core.voice_mode);
-        repeat (10) @(negedge clk);
         // the JLP flash slot (build step 11): +jlpsav=F written at 0x20000000 as the Pocket does
-        // when it loads a game's .sav (after the cartridge's load, which erased the store)
+        // when it loads a game's .sav: with the other slots, before "all complete" (the data
+        // table's len_valid). (Until 2026-11-03 the bench wrote it after the load had finished;
+        // the owner's 0.0.21 test 4 showed the Pocket's order, where the load's erase lost it.)
         begin
             string jf;
             int    f, ch;
@@ -817,6 +818,17 @@ module tb_savestate;
                 $fdisplay(fd, "R jlp slot written from %s", jf);
             end
         end
+        @(negedge clk);
+        len_valid = 1'b1;
+        repeat (64) @(negedge clk);           // the loader takes len_valid (synchronised) first
+        to = 0;
+        while (!(core.media.ready && !core.media.busy) && to < 4000000) begin @(negedge clk); to++; end
+        if (to >= 4000000) fail("loader not ready");
+        repeat (8) @(negedge clk);            // the results reach intv_cart's registers
+        $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
+        $fdisplay(fd, "L ecs mode %0d", core.ecs_mode);
+        $fdisplay(fd, "L voice mode %0d", core.voice_mode);
+        repeat (10) @(negedge clk);
         if (hold_on == 0) hold_req = 1'b0;
 
         if ($value$plusargs("script=%s", script_f)) begin

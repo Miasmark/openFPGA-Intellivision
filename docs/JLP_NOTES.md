@@ -566,7 +566,7 @@ at $9F90-$9F97 may belong to it **[unk]**.
 
 ### 8.4 Open on the hardware
 
-- The order the Pocket loads a game's .sav and its cartridge in (the store is erased when the
+- (Settled by 0.0.21 on the owner's Pocket, test 4: the .sav comes with the other slots, before "all complete"; 0.0.22 erases the store at a load's finish only when no .sav came in.) The order the Pocket loads a game's .sav and its cartridge in (the store is erased when the
   cartridge's load starts; a .sav written before that would be lost), and when it writes the file
   back (quit, sleep).
 - Mode 2 at reset (off, as1600.txt; jzIntv on): the PiRTO II with Minty, JLPENA.

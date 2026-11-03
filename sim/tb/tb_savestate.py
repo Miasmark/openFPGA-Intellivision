@@ -67,7 +67,7 @@ CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv', 'intv_ss_ctl.sv', 'intv_core.sv', 'core_bridge_cmd.v',
-       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp.sv', 'intv_jlp_nv.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp_store.sv', 'intv_jlp.sv', 'intv_jlp_nv.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
          os.path.join(HERE, 'models', 'sram_as6c2016.sv'),
@@ -813,6 +813,9 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 want_m = '%08x %d' % blob_cram(blob)
                 if len(applied) != 1 or ' '.join(applied[0].split()[2:4]) != want_m:
                     q.append('cart RAM after the load %s, blob %s' % (applied, want_m))
+                ja, want_j = run.tagged('JA'), '%08x' % cram_hash(ss.jram_of(open(blob, 'rb').read()))
+                if len(ja) != 1 or ja[0].split()[2] != want_j:
+                    q.append('JLP RAM after the load %s, blob %s' % (ja, want_j))
                 ka, want_k = run.tagged('KA'), '%08x' % blob_bank(blob)
                 if len(ka) != 1 or ka[0].split()[2] != want_k:
                     q.append('bank registers after the load %s, blob %s' % (ka, want_k))
@@ -931,11 +934,18 @@ PLANTS = [
     # when busy is up, so a busy forced to 0 would never ask for the save it should catch)
     ('ss_voice_busy_ignored', 'intv_ss_ctl.sv', [("&& !ce_cpu && !voice_busy", "&& !ce_cpu")],
      'voicetest', 'psgtest', AFTER + r'|: freeze inside a voice sample'),
-    # build step 11: a load writes the JLP RAM region over the cart RAM's (the JLP RAM keeps what
-    # ran before: the cartridge's flash rows and results after the load move)
-    ('ss_jram_lost', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
-                                         "                m_we = 1'b1;\n                m_a  = cram_a;")],
-     'jlpfls', 'psgtest', AFTER),
+    # build step 11: the JLP RAM region restored one cell off (a load writes cell j's word into
+    # cell j + 1). (Until 2026-11-01 the plant ss_jram_lost wrote the region through cram_a; but
+    # the JLP region follows the cart RAM's in the blob and in the SRAM, so cram_a there is
+    # jram_a, and that plant changed nothing.)
+    ('ss_jram_offset', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
+                                           "                m_we = 1'b1;\n                m_a  = in_jram ? jram_a + 17'd2 : cram_a;")],
+     'jlpfls', 'psgtest', r'(: JLP RAM after the load |after: frame)'),
+    # build step 11 (0.0.22): the store erased at every load's finish, the .sav that came in
+    # during the load included (0.0.21 on the owner's Pocket, test 4: jlpkeep lost its row)
+    ('jlp_sav_erased', 'intv_core.sv', [("wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01 && !jlp_nv_seen;",
+                                         "wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01;")],
+     'jlpfls', 'psgtest', r'jlpfls N: '),
 ]
 # build step 11: the JLP flash slot (intv_jlp_nv, data slot 0x106) end to end. N: the cartridge's
 # .sav written at 0x20000000 after its load, as the Pocket does (the flash the model's own run from

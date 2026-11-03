@@ -941,6 +941,11 @@ PLANTS = [
     ('ss_jram_offset', 'intv_ss_ctl.sv', [("                m_we = 1'b1;\n                m_a  = in_jram ? jram_a : cram_a;",
                                            "                m_we = 1'b1;\n                m_a  = in_jram ? jram_a + 17'd2 : cram_a;")],
      'jlpfls', 'psgtest', r'(: JLP RAM after the load |after: frame)'),
+    # build step 11 (0.0.22): the store erased at every load's finish, the .sav that came in
+    # during the load included (0.0.21 on the owner's Pocket, test 4: jlpkeep lost its row)
+    ('jlp_sav_erased', 'intv_core.sv', [("wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01 && !jlp_nv_seen;",
+                                         "wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01;")],
+     'jlpfls', 'psgtest', r'jlpfls N: '),
 ]
 # build step 11: the JLP flash slot (intv_jlp_nv, data slot 0x106) end to end. N: the cartridge's
 # .sav written at 0x20000000 after its load, as the Pocket does (the flash the model's own run from

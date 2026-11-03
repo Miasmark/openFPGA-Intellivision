@@ -150,9 +150,21 @@ module intv_core #(
     logic [13:0] jlp_nv_addr;
     logic        jlp_nv_we;
     logic [15:0] jlp_nv_wdata;
-    logic        busy_q = 1'b0;
-    always_ff @(posedge clk) busy_q <= cart_busy;
-    wire  logic  jlp_fl_clr = cart_busy && !busy_q;     // a cartridge load starts: flash erased
+    // The JLP flash store is erased once a load, when the load finishes (the data table's
+    // len_valid: every slot is in by then, the game's .sav included), and only if no .sav was
+    // written in this load: a game without one starts erased, one with a .sav keeps it. (Until
+    // 0.0.22 every rise of the loader's busy erased it, the finish's included, after the .sav
+    // had come in: the owner's 0.0.21 test 4.)
+    logic [2:0]  jlv_s = 3'd0;                          // len_valid (clk_74a) into clk
+    logic        jlp_nv_seen = 1'b0;
+    always_ff @(posedge clk) begin
+        jlv_s <= {jlv_s[1:0], len_valid};
+        if (jlv_s[2:1] == 2'b01)
+            jlp_nv_seen <= 1'b0;
+        else if (jlp_nv_we)
+            jlp_nv_seen <= 1'b1;
+    end
+    wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01 && !jlp_nv_seen;
     assign jlp_sectors = jlp_sect;
 
     intv_jlp_nv jlpnv (

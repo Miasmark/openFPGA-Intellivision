@@ -37,10 +37,10 @@
 // routine does) while the engine copies 96 words between the store and the
 // RAM in SRAM (the jm_* port; the SRAM is the cartridge port's otherwise) or
 // erases a sector (768 words). The engine is done in about 1,000 clk_sys,
-// long before BUSY (about 4,800). When a cartridge load starts (fl_clr) the
-// engine erases the whole store (12,288 clk_sys), so a game without a .sav
-// starts erased and never sees another's rows; the Pocket writes the new
-// game's .sav after that (intv_jlp_nv).
+// long before BUSY (about 4,800). When a load finishes without a .sav
+// (fl_clr, intv_core) the engine erases the whole store (12,288 clk_sys), so a
+// game without a .sav starts erased and never sees another's rows; a .sav the
+// Pocket wrote during the load (intv_jlp_nv, before "all complete") is kept.
 //
 // Save state (module id SS_ID, 28 words; tools/jlp.py Jlp.state, words 0-26):
 //   0  {busy cycles left[15:0], on}       1-12  the operands
@@ -59,7 +59,7 @@ module intv_jlp #(
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
-    input  wire logic        fl_clr,          // a cartridge load starts: the store erased (one clk)
+    input  wire logic        fl_clr,          // a load finished without a .sav: the store erased (one clk)
     input  wire logic [1:0]  mode,
     input  wire logic [4:0]  sect,
     input  wire logic        ce,

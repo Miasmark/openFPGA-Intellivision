@@ -9,10 +9,11 @@
 //   player 1 is the left controller, player 2 the right; swap exchanges
 //   them;
 // - keypad mode 0 Layer: D-pad = disc, A/B/X = side actions lower right /
-//   lower left / top; R: D-pad = ring keys by position, A/B/X/Y =
-//   1/2/3/Enter; L (R not held): A/B/X = 5/Clear/0 and the D-pad turned
-//   one notch (22.5 deg) clockwise, the 8 in-between disc directions
-//   (NNE, ENE, ... NNW), so the D-pad reaches all 16;
+//   lower left / top; R, the number pad: D-pad = ring keys by position,
+//   Y/B/A = Clear/0/Enter (the keypad's bottom row), X = 5; L (R not
+//   held) only turns the D-pad one notch (22.5 deg) clockwise, the 8
+//   in-between disc directions (NNE, ENE, ... NNW), so the D-pad reaches
+//   all 16 (the owner's mapping of 2026-11-03);
 // - mode 1 Face-button ring: D-pad = disc, X/B/Y/A = ring 2/8/4/6 (pairs
 //   for 1/3/7/9), L = top side action (no turn: L is a button there),
 //   R = 5;
@@ -258,16 +259,12 @@ module intv_input (
             p = dpad_code(up, dn, lt, rt, 1'b0) | ring_code(bx, bb, by, ba)
               | (l1 ? S_TOP : 8'h00) | (r1 ? key_code(4'd5) : 8'h00);
         end else begin                                          // Layer, Right stick
-            if (r1)
+            if (r1)                                             // R: the number pad
                 p = ring_code(up, dn, lt, rt)
-                  | (ba ? key_code(4'd1) : 8'h00) | (bb ? key_code(4'd2) : 8'h00)
-                  | (bx ? key_code(4'd3) : 8'h00) | (by ? K_ENTER : 8'h00);
-            else if (l1)
-                p = dpad_code(up, dn, lt, rt, 1'b1)
-                  | (ba ? key_code(4'd5) : 8'h00) | (bb ? K_CLEAR : 8'h00)
-                  | (bx ? key_code(4'd0) : 8'h00);
-            else
-                p = dpad_code(up, dn, lt, rt, 1'b0)
+                  | (by ? K_CLEAR : 8'h00) | (bb ? key_code(4'd0) : 8'h00)
+                  | (ba ? K_ENTER : 8'h00) | (bx ? key_code(4'd5) : 8'h00);
+            else                                                // L: only the D-pad's 1/16 turn
+                p = dpad_code(up, dn, lt, rt, l1)
                   | (ba ? side_code(sides[1:0]) : 8'h00) | (bb ? side_code(sides[3:2]) : 8'h00)
                   | (bx ? side_code(sides[5:4]) : 8'h00);
             if (mode == 2'd2 && an)

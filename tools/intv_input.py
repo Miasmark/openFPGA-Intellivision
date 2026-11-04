@@ -50,13 +50,15 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
 - Keypad mode Layer (0, default): D-pad = disc (8 directions); A = lower
   right, B = lower left, X = top side action. R held: D-pad = the keypad
   ring by position (up-left/up/up-right = 1/2/3, left/right = 4/6,
-  down-left/down/down-right = 7/8/9; the disc is released), A/B/X = 1/2/3,
-  Y = Enter. L held (and R not): A/B/X = 5/Clear/0, and the D-pad turned
-  one notch (1/16 turn, 22.5 degrees) clockwise: D-pad alone N, NE, E, SE,
+  down-left/down/down-right = 7/8/9; the disc is released), and the face
+  buttons the keypad's bottom row and centre: Y/B/A = Clear/0/Enter, X = 5
+  (the owner's mapping of 2026-11-03: R is the number pad). L held (and R
+  not) only turns the D-pad one notch (1/16 turn, 22.5 degrees) clockwise,
+  the side buttons staying side actions: D-pad alone N, NE, E, SE,
   S, SW, W, NW; L + D-pad NNE, ENE, ESE, SSE, SSW, WSW, WNW, NNW, so the
   D-pad reaches all 16 disc directions (the owner's "Precision controls",
   2026-10-26; PGA Golf aims with all 16). The chords and the turned disc
-  work together (L + up + A = disc NNE and key 5). R beats L. Y alone,
+  work together (L + up + A = disc NNE and lower right). R beats L. Y alone,
   L+Y and Start do nothing yet; Select opens the on-screen keypad (build
   step 13, tools/osk.py: hands() takes the keypads and the profile).
 - Keypad mode Auto (3, the default from step 13): the game profile's mode,
@@ -236,14 +238,14 @@ def virtual(key, joy, mode, hand=None, sides=("lr", "ll", "top")):
     else:                                   # Layer; Right stick (modes 2, 3)
         if b[R1]:
             h.ring(*dp)
-            for btn, k in ((A, 1), (B, 2), (X, 3), (Y, "E")):
+            for btn, k in ((Y, "C"), (B, 0), (A, "E"), (X, 5)):    # the keypad's bottom row, X = 5
                 if b[btn]:
                     h.key(k)
         else:
             h.dpad(*dp, turn=TURN_L if b[L1] else 0)
-            for btn, k, kl in ((A, sides[0], 5), (B, sides[1], "C"), (X, sides[2], 0)):
+            for btn, k in ((A, sides[0]), (B, sides[1]), (X, sides[2])):   # L only turns the D-pad
                 if b[btn]:
-                    h.key(kl if b[L1] else k)
+                    h.key(k)
         if mode == RSTICK and analog:
             r = stick8((joy >> 16) & 0xFF, (joy >> 24) & 0xFF)
             if r:

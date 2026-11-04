@@ -30,7 +30,7 @@
 ;      and the PSG all through the frame, with a delay that changes every
 ;      pass, so accesses land inside and outside VBlank with the handshake
 ;      set and clear. In frame 7 the loop goes to section 7, then back.
-;   7. the end of the bus-copy window (cycles 0-3,790: the console fit F,
+;   7. (p12: the mode latch read through a closed window, below.) the end of the bus-copy window (cycles 0-3,790: the console fit F,
 ;      docs/TIMING_FIT.md; one slot later than INTRM's end), one
 ;      probe a frame, each timed from the interrupt to the cycle (the
 ;      model and sim/tb/tb_system.py check where each lands): with the
@@ -411,7 +411,7 @@ p10x:   NOP                     ; ends in slot 3788: taken (INTAK in 3789)
 ; STIC ORs the frame's collision bits (none) into $18-$1F: the write is
 ; kept, and $18 reads $3C00 in the next frame's VBlank (STIC_NOTES 6).
 p11:    DIS
-        MVII    #p_end, R0
+        MVII    #p12, R0
         MVO     R0, $02FD
         MVII    #$4018, R4      ; $18 through the $4000 alias
         MVII    #1300, R2    ; @d11
@@ -430,6 +430,19 @@ p11e:  DECR    R2
         MVI     $0018, R1       ; the next frame's VBlank: $3C00
         MVO     R1, $02F8
         EIS
+        B       w7
+; p12 (0.0.22): the mode latch read through a closed window. isr7 set the handshake in this
+; frame's VBlank, so its display is on and the registers close at the window's end (cycle
+; 3,790): FGBG written in VBlank (open), then $0021 read about 6,000 cycles in (closed): the
+; latch must stay FGBG. (Before p12 the latch was already Color Stack whenever the program read
+; $0021 through a closed window, so a read that reached the latch there showed nothing.)
+p12:    MVII    #p_end, R0
+        MVO     R0, $02FD
+        MVO     R0, $0021       ; FGBG (VBlank: open)
+        MVII    #400, R2
+p12d:   DECR    R2
+        BNEQ    p12d
+        MVI     $0021, R1       ; closed: the latch stays FGBG
         B       w7
 p_end:  DIS
         MVII    #isr_main, R0

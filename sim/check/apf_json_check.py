@@ -535,8 +535,8 @@ def main():
     check(len({x["id"] for x in mp}) == len(mp) and len({x["key"] for x in mp}) == len(mp) and all(x["name"] for x in mp),
           "input.json: unique ids and keys, every button named")
     check([x["key"] for x in mp] == ["pad_btn_a", "pad_btn_b", "pad_btn_x", "pad_btn_y", "pad_trig_l", "pad_trig_r"]
-          and [x["name"] for x in mp][:4] == ["Side lower right", "Side lower left", "Side top", "Enter (with R)"],
-          "input.json: A/B/X side actions lower right / lower left / top, Y Enter, L and R the keypad layers "
+          and [x["name"] for x in mp][:4] == ["Side lower right", "Side lower left", "Side top", "Clear (with R)"],
+          "input.json: A/B/X side actions lower right / lower left / top, Y Clear with R, L the disc turn, R the number pad "
           "(intv_input.sv Layer mode)")
     info = open(os.path.join(core_dir, "info.txt")).read()
     check(all(w in info for w in ("exec.bin", "grom.bin", "ecs.bin", "ivoice.bin", "/Assets/intv/common/")),

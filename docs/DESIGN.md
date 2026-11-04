@@ -435,7 +435,7 @@ One input module builds a virtual hand controller per player. Every source feeds
 
 | Mode | Layout | Source |
 |---|---|---|
-| Layer (default) | D-pad = disc (16 directions from an analog stick when docked); L + D-pad = the 8 in-between disc directions (each D-pad direction turned 22.5 degrees clockwise); A/B/X = side actions; R + A/B/X = 1/2/3, R + Y = Enter; R + D-pad = ring keys by position; L + A/B/X = 5/Clear/0 | IN |
+| Layer (default) | D-pad = disc (16 directions from an analog stick when docked); L + D-pad = the 8 in-between disc directions (each D-pad direction turned 22.5 degrees clockwise); A/B/X = side actions; R + D-pad = ring keys by position, R + Y/B/A = Clear/0/Enter (the keypad's bottom row), R + X = 5 (the owner's mapping of 2026-11-03; until 0.0.21 R + A/B/X/Y = 1/2/3/Enter and L + A/B/X = 5/Clear/0); L only turns the D-pad | IN |
 | Face-button ring | D-pad = disc; X=2, B=8, Y=4, A=6, pairs for diagonals; L = side action, R = 5 (TRON Deadly Discs; also AD&D) | IN; L-TA |
 | Right stick | docked analog: right stick picks the ring key | IN |
 | Swap controllers | menu item | IN |

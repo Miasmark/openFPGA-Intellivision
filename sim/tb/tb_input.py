@@ -166,33 +166,37 @@ def spec_rows():
         r(f'{L}: X = Upper', mode, keys('X'), ['Upper'])
         r(f'{L}: Y alone = nothing', mode, keys('Y'), [])
         r(f'{L}: A+B+X = three side actions', mode, keys('A', 'B', 'X'), ['Lower-Right', 'Lower-Left', 'Upper'])
-        r(f'{L}: R+A = 1', mode, keys('R', 'A'), ['1'])
-        r(f'{L}: R+B = 2', mode, keys('R', 'B'), ['2'])
-        r(f'{L}: R+X = 3', mode, keys('R', 'X'), ['3'])
-        r(f'{L}: R+Y = Enter', mode, keys('R', 'Y'), ['Enter'])
+        # R: the number pad (the owner's mapping of 2026-11-03): the keypad's bottom row on the lower
+        # buttons, Y B A = Clear 0 Enter, and X = 5
+        r(f'{L}: R+Y = Clear', mode, keys('R', 'Y'), ['Clear'])
+        r(f'{L}: R+B = 0', mode, keys('R', 'B'), ['0'])
+        r(f'{L}: R+A = Enter', mode, keys('R', 'A'), ['Enter'])
+        r(f'{L}: R+X = 5', mode, keys('R', 'X'), ['5'])
+        r(f'{L}: R+Y+B+A+X = Clear, 0, Enter, 5', mode, keys('R', 'Y', 'B', 'A', 'X'), ['Clear', '0', 'Enter', '5'])
         r(f'{L}: R alone = nothing', mode, keys('R'), [])
-        r(f'{L}: L+A = 5', mode, keys('L', 'A'), ['5'])
-        r(f'{L}: L+B = Clear', mode, keys('L', 'B'), ['Clear'])
-        r(f'{L}: L+X = 0', mode, keys('L', 'X'), ['0'])
+        # L: only the D-pad's 1/16 turn (2026-11-03): the side buttons stay side actions
+        r(f'{L}: L+A = Lower-Right', mode, keys('L', 'A'), ['Lower-Right'])
+        r(f'{L}: L+B = Lower-Left', mode, keys('L', 'B'), ['Lower-Left'])
+        r(f'{L}: L+X = Upper', mode, keys('L', 'X'), ['Upper'])
         r(f'{L}: L+Y = nothing', mode, keys('L', 'Y'), [])
-        r(f'{L}: L+R+A = 1 (R beats L)', mode, keys('L', 'R', 'A'), ['1'])
-        r(f'{L}: R+up+A = keys 2 and 1 together', mode, keys('R', 'up', 'A'), ['2', '1'])
+        r(f'{L}: L+R+A = Enter (R beats L)', mode, keys('L', 'R', 'A'), ['Enter'])
+        r(f'{L}: R+up+A = keys 2 and Enter together', mode, keys('R', 'up', 'A'), ['2', 'Enter'])
         r(f'{L}: up+A = disc Up and Lower-Right together', mode, keys('up', 'A'), ['Up', 'Lower-Right'])
         # L + D-pad (the owner's Precision controls, 2026-10-26): the chords and the turned disc together
-        r(f'{L}: L+up+A = disc Up-Up-Right and 5', mode, keys('L', 'up', 'A'), ['Up-Up-Right', '5'])
-        r(f'{L}: L+right+B = disc Right-Down-Right and Clear', mode, keys('L', 'right', 'B'),
-          ['Right-Down-Right', 'Clear'])
-        r(f'{L}: L+down+X = disc Down-Down-Left and 0', mode, keys('L', 'down', 'X'), ['Down-Down-Left', '0'])
+        r(f'{L}: L+up+A = disc Up-Up-Right and Lower-Right', mode, keys('L', 'up', 'A'), ['Up-Up-Right', 'Lower-Right'])
+        r(f'{L}: L+right+B = disc Right-Down-Right and Lower-Left', mode, keys('L', 'right', 'B'),
+          ['Right-Down-Right', 'Lower-Left'])
+        r(f'{L}: L+down+X = disc Down-Down-Left and Upper', mode, keys('L', 'down', 'X'), ['Down-Down-Left', 'Upper'])
         r(f'{L}: L+left+Y = disc Left-Up-Left (Y nothing)', mode, keys('L', 'left', 'Y'), ['Left-Up-Left'])
-        r(f'{L}: L+up+left+A+B+X = disc Up-Up-Left, 5, Clear, 0', mode, keys('L', 'up', 'left', 'A', 'B', 'X'),
-          ['Up-Up-Left', '5', 'Clear', '0'])
-        r(f'{L}: L+down+right+A = disc Down-Down-Right and 5', mode, keys('L', 'down', 'right', 'A'),
-          ['Down-Down-Right', '5'])
+        r(f'{L}: L+up+left+A+B+X = disc Up-Up-Left and the three side actions', mode,
+          keys('L', 'up', 'left', 'A', 'B', 'X'), ['Up-Up-Left', 'Lower-Right', 'Lower-Left', 'Upper'])
+        r(f'{L}: L+down+right+A = disc Down-Down-Right and Lower-Right', mode, keys('L', 'down', 'right', 'A'),
+          ['Down-Down-Right', 'Lower-Right'])
         r(f'{L}: L+up+down = nothing', mode, keys('L', 'up', 'down'), [])
         r(f'{L}: L+up+down+left = disc Left-Up-Left', mode, keys('L', 'up', 'down', 'left'), ['Left-Up-Left'])
-        r(f'{L}: L+left+right+X = 0 only', mode, keys('L', 'left', 'right', 'X'), ['0'])
+        r(f'{L}: L+left+right+X = Upper only', mode, keys('L', 'left', 'right', 'X'), ['Upper'])
         r(f'{L}: L+R+up = key 2 (R beats L, no turn)', mode, keys('L', 'R', 'up'), ['2'])
-        r(f'{L}: L+R+up+right+B = keys 3 and 2', mode, keys('L', 'R', 'up', 'right', 'B'), ['3', '2'])
+        r(f'{L}: L+R+up+right+B = keys 3 and 0', mode, keys('L', 'R', 'up', 'right', 'B'), ['3', '0'])
         r(f'{L}: L+Start+up = disc Up-Up-Right', mode, keys('L', 'Start', 'up'), ['Up-Up-Right'])
         r(f'{L}: Start, Select, L2, R2, L3, R3 = nothing', mode, keys('Start', 'Select', 'L2', 'R2', 'L3', 'R3'), [])
     L = 'Face-button ring'
@@ -223,11 +227,11 @@ def spec_rows():
     r('Right stick: right stick inside its dead zone = nothing', 2, keys(t=3), [], j1=(y << 24) | (x << 16) | 0x8080)
     r('Right stick: R3 = 5', 2, keys('R3', t=3), ['5'])
     r('Layer: R3 = nothing', 0, keys('R3', t=3), [])
-    r('Right stick: R+A = 1 (Layer kept)', 2, keys('R', 'A', t=3), ['1'])
+    r('Right stick: R+A = Enter (Layer kept)', 2, keys('R', 'A', t=3), ['Enter'])
     for i, d in enumerate(DPAD8):
         r(f'Right stick: L + D-pad {"+".join(d)} = disc {DIRS[2 * i + 1]} (Layer kept)', 2, keys('L', *d, t=3),
           [DIRS[2 * i + 1]])
-    r('Right stick: L+up+X = disc Up-Up-Right and 0', 2, keys('L', 'up', 'X', t=2), ['Up-Up-Right', '0'])
+    r('Right stick: L+up+X = disc Up-Up-Right and Upper', 2, keys('L', 'up', 'X', t=2), ['Up-Up-Right', 'Upper'])
     r('Right stick on the Pocket (type 1): stick words ignored', 2, keys(t=1), [], j1=0x00FF00FF)
     # Left stick: 16 directions, all modes
     for mode in range(4):
@@ -249,8 +253,8 @@ def spec_rows():
     x, y = stick(90, 100)
     r('Layer: L+up with the left stick at 90 degrees = discs Up-Up-Right and Right', 0, keys('L', 'up', t=3),
       ['Up-Up-Right', 'Right'], j1=0x80800000 | (y << 8) | x)
-    r('Layer: L+A with the left stick at 90 degrees = disc Right and 5', 0, keys('L', 'A', t=3),
-      ['Right', '5'], j1=0x80800000 | (y << 8) | x)
+    r('Layer: L+A with the left stick at 90 degrees = disc Right and Lower-Right', 0, keys('L', 'A', t=3),
+      ['Right', 'Lower-Right'], j1=0x80800000 | (y << 8) | x)
     # Keyboard
     kb = [(0x1E + i, str(i + 1)) for i in range(9)] + [(0x27, '0'), (0x28, 'Enter'), (0x2A, 'Clear'), (0x58, 'Enter')] \
         + [(0x59 + i, str(i + 1)) for i in range(9)] + [(0x62, '0')]
@@ -276,8 +280,8 @@ def spec_rows():
     r('both players, Layer: L+up on player 1, up on player 2', 0, keys('L', 'up'), ['Up-Up-Right'],
       k2=keys('up', t=2), want2=['Up'])
     r('both players at once', 0, keys('up'), ['Up'], k2=keys('down', t=2), want2=['Down'])
-    r('player 2 in Layer: R+Y = Enter, keyboard stays with player 1', 0, 0, ['7'], k3=4 << 28, j3=0x24,
-      k2=keys('R', 'Y', t=2), want2=['Enter'])
+    r('player 2 in Layer: R+Y = Clear, keyboard stays with player 1', 0, 0, ['7'], k3=4 << 28, j3=0x24,
+      k2=keys('R', 'Y', t=2), want2=['Clear'])
     return rows
 
 
@@ -302,14 +306,12 @@ def l_oracle(btns, mode, stick_dir):
     elif 'R' in b:                              # R beats L
         if (v, h) in pos:
             out.append(ring[pos[(v, h)]])
-        out += [k for btn, k in (('A', '1'), ('B', '2'), ('X', '3'), ('Y', 'Enter')) if btn in b]
+        out += [k for btn, k in (('Y', 'Clear'), ('B', '0'), ('A', 'Enter'), ('X', '5')) if btn in b]
     else:
-        turn = 1 if 'L' in b else 0             # L: one notch clockwise
+        turn = 1 if 'L' in b else 0             # L: only the D-pad, one notch clockwise
         if (v, h) in pos:
             out.append(DIRS[2 * pos[(v, h)] + turn])
-        side = (('A', '5'), ('B', 'Clear'), ('X', '0')) if 'L' in b else \
-            (('A', 'Lower-Right'), ('B', 'Lower-Left'), ('X', 'Upper'))
-        out += [k for btn, k in side if btn in b]
+        out += [k for btn, k in (('A', 'Lower-Right'), ('B', 'Lower-Left'), ('X', 'Upper')) if btn in b]
     if stick_dir is not None:
         out.append(DIRS[stick_dir])             # the stick is never turned
     return out
@@ -661,7 +663,12 @@ PLANTS = [
     ('deadzone_le', 'intv_input.sv', '< 17\'(DZ_DISC * DZ_DISC)', '<= 17\'(DZ_DISC * DZ_DISC)'),
     ('slope_171', 'intv_input.sv', "b171  = 18'(b) * 18'd171;", "b171  = 18'(b) * 18'd180;"),
     ('y_flipped', 'intv_input.sv', "d = dy[8] ? 4'(k) : 4'(4'd8 - 4'(k));", "d = !dy[8] ? 4'(k) : 4'(4'd8 - 4'(k));"),
-    ('l_beats_r', 'intv_input.sv', '            if (r1)\n', '            if (r1 && !l1)\n'),
+    ('l_beats_r', 'intv_input.sv', '            if (r1)                                             // R: the number pad\n',
+     '            if (r1 && !l1)                                      // R: the number pad\n'),
+    # the owner's mapping of 2026-11-03: R + A = Enter (not 1 as until 0.0.21), L leaves A/B/X alone
+    ('r_keys_old', 'intv_input.sv', "(ba ? K_ENTER : 8'h00)", "(ba ? key_code(4'd1) : 8'h00)"),
+    ('l_chord_back', 'intv_input.sv', "(ba ? side_code(sides[1:0]) : 8'h00)",
+     "(ba ? (l1 ? key_code(4'd5) : side_code(sides[1:0])) : 8'h00)"),
     ('ring_nocancel', 'intv_input.sv', "uu = u & ~d;  dd = d & ~u;  ll = l & ~r;  rr = r & ~l;\n        unique case ({uu, dd, ll, rr})\n            4'b1010: ring_code",
      "uu = u;  dd = d & ~u;  ll = l & ~r;  rr = r & ~l;\n        unique case ({uu, dd, ll, rr})\n            4'b1010: ring_code"),
     ('face_lr_swapped', 'intv_input.sv', 'ring_code(bx, bb, by, ba)', 'ring_code(bx, bb, ba, by)'),
@@ -675,13 +682,13 @@ PLANTS = [
     # 0.0.7); L turning the D-pad in Face-button ring too; an L chord (A/B/X) dropping the disc, or undoing
     # the turn; L turning the left stick as well; the turn by two notches
     ('turn_ccw', 'intv_input.sv', "disc_code(k + {3'b000, turn})", "disc_code(k - {3'b000, turn})"),
-    ('turn_none', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b1)", "p = dpad_code(up, dn, lt, rt, 1'b0)"),
+    ('turn_none', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, l1)", "p = dpad_code(up, dn, lt, rt, 1'b0)"),
     ('turn_in_face', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b0) | ring_code(bx, bb, by, ba)",
      "p = dpad_code(up, dn, lt, rt, l1) | ring_code(bx, bb, by, ba)"),
-    ('chord_drops_disc', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b1)",
-     "p = ((ba | bb | bx) ? 8'h00 : dpad_code(up, dn, lt, rt, 1'b1))"),
-    ('chord_unturns', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, 1'b1)",
-     "p = dpad_code(up, dn, lt, rt, !(ba | bb | bx))"),
+    ('chord_drops_disc', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, l1)",
+     "p = ((ba | bb | bx) ? 8'h00 : dpad_code(up, dn, lt, rt, l1))"),
+    ('chord_unturns', 'intv_input.sv', "p = dpad_code(up, dn, lt, rt, l1)",
+     "p = dpad_code(up, dn, lt, rt, l1 & !(ba | bb | bx))"),
     ('turn_two', 'intv_input.sv', "disc_code(k + {3'b000, turn})", "disc_code(k + {2'b00, turn, 1'b0})"),
     ('turn_stick', 'intv_input.sv',
      [("function automatic logic [7:0] stick16_code(input logic [7:0] x, input logic [7:0] y);",

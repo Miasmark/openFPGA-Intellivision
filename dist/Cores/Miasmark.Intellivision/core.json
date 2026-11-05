@@ -4,9 +4,9 @@
     "metadata": {
       "platform_ids": ["intv"],
       "shortname": "Intellivision",
-      "description": "Mattel Intellivision, a clean-room core with save states (WIP).",
+      "description": "Mattel Intellivision with the ECS, Intellivoice and JLP.",
       "author": "Miasmark",
-      "url": "",
+      "url": "https://github.com/Miasmark/openFPGA-Intellivision",
       "version": "0.0.23",
       "date_release": "2026-11-05"
     },

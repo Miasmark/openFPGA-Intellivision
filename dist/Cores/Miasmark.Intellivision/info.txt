@@ -1,31 +1,30 @@
 Mattel Intellivision for Analogue Pocket
-A clean-room core, written from Mattel's and General Instrument's
-documents, with save states designed in. Work in progress: this build
-runs the EXEC, cartridges (.int/.bin with the CRC table, BIN + CFG,
-Intellicart .rom) and the Entertainment Computer System (ECS): its
-ROMs, RAM, second sound chip, the computer keyboard and the music
-synthesizer from a USB keyboard on the Dock. No Intellivoice yet.
+A clean-room core with the ECS, the Intellivoice, JLP cartridges and
+save states. Timing measured against a real console (Model 2609).
 
 System ROMs (yours to supply, in /Assets/intv/common/):
   exec.bin     EXEC ROM, 8,192 bytes (required)
   grom.bin     GROM, 2,048 bytes (required)
-  ecs.bin      ECS ROM, 24,576 bytes (optional, for ECS games)
-  ivoice.bin   Intellivoice SP0256-012 ROM, 2,048 bytes (optional)
+  ecs.bin      ECS ROM, 24,576 bytes (for ECS games)
+  ivoice.bin   Intellivoice SP0256-012 ROM, 2,048 bytes (for voice games)
 
 Cartridges: .int / .bin / .rom / .itv. A .bin that needs a .cfg takes
-NAME.cfg from beside NAME.bin by itself (nothing to pick).
+NAME.cfg from beside NAME.bin by itself. JLP games keep their flash
+saves in a .sav file.
 
-ECS (menu "ECS", taken at the next Reset or load): Auto attaches it as
-each cartridge needs (ECS games: on, with the ECS title where the game
-asks for it; other games: attached with its ROMs paged out, so they
-start straight; a cartridge that uses $4000-$47FF: off). On and Off
-force it. "ECS Keyboard": the USB keyboard as the computer keyboard
-or, on two rows (Z-M, Q-I), as the music synthesizer.
+Controls (Keypad Mode Auto: by the game, else Layer):
+  D-pad        the disc; L + D-pad: the 8 in-between directions
+  A / B / X    side buttons: lower right / lower left / top
+  R + D-pad    keypad 1-9 by position
+  R + Y B A    keypad Clear / 0 / Enter;  R + X: 5
+  Select       the on-screen keypad (D-pad, A presses, B closes)
 
-While the files load, or when a required one is missing, a test pattern
-shows instead. Its bottom row has one block per file: cartridge, config,
-EXEC, GROM, ECS, Intellivoice. Green = loaded, right size; yellow =
-loaded, other size; red = required and missing; grey = optional and
-missing.
+ECS (menu, taken at the next Reset or load): Auto attaches it as each
+cartridge needs. "ECS Keyboard": the USB keyboard on the Dock as the
+computer keyboard or the music synthesizer.
+
+While files load, or when a required one is missing, a test pattern
+shows one block per file: green loaded, yellow another size, red
+required and missing, grey optional and missing.
 
 Licenses: see the licenses/ folder (MIT, with third-party notices).

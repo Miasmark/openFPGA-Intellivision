@@ -98,6 +98,8 @@ import stic                 # noqa: E402
 import sp0256               # noqa: E402
 import intvcart as m        # noqa: E402
 
+sys.path.insert(0, HERE)
+import tbcommon             # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
@@ -887,7 +889,7 @@ def build(work, rtl_dir, verilator, strict=True):
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + OTHER
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
     text = open(log).read()
     if r.returncode != 0:
         print(text[-4000:])

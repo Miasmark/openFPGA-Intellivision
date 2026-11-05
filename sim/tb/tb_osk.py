@@ -32,6 +32,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import intv_input as im  # noqa: E402
 import osk  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, 'sim', 'tb'))
+import tbcommon  # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_input.sv', 'intv_profile.sv', 'intv_osk_draw.sv']
@@ -156,7 +158,7 @@ def build(work, rtl_dir, verilator, strict=True):
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + [TB]
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
     text = open(log).read()
     if r.returncode != 0:
         print(text[-4000:])

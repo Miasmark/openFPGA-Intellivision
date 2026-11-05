@@ -62,6 +62,7 @@ import as1610               # noqa: E402
 import intv_system as isys  # noqa: E402
 import intvcart as m        # noqa: E402
 import savestate as ss      # noqa: E402
+import tbcommon             # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
@@ -203,7 +204,7 @@ def build(work, rtl_dir, verilator, strict=True):
     log = os.path.join(work, 'build.log')
     for attempt in (1, 2):             # Verilator 5.040 can rarely fault on a build: once more
         with open(log, 'w') as f:
-            r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+            r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
         if r.returncode == 0:
             break
     text = open(log).read()

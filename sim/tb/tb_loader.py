@@ -48,6 +48,8 @@ import synth_image        # noqa: E402
 import intv_mapper        # noqa: E402
 import intvcart as m      # noqa: E402
 import cartfmt as cf      # noqa: E402
+sys.path.insert(0, HERE)
+import tbcommon           # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
@@ -397,7 +399,7 @@ def build(work, rtl_dir, verilator, strict=True):
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + OTHER
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
     text = open(log).read()
     if r.returncode != 0:
         print(text[-4000:])

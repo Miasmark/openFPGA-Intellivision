@@ -81,6 +81,7 @@ deleted after the run; on the owner's VM run this in a simulation slot
 "TB_SYSTEM_ALL FAIL (...)".
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -97,6 +98,8 @@ import intv_system as isys  # noqa: E402
 import stic                 # noqa: E402
 import sp0256               # noqa: E402
 import intvcart as m        # noqa: E402
+sys.path.insert(0, HERE)
+import tbcommon             # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
@@ -887,7 +890,7 @@ def build(work, rtl_dir, verilator, strict=True):
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + OTHER
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
     text = open(log).read()
     if r.returncode != 0:
         print(text[-4000:])
@@ -1391,9 +1394,12 @@ def sweep_clock(line, e0=176, mf=196):
 
 
 def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, verbose=True,
-                only_runs=None):
+                only_runs=None, first_fail=False):
+    """first_fail (the plants): stop after the first run with a problem. The problems so far are
+    the full run's first ones (runs are checked in order and the dump comparison between runs
+    comes last), so the plant's verdict and its first problem are the same."""
     probs = []
-    results = {}
+    results = {}                        # tag: the run's dumps (got[2]), for the comparison below
     for tag, args in rt_runs(exp):
         if only_runs and tag not in only_runs:
             continue
@@ -1402,9 +1408,11 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
                         pads)
         if got is None:
             probs.append('%s %s: the bench did not finish' % (name, tag))
+            if first_fail:
+                return probs
             continue
         p = compare(name, tag, got, exp)
-        results[tag] = got
+        results[tag] = got[2]
         if verbose:
             rt = [x for x in got[3] if x.startswith('R ')]
             print('  %s %s: %d bus phases, %d step starts, %d pictures (%d with the display on), '
@@ -1414,12 +1422,15 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
                 ('; ' + '; '.join(x[2:] for x in rt)) if rt else '',
                 ('\n    FAIL ' + '\n    FAIL '.join(p)) if p else ''))
         probs += ['%s %s: %s' % (name, tag, x) for x in p]
+        del got
+        if first_fail and probs:
+            return probs
     ref = results.get('straight')
-    for tag, got in results.items():
+    for tag, dumps in results.items():
         if ref is None or tag == 'straight':
             continue
         for k in (1, 2):
-            a, b = ref[2].get(k, {}), got[2].get(k, {})
+            a, b = ref.get(k, {}), dumps.get(k, {})
             diff = [w for w in a if a[w] != b.get(w)]
             if diff:
                 probs.append('%s %s: dump %d differs from the straight run in %d words, first %s' % (
@@ -2030,6 +2041,10 @@ def main():
     ap.add_argument('--screens', action='store_true', help='the step-4 frame gate (SCREENS)')
     ap.add_argument('--play', action='store_true', help='the step-6 play bench (PLAY)')
     ap.add_argument('--ecs-play', action='store_true', help='the step-9 ECS runs (ECS_PLAY)')
+    ap.add_argument('--part', help='K/N: part K of N of the images and of the plants (with --screens, '
+                                   '--play, --ecs-play: of their runs); a gate split into N processes '
+                                   '(docs/SIM_SPEED.md)')
+    ap.add_argument('--child', choices=('images', 'plants'), help=argparse.SUPPRESS)
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_system'))
@@ -2050,12 +2065,18 @@ def main():
     imgs = IMAGES
     if a.only:
         imgs = [i for i in IMAGES + HW_IMAGES if i[0] in a.only.split(',')]
+    if not a.child and (len(imgs) > 1 or a.all or a.plants_only or a.plant or a.part):
+        return parent_main(a, imgs, verilator, work)
+    quiet = a.child == 'plants'
     carts = {}
     execs = {}
     exps = {}
     pads = {}
     fails = []
     t0 = time.time()
+    out = sys.stdout
+    if quiet:                           # a plants child: its image's model lines are the images child's
+        sys.stdout = open(os.devnull, 'w')
     try:
         for name, zipname, prog, nframes, pad, smode in imgs:
             cart = None
@@ -2087,7 +2108,8 @@ def main():
             ex = exec_path
             if prog == 'voicetest.py':
                 ex = os.path.join(work, name + '_exec.bin')
-                subprocess.run([sys.executable, '-I', os.path.join(TESTROMS, prog), ex], check=True)
+                subprocess.run([sys.executable, '-I', os.path.join(TESTROMS, prog), ex], check=True,
+                               stdout=subprocess.DEVNULL if quiet else None)
             elif prog:
                 ex = os.path.join(work, name + '_exec.bin')
                 with open(os.path.join(TESTROMS, prog), encoding='utf-8') as f:
@@ -2165,6 +2187,10 @@ def main():
                     print('  MAME %s: no trace at %s' % (name, tr))
                     fails.append('MAME trace ' + name)
         print('expectations: %.1fs' % (time.time() - t0))
+        if quiet:
+            sys.stdout.close()
+            sys.stdout = out
+        n_model = len(fails)
 
         binary = os.path.join(work, 'obj', 'tb_system')
         if not a.no_build:
@@ -2183,8 +2209,11 @@ def main():
                     print('TB_SYSTEM %s FAIL' % name)
                 else:
                     print('TB_SYSTEM %s pass' % name)
+        n_check = len(fails)
 
-        if a.all or a.plants_only or a.plant:
+        if (a.all or a.plants_only or a.plant) and a.child != 'images':
+            if quiet:
+                print(PLANTS_FROM, flush=True)
             sel = a.plant.split(',') if a.plant else None
             for pname, f, edits, img, runs in PLANTS:
                 if sel and pname not in sel:
@@ -2220,16 +2249,98 @@ def main():
                             os.remove(c)
                 else:
                     pr = check_image(b, d, img, execs[img], grom_path, carts[img], exps[img], pads[img],
-                                     verbose=False, only_runs=runs or ['straight'])
+                                     verbose=False, only_runs=runs or ['straight'], first_fail=True)
                 if pr:
                     print('PLANT %s: caught: %s' % (pname, pr[0][:150]))
                 else:
                     print('PLANT %s: not caught' % pname)
                     fails.append('plant ' + pname)
     finally:
+        sys.stdout = out
         for c in carts.values():
             if c and os.path.exists(c):
                 os.remove(c)
+    if a.child:                         # to parent_main: the fails by phase
+        print(CHILD + json.dumps({'model': fails[:n_model], 'check': fails[n_model:n_check],
+                                  'plants': fails[n_check:]}))
+        return 0
+    print('TB_SYSTEM_ALL %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:6])))
+    return 1 if fails else 0
+
+
+CHILD = 'TB_SYSTEM_CHILD '
+
+
+def run_child(work, args):
+    """tb_system.py --child ARGS in its own process; its lines go through (a plants child's from
+    its first plant on), and its fails come back ({'model', 'check', 'plants'}; None if it died)."""
+    cmd = [sys.executable, '-u', '-I', os.path.abspath(__file__), '--no-build'] + args
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    res, held = None, [] if '--child' in args and args[args.index('--child') + 1] == 'plants' else None
+    for ln in p.stdout:
+        if ln.startswith(CHILD):
+            res = json.loads(ln[len(CHILD):])
+        elif held is not None and not ln.startswith(PLANTS_FROM):
+            held.append(ln)
+        else:
+            held = None
+            if not ln.startswith(PLANTS_FROM):
+                sys.stdout.write(ln)
+                sys.stdout.flush()
+    p.wait()
+    if res is None:                     # died: show what it said
+        sys.stdout.write(''.join(held or []))
+        print('%s: exit %d without a result' % (' '.join(args), p.returncode), flush=True)
+    return res
+
+
+PLANTS_FROM = 'TB_SYSTEM_CHILD_PLANTS'
+
+
+def parent_main(a, imgs, verilator, work):
+    """Several images, or plants: each image, and each run of consecutive plants on one image, in
+    its own process (run_child), so that only one image's model data is in memory at a time
+    (docs/SIM_SPEED.md 4). The lines are the single process's (but for the order: each image's
+    model, then its runs), the fails come back in its order, and the last line is the same."""
+    t1 = time.time()
+    if not a.no_build:
+        binary = build(work, CORE, verilator)
+        if not binary:
+            print('TB_SYSTEM_ALL FAIL (build)')
+            return 1
+        print('build: %.1fs' % (time.time() - t1), flush=True)
+    names = [i[0] for i in imgs]
+    part = tbcommon.part_of(imgs, a.part, lambda i: i[3]) if a.part else imgs
+    model, check, plants = [], [], []
+    for name in [i[0] for i in part]:
+        r = run_child(work, ['--child', 'images', '--only', name] + (['--plants-only'] if a.plants_only else []) +
+                      (['--mame'] if a.all or a.mame else []))
+        if r is None:
+            check.append('child %s' % name)
+            continue
+        model += r['model']
+        check += r['check']
+    if a.all or a.plants_only or a.plant:
+        sel = a.plant.split(',') if a.plant else None
+        nf = {i[0]: i[3] for i in IMAGES + HW_IMAGES}
+        pl = [p for p in PLANTS if (not sel or p[0] in sel) and (isinstance(p[3], tuple) or p[3] in names)]
+        if a.part:
+            pl = tbcommon.part_of(pl, a.part, lambda p: 15 + (p[3][2] if isinstance(p[3], tuple) else nf[p[3]]) *
+                         max(1, len(p[4] or [])))
+        i = 0
+        while i < len(pl):
+            j = i
+            while j < len(pl) and pl[j][3] == pl[i][3]:
+                j += 1
+            img = pl[i][3]
+            r = run_child(work, ['--child', 'plants', '--only', '-' if isinstance(img, tuple) else img,
+                                 '--plants-only', '--plant', ','.join(p[0] for p in pl[i:j])])
+            if r is None:
+                plants += ['plant ' + p[0] for p in pl[i:j]]
+            else:
+                plants += r['plants']
+            i = j
+    fails = model + check + plants
     print('TB_SYSTEM_ALL %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails[:6])))
     return 1 if fails else 0
 
@@ -2239,6 +2350,8 @@ def screens_main(a, verilator, work, lib, exec_path, grom_path):
     sel = SCREENS
     if a.only:
         sel = [x for x in SCREENS if x[0] in a.only.split(',')]
+    if a.part:
+        sel = tbcommon.part_of(sel, a.part, lambda x: x[2])
     binary = os.path.join(work, 'obj', 'tb_system')
     if not a.no_build:
         t1 = time.time()
@@ -2268,6 +2381,8 @@ def ecs_play_main(a, verilator, work, lib, exec_path, grom_path):
     sel = ECS_PLAY
     if a.only:
         sel = [x for x in ECS_PLAY if x[0] in a.only.split(',')]
+    if a.part:
+        sel = tbcommon.part_of(sel, a.part, lambda x: x[2])
     binary = os.path.join(work, 'obj', 'tb_system')
     if not a.no_build:
         t1 = time.time()
@@ -2302,6 +2417,8 @@ def play_main(a, verilator, work, lib, exec_path, grom_path):
     sel = PLAY
     if a.only:
         sel = [x for x in PLAY if x[0] in a.only.split(',')]
+    if a.part:
+        sel = tbcommon.part_of(sel, a.part, lambda x: x[2])
     proot = os.environ.get('INTV_PLAY_ROOT')
     binary = os.path.join(work, 'obj', 'tb_system')
     if not a.no_build:

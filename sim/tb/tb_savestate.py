@@ -62,6 +62,7 @@ import as1610               # noqa: E402
 import intv_system as isys  # noqa: E402
 import intvcart as m        # noqa: E402
 import savestate as ss      # noqa: E402
+import tbcommon             # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_ss_pkg.sv', 'intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
@@ -203,7 +204,7 @@ def build(work, rtl_dir, verilator, strict=True):
     log = os.path.join(work, 'build.log')
     for attempt in (1, 2):             # Verilator 5.040 can rarely fault on a build: once more
         with open(log, 'w') as f:
-            r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+            r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
         if r.returncode == 0:
             break
     text = open(log).read()
@@ -641,9 +642,20 @@ def corrupt_blobs(work, name, good):
     return out
 
 
-def run_image_set(bench, imgs, other_blob, tagp=''):
-    """Every run of every image; returns problems (strings)."""
+def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
+    """Every run of every image; returns problems (strings). stop (the plants): a test on the
+    problems so far; once it holds, the runs not started are dropped and the problems so far
+    returned (they are the full set's first ones: the runs are checked in a fixed order)."""
     probs = []
+
+    def stopped(futs):
+        if not (stop and stop(probs)):
+            return False
+        for f in futs:
+            if isinstance(f, tuple):
+                f = f[-1]
+            f.cancel()
+        return True
     refs, saves = {}, {}
     futs = {}
     for img in imgs:
@@ -707,6 +719,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         print('%s: R %d frames, S %d saves%s %s' % (name, img[4], len(info),
                                                     ', S0' if (name, 'S0') in futs else '',
                                                     'pass' if not p else 'FAIL'), flush=True)
+        if stopped(futs.values()):
+            return probs, saves
     # loads: (img, tag, saved cycle or None, end cycle, the blob it must apply or None, future)
     lf = []
     for img in imgs:
@@ -831,6 +845,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 q.append('loads %s' % loads)
         print('%s %s: %s' % (name, tag, 'pass' if not q else 'FAIL ' + '; '.join(q[:3])), flush=True)
         probs += ['%s %s: %s' % (name, tag, x) for x in q]
+        if stopped([x[-1] for x in lf]):
+            return probs, saves
     return probs, saves
 
 
@@ -1036,7 +1052,12 @@ def main():
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names')
     ap.add_argument('--jobs', type=int, default=2)
+    ap.add_argument('--part', help='K/N: part K of N of the plants (a gate split into N processes; '
+                                   'docs/SIM_SPEED.md)')
     a = ap.parse_args()
+    if a.part and not a.plants_only:
+        sys.exit('--part splits the plants (the image set\'s foreign loads cross its images): '
+                 'use it with --plants-only')
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_savestate'))
     lib = os.environ.get('INTV_LIBRARY', os.path.expanduser('~/ROMLibrary/Intellivision'))
@@ -1087,9 +1108,11 @@ def main():
                 if r is None or not r.end or r.fails or not os.path.exists(fbs[fname]):
                     fails.append('plants: no foreign state of ' + fname)
             sel = a.plant.split(',') if a.plant else None
-            for pname, f, edits, iname, fname, why in PLANTS:
-                if sel and pname not in sel:
-                    continue
+            nf = {i[0]: i[4] for i in SS_IMAGES + NOSS_IMAGES}
+            plist = [p for p in PLANTS if not sel or p[0] in sel]
+            if a.part:
+                plist = tbcommon.part_of(plist, a.part, lambda p: 20 + nf[p[3]])
+            for pname, f, edits, iname, fname, why in plist:
                 d = os.path.join(work, 'plant_' + pname)
                 shutil.rmtree(d, ignore_errors=True)
                 os.makedirs(os.path.join(d, 'rtl'))
@@ -1115,7 +1138,11 @@ def main():
                 if img in NOSS_IMAGES:
                     pr = run_noss(pb, img, fbs[fname])
                 else:
-                    pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='')
+                    # stop at the first problem for its own reason: the plant is caught (a plant
+                    # not caught, or caught for another reason only, still runs everything)
+                    pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='',
+                                          stop=lambda ps, why=why: any(re.search(why, x) for x in ps))
+                    pb.pool.shutdown(wait=True, cancel_futures=True)
                 own = [x for x in pr if re.search(why, x)]
                 if own:
                     print('PLANT %s: caught: %s' % (pname, own[0][:150]), flush=True)

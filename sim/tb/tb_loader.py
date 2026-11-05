@@ -48,6 +48,8 @@ import synth_image        # noqa: E402
 import intv_mapper        # noqa: E402
 import intvcart as m      # noqa: E402
 import cartfmt as cf      # noqa: E402
+sys.path.insert(0, HERE)
+import tbcommon           # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
@@ -397,7 +399,7 @@ def build(work, rtl_dir, verilator, strict=True):
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + OTHER
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
     text = open(log).read()
     if r.returncode != 0:
         print(text[-4000:])
@@ -482,8 +484,9 @@ def compare(got, want):
     return bad
 
 
-def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
-    """Run each image; returns the list of failing image names."""
+def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False, first_fail=False):
+    """Run each image; returns the list of failing image names. first_fail (the plants): stop at
+    the first failing image (a plant is caught once one image fails)."""
     failed = []
     for k, img in enumerate(imgs):
         path = os.path.join(tmp, '%s.bin' % img['crc'])
@@ -518,6 +521,8 @@ def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
             if not quiet:
                 for b in bad[:6]:
                     print('         ' + b)
+            if first_fail:
+                break
     return failed
 
 
@@ -687,6 +692,8 @@ def main():
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names (with --all or --plants-only)')
     ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
+    ap.add_argument('--part', help='K/N: part K of N of the set\'s runs and of the plants (a gate split into N '
+                                   'processes; docs/SIM_SPEED.md)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_loader'))
@@ -864,17 +871,21 @@ def main():
         print('build: %.0fs' % (time.time() - t1))
 
     tmp = tempfile.mkdtemp(prefix='img_', dir=work)
+    simgs, plants = imgs, PLANTS
+    if a.part:                          # (the plants still run on every plant image)
+        simgs = tbcommon.part_of(imgs, a.part, lambda i: 2 if i.get('reload') else 1)
+        plants = tbcommon.part_of(PLANTS, a.part, lambda p: 1)
     try:
         if not a.plants_only:
-            failed = run_set(binary, imgs, exp, bios_paths, work, tmp)
-            nneg = sum(1 for i in imgs if i.get('neg'))
+            failed = run_set(binary, simgs, exp, bios_paths, work, tmp)
+            nneg = sum(1 for i in simgs if i.get('neg'))
             print('set: %d images and %d refused loads, %d pass, %d fail' %
-                  (len(imgs) - nneg, nneg, len(imgs) - len(failed), len(failed)))
+                  (len(simgs) - nneg, nneg, len(simgs) - len(failed), len(failed)))
             rc_fail += failed
         if a.all or a.plants_only:
             pimgs = [i for i in imgs if (i['crc'] in PLANT_IMAGES or i['name'] in PLANT_IMAGES)
                      and (not i.get('neg') or i['crc'] == 'NEGNOCART')]   # no cartridge: the Auto plant
-            for name, fn, frm, to, what in PLANTS:
+            for name, fn, frm, to, what in plants:
                 if a.plant and name not in a.plant.split(','):
                     continue
                 d = os.path.join(work, 'plant_' + name)
@@ -894,7 +905,7 @@ def main():
                     print('PLANT %s: build failed' % name)
                     rc_fail.append('plant ' + name)
                     continue
-                caught = run_set(b, pimgs, exp, bios_paths, d, tmp, quiet=True)
+                caught = run_set(b, pimgs, exp, bios_paths, d, tmp, quiet=True, first_fail=True)
                 if caught:
                     print('PLANT %s (%s): caught by %s' % (name, what, ' '.join(caught)))
                 else:

@@ -255,6 +255,14 @@ bad blobs refused; every machine frame compared with a straight run
 under `SIMSLOT`, at most `--jobs` at once. `python3 -I tools/savestate.py gen
 --check` keeps the package and the doc table equal to the layout.
 
+The benches build through ccache at `-O2` (`sim/tb/tbcommon.py`); plants
+stop at their first failing run; tb_system runs each image in a process
+of its own; `--part K/N` (tb_system, tb_loader, tb_savestate's plants)
+splits a long bench over the simulation slots, and
+`sim/check/run_cache.py` (opt-in, `RUN_CACHE`) reuses a pass for
+byte-identical inputs only. Where the time goes and the rules:
+[SIM_SPEED.md](SIM_SPEED.md).
+
 ## Checks
 
 ```sh

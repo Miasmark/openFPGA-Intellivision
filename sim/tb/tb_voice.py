@@ -45,6 +45,8 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import sp0256 as sp  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, 'sim', 'tb'))
+import tbcommon  # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 TB = os.path.join(ROOT, 'sim', 'tb', 'tb_voice.sv')
@@ -314,7 +316,7 @@ def build(work, rtl, top='tb_voice', gen=()):
            '-Wno-fatal', '-Wno-TIMESCALEMOD', '-Wno-PROCASSINIT', '--top-module', top,
            '-I' + rtl, '-Mdir', obj, '-o', top] + ['-G' + g for g in gen] + srcs
     with open(os.path.join(work, 'build_%s.log' % top), 'a') as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd + tbcommon.VL_MAKEFLAGS, stdout=f, stderr=subprocess.STDOUT, env=tbcommon.vl_env())
     return os.path.join(obj, top) if r.returncode == 0 else None
 
 
@@ -482,6 +484,7 @@ def main():
                 res, _, _ = run_one(bins['chip' if k in ('ref', 'rnd') else k], rom, romhex, pw, n)
                 if res == 'FAIL':
                     caught.append(n)
+                    break               # caught once is caught (a plant not caught runs them all)
             print('PLANT %s (%s): %s' % (name, what, 'caught by ' + ' '.join(caught) if caught else 'NOT caught'),
                   flush=True)
             if not caught:

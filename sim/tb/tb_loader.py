@@ -692,6 +692,8 @@ def main():
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names (with --all or --plants-only)')
     ap.add_argument('--no-step8', action='store_true', help='leave out the step-8 format images')
+    ap.add_argument('--part', help='K/N: part K of N of the set\'s runs and of the plants (a gate split into N '
+                                   'processes; docs/SIM_SPEED.md)')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_loader'))
@@ -869,17 +871,21 @@ def main():
         print('build: %.0fs' % (time.time() - t1))
 
     tmp = tempfile.mkdtemp(prefix='img_', dir=work)
+    simgs, plants = imgs, PLANTS
+    if a.part:                          # (the plants still run on every plant image)
+        simgs = tbcommon.part_of(imgs, a.part, lambda i: 2 if i.get('reload') else 1)
+        plants = tbcommon.part_of(PLANTS, a.part, lambda p: 1)
     try:
         if not a.plants_only:
-            failed = run_set(binary, imgs, exp, bios_paths, work, tmp)
-            nneg = sum(1 for i in imgs if i.get('neg'))
+            failed = run_set(binary, simgs, exp, bios_paths, work, tmp)
+            nneg = sum(1 for i in simgs if i.get('neg'))
             print('set: %d images and %d refused loads, %d pass, %d fail' %
-                  (len(imgs) - nneg, nneg, len(imgs) - len(failed), len(failed)))
+                  (len(simgs) - nneg, nneg, len(simgs) - len(failed), len(failed)))
             rc_fail += failed
         if a.all or a.plants_only:
             pimgs = [i for i in imgs if (i['crc'] in PLANT_IMAGES or i['name'] in PLANT_IMAGES)
                      and (not i.get('neg') or i['crc'] == 'NEGNOCART')]   # no cartridge: the Auto plant
-            for name, fn, frm, to, what in PLANTS:
+            for name, fn, frm, to, what in plants:
                 if a.plant and name not in a.plant.split(','):
                     continue
                 d = os.path.join(work, 'plant_' + name)

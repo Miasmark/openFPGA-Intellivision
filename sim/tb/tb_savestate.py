@@ -1052,7 +1052,12 @@ def main():
     ap.add_argument('--plants-only', action='store_true')
     ap.add_argument('--plant', help='comma-separated plant names')
     ap.add_argument('--jobs', type=int, default=2)
+    ap.add_argument('--part', help='K/N: part K of N of the plants (a gate split into N processes; '
+                                   'docs/SIM_SPEED.md)')
     a = ap.parse_args()
+    if a.part and not a.plants_only:
+        sys.exit('--part splits the plants (the image set\'s foreign loads cross its images): '
+                 'use it with --plants-only')
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_savestate'))
     lib = os.environ.get('INTV_LIBRARY', os.path.expanduser('~/ROMLibrary/Intellivision'))
@@ -1103,9 +1108,11 @@ def main():
                 if r is None or not r.end or r.fails or not os.path.exists(fbs[fname]):
                     fails.append('plants: no foreign state of ' + fname)
             sel = a.plant.split(',') if a.plant else None
-            for pname, f, edits, iname, fname, why in PLANTS:
-                if sel and pname not in sel:
-                    continue
+            nf = {i[0]: i[4] for i in SS_IMAGES + NOSS_IMAGES}
+            plist = [p for p in PLANTS if not sel or p[0] in sel]
+            if a.part:
+                plist = tbcommon.part_of(plist, a.part, lambda p: 20 + nf[p[3]])
+            for pname, f, edits, iname, fname, why in plist:
                 d = os.path.join(work, 'plant_' + pname)
                 shutil.rmtree(d, ignore_errors=True)
                 os.makedirs(os.path.join(d, 'rtl'))

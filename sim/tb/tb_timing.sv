@@ -18,7 +18,7 @@
 // and clk_vid = clk_sys / 12, rising edges together. +vidph=N (0-11) moves
 // clk_vid's edge N clk_sys cycles against the reset, which on the board is
 // arbitrary; +border=0/1 picks the scaler mode (slot 0: 160 x 192, slot 1:
-// 167 x 210). Every check prints a line; the last line is
+// 168 x 210). Every check prints a line; the last line is
 // "TB_TIMING pass" or "TB_TIMING FAIL (n)".
 //
 // SPDX-License-Identifier: MIT
@@ -456,20 +456,20 @@ module tb_timing;
               frozen_frames, frozen_lit));
         check(all_eq(frame_hs, 262), $sformatf("HS pulses per frame %s", ql(frame_hs)));
         check(all_eq(frame_lines, border ? 210 : 192), $sformatf("active lines per frame %s (%0d)", ql(frame_lines), border ? 210 : 192));
-        check(all_eq(line_px, border ? 167 : 160), $sformatf("active pixels per line: %0d lines, all %0d: %0d",
-              line_px.size(), border ? 167 : 160, all_eq(line_px, border ? 167 : 160)));
+        check(all_eq(line_px, border ? 168 : 160), $sformatf("active pixels per line: %0d lines, all %0d: %0d",
+              line_px.size(), border ? 168 : 160, all_eq(line_px, border ? 168 : 160)));
         check(vs_hs_clash == 0 && de_on_sync == 0, $sformatf("HS never on the VS pixel, DE never on HS / VS (%0d, %0d)", vs_hs_clash, de_on_sync));
         check(slot_seen > 0 && slot_bad == 0, $sformatf("scaler slot %0d in rgb[23:13] after every line (%0d lines, %0d bad)", border, slot_seen, slot_bad));
         check(skip_seen == 0, "video_skip never set");
 
         $display("-- picture (last frame)");
         begin
-            int ox = border ? 3 : 0, oy = border ? 9 : 0;
+            int ox = border ? 4 : 0, oy = border ? 9 : 0;
             bit ok = 1;
             // border: blue all round
             if (border) begin
-                ok &= lines_rgb[0][0] == pal(1) && lines_rgb[209][166] == pal(1) && lines_rgb[100][1] == pal(1)
-                      && lines_rgb[100][164] == pal(1);
+                ok &= lines_rgb[0][0] == pal(1) && lines_rgb[209][167] == pal(1) && lines_rgb[100][1] == pal(1)
+                      && lines_rgb[100][165] == pal(1);
                 check(ok, "border window: blue border (corners, left and right sides)");
             end
             ok = 1;

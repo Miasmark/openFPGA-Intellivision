@@ -11,7 +11,10 @@
 //   playfield  160 x 192  hcnt PF_X0 ..+159, vline PF_Y0 ..+191
 //              (20 x 12 cards of 8 x 8 pixels, each card-pixel row on two
 //              lines: MAME stic.h:30-37, Y_SCALE 2)
-//   border     167 x 210  3 pixels left, 4 right, 9 lines above and below
+//   border     168 x 210  4 pixels left, 4 right, 9 lines above and below
+//              (167 until 0.0.22: the Pocket's scaler drew an odd-width
+//              window with columns dropped and a dashed left edge, the owner's
+//              photo of 2026-11-03; every scaler mode of our cores is even)
 // The window sizes are DESIGN 6.1's; where the playfield sits in the line
 // and frame is an estimate until the STIC timing is simulated (step 4).
 // With V_VS = 30 in intv_timing the playfield is frame lines 70-261 (the
@@ -41,7 +44,7 @@ module pocket_video #(
     parameter int PF_Y0 = 40,   // first playfield line (vline)
     parameter int PF_W  = 160,
     parameter int PF_H  = 192,
-    parameter int BD_L  = 3,    // border pixels left / right of the playfield
+    parameter int BD_L  = 4,    // border pixels left / right of the playfield
     parameter int BD_R  = 4,
     parameter int BD_T  = 9,    // border lines above / below
     parameter int BD_B  = 9,

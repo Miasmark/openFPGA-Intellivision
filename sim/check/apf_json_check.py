@@ -512,7 +512,7 @@ def main():
     print("-- video.json")
     vj = js[f"Cores/{cname}/video.json"][0]["video"]
     modes = [(s["width"], s["height"], s["aspect_w"], s["aspect_h"]) for s in vj["scaler_modes"]]
-    check(modes == [(160, 192, 10, 7), (167, 210, 15, 11), (160, 192, 20, 13), (168, 208, 67, 45)],
+    check(modes == [(160, 192, 10, 7), (168, 210, 48, 35), (160, 192, 20, 13), (168, 208, 67, 45)],
           f"scaler modes = DESIGN.md 6.1's: {modes}")
     pw_, ph_ = param(video, "PF_W"), param(video, "PF_H")
     bw = pw_ + param(video, "BD_L") + param(video, "BD_R")

@@ -1,7 +1,9 @@
 # tb
 
 Verilator testbenches, one per build step (DESIGN.md section 9). Outputs go
-to `sim/work*`.
+to `sim/work*`. Each planted fault must fail; its runs stop at the first that
+does (a plant not caught runs them all). Build settings, `--part K/N` and the
+reuse of results: [docs/SIM_SPEED.md](../../docs/SIM_SPEED.md).
 
 | Bench | Step | Run |
 |---|---|---|

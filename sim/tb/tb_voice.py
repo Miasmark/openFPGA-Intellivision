@@ -484,6 +484,7 @@ def main():
                 res, _, _ = run_one(bins['chip' if k in ('ref', 'rnd') else k], rom, romhex, pw, n)
                 if res == 'FAIL':
                     caught.append(n)
+                    break               # caught once is caught (a plant not caught runs them all)
             print('PLANT %s (%s): %s' % (name, what, 'caught by ' + ' '.join(caught) if caught else 'NOT caught'),
                   flush=True)
             if not caught:

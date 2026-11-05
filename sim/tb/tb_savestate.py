@@ -642,9 +642,20 @@ def corrupt_blobs(work, name, good):
     return out
 
 
-def run_image_set(bench, imgs, other_blob, tagp=''):
-    """Every run of every image; returns problems (strings)."""
+def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
+    """Every run of every image; returns problems (strings). stop (the plants): a test on the
+    problems so far; once it holds, the runs not started are dropped and the problems so far
+    returned (they are the full set's first ones: the runs are checked in a fixed order)."""
     probs = []
+
+    def stopped(futs):
+        if not (stop and stop(probs)):
+            return False
+        for f in futs:
+            if isinstance(f, tuple):
+                f = f[-1]
+            f.cancel()
+        return True
     refs, saves = {}, {}
     futs = {}
     for img in imgs:
@@ -708,6 +719,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
         print('%s: R %d frames, S %d saves%s %s' % (name, img[4], len(info),
                                                     ', S0' if (name, 'S0') in futs else '',
                                                     'pass' if not p else 'FAIL'), flush=True)
+        if stopped(futs.values()):
+            return probs, saves
     # loads: (img, tag, saved cycle or None, end cycle, the blob it must apply or None, future)
     lf = []
     for img in imgs:
@@ -832,6 +845,8 @@ def run_image_set(bench, imgs, other_blob, tagp=''):
                 q.append('loads %s' % loads)
         print('%s %s: %s' % (name, tag, 'pass' if not q else 'FAIL ' + '; '.join(q[:3])), flush=True)
         probs += ['%s %s: %s' % (name, tag, x) for x in q]
+        if stopped([x[-1] for x in lf]):
+            return probs, saves
     return probs, saves
 
 
@@ -1116,7 +1131,11 @@ def main():
                 if img in NOSS_IMAGES:
                     pr = run_noss(pb, img, fbs[fname])
                 else:
-                    pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='')
+                    # stop at the first problem for its own reason: the plant is caught (a plant
+                    # not caught, or caught for another reason only, still runs everything)
+                    pr, _ = run_image_set(pb, [img], lambda n, s_, fb=fbs[fname]: fb, tagp='',
+                                          stop=lambda ps, why=why: any(re.search(why, x) for x in ps))
+                    pb.pool.shutdown(wait=True, cancel_futures=True)
                 own = [x for x in pr if re.search(why, x)]
                 if own:
                     print('PLANT %s: caught: %s' % (pname, own[0][:150]), flush=True)

@@ -97,9 +97,9 @@ import intv_system as isys  # noqa: E402
 import stic                 # noqa: E402
 import sp0256               # noqa: E402
 import intvcart as m        # noqa: E402
-
 sys.path.insert(0, HERE)
 import tbcommon             # noqa: E402
+
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
@@ -1393,9 +1393,12 @@ def sweep_clock(line, e0=176, mf=196):
 
 
 def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, verbose=True,
-                only_runs=None):
+                only_runs=None, first_fail=False):
+    """first_fail (the plants): stop after the first run with a problem. The problems so far are
+    the full run's first ones (runs are checked in order and the dump comparison between runs
+    comes last), so the plant's verdict and its first problem are the same."""
     probs = []
-    results = {}
+    results = {}                        # tag: the run's dumps (got[2]), for the comparison below
     for tag, args in rt_runs(exp):
         if only_runs and tag not in only_runs:
             continue
@@ -1404,9 +1407,11 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
                         pads)
         if got is None:
             probs.append('%s %s: the bench did not finish' % (name, tag))
+            if first_fail:
+                return probs
             continue
         p = compare(name, tag, got, exp)
-        results[tag] = got
+        results[tag] = got[2]
         if verbose:
             rt = [x for x in got[3] if x.startswith('R ')]
             print('  %s %s: %d bus phases, %d step starts, %d pictures (%d with the display on), '
@@ -1416,12 +1421,15 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
                 ('; ' + '; '.join(x[2:] for x in rt)) if rt else '',
                 ('\n    FAIL ' + '\n    FAIL '.join(p)) if p else ''))
         probs += ['%s %s: %s' % (name, tag, x) for x in p]
+        del got
+        if first_fail and probs:
+            return probs
     ref = results.get('straight')
-    for tag, got in results.items():
+    for tag, dumps in results.items():
         if ref is None or tag == 'straight':
             continue
         for k in (1, 2):
-            a, b = ref[2].get(k, {}), got[2].get(k, {})
+            a, b = ref.get(k, {}), dumps.get(k, {})
             diff = [w for w in a if a[w] != b.get(w)]
             if diff:
                 probs.append('%s %s: dump %d differs from the straight run in %d words, first %s' % (
@@ -2222,7 +2230,7 @@ def main():
                             os.remove(c)
                 else:
                     pr = check_image(b, d, img, execs[img], grom_path, carts[img], exps[img], pads[img],
-                                     verbose=False, only_runs=runs or ['straight'])
+                                     verbose=False, only_runs=runs or ['straight'], first_fail=True)
                 if pr:
                     print('PLANT %s: caught: %s' % (pname, pr[0][:150]))
                 else:

@@ -484,8 +484,9 @@ def compare(got, want):
     return bad
 
 
-def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
-    """Run each image; returns the list of failing image names."""
+def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False, first_fail=False):
+    """Run each image; returns the list of failing image names. first_fail (the plants): stop at
+    the first failing image (a plant is caught once one image fails)."""
     failed = []
     for k, img in enumerate(imgs):
         path = os.path.join(tmp, '%s.bin' % img['crc'])
@@ -520,6 +521,8 @@ def run_set(binary, imgs, exp, bios_paths, work, tmp, quiet=False):
             if not quiet:
                 for b in bad[:6]:
                     print('         ' + b)
+            if first_fail:
+                break
     return failed
 
 
@@ -896,7 +899,7 @@ def main():
                     print('PLANT %s: build failed' % name)
                     rc_fail.append('plant ' + name)
                     continue
-                caught = run_set(b, pimgs, exp, bios_paths, d, tmp, quiet=True)
+                caught = run_set(b, pimgs, exp, bios_paths, d, tmp, quiet=True, first_fail=True)
                 if caught:
                     print('PLANT %s (%s): caught by %s' % (name, what, ' '.join(caught)))
                 else:

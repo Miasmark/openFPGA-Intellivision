@@ -18,7 +18,7 @@ A63AA3D8,16384,5000:1000 D000:1000,,0,0,jumps,,Party Line - Blow Out (Proto),no 
 4B88FA8E,16384,5000:2000,,0,0,sibling,spacecad,Party Line - Space Cadet (Proto Alt 1),99.8% equal to spacecad
 156A5645,8192,5000:1000,,0,0,sibling,traction,Racing Cars,99.2% equal to traction at the same offsets
 DCF4B15D,16384,5000:1800,,0,0,prefix,rdealer,Royal Dealer,first 0x3000 bytes are MAME rdealer's region (CRC); last 2K words not in MAME's map (80% one value)
-BE4D7996,49152,5000:2000 9000:2000 D000:1000 F000:1000,,0,0,jumps,,Super NFL Football (Proto),no list has it and no sibling (best 11%); Tower of Doom's map; jump targets 918 ROM / 7 filler / 71 outside vs 895 / 30 / 71 for the default order and worse for others
+BE4D7996,49152,5000:2000 9000:2000 D000:1000 F000:1000,,1,0,jumps,,Super NFL Football (Proto),no list has it and no sibling (best 11%); Tower of Doom's map; jump targets 918 ROM / 7 filler / 71 outside vs 895 / 30 / 71 for the default order and worse for others; ECS title: calls the ECS ROM ($7BE0 from $55DC at frame 15) and reads its keyboard; with the ECS off or attached (ROMs paged out) it runs into empty space; with the ECS on it boots to its title and menu (jzIntv -s1 the same)
 975AE6DF,16384,5000:2000,,0,0,sibling,thinicep,Thin Ice,99.7% equal to thinicep
 095638C0,45058,5000:2000 9000:2000,D000:400:8,0,0,prefix,trchalng,Triple Challenge,first 0x8000 bytes are MAME trchalng's two regions (CRC) and its RAM; 0x3002 more bytes not mapped (88% one value; 24 jump targets would land in $B000-$C7FF if mapped there)
 8F48030F,24576,5000:2000 D000:1000,,0,0,sibling,vectron,Vectron (Alt 1),99.6% equal to vectron (every segment)

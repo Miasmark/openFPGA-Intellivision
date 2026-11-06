@@ -154,10 +154,11 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           ('cart4000', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic'),
           ('cart4000_on', ('step9', 'cart4000'), None, 30, (0xFF, 0xFF), 'stic'),
           # the step-9 review: ecstest with the ECS on and no ECS ROM slot ($2000, $7000, $E000
-          # read $FFFF on every page); library games under Auto with the ECS attached, the
-          # hardware's default (Super NFL Football writes the ECS RAM from frame 14; Atlantis
-          # boots through its $4800 hook; Body Slam, a Super Pro title, clears $00E0-$00FF, the
-          # UART stub and PSG #2, in frame 4)
+          # read $FFFF on every page); library games under Auto: Super NFL Football with the ECS
+          # on (the table's ECS flag since 0.0.24: it calls the ECS ROM, so attached left it
+          # running into empty space), and with the ECS attached, the hardware's default
+          # (Atlantis boots through its $4800 hook; Body Slam, a Super Pro title, clears
+          # $00E0-$00FF, the UART stub and PSG #2, in frame 4)
           ('ecsnorom', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
           ('nfl_auto', 'Super NFL Footbal (USA) (Proto).zip', None, 24, (0xFF, 0xFF), 'stic'),
           ('atlantis_auto', 'Atlantis (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
@@ -238,7 +239,7 @@ ECS_OF = {
     'cart4000': dict(ovr='auto', auto=0, passes=(2, 3)),
     'cart4000_on': dict(ovr='on', auto=0),      # forced on: the ECS RAM, not the cartridge, at $4000
     'ecsnorom': dict(ovr='on', auto=1, norom=True),     # no ECS ROM slot: the ROMs never answer
-    'nfl_auto': dict(ovr='auto', auto=2),
+    'nfl_auto': dict(ovr='auto', auto=1),
     'atlantis_auto': dict(ovr='auto', auto=2),
     'bodyslam_auto': dict(ovr='auto', auto=2),
 }

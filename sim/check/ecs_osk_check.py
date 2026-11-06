@@ -12,7 +12,8 @@ tools/ecs.py type_presses, each key held 6 frames and 20 apart), once with only 
 ("pocket:" presses): Start opens the keyboard, D-pad presses walk the cursor to each key in the
 gap (the shortest walk, found on the model), A is held over exactly the frames the first run
 held the key, Y with it for a shifted character. Every picture of the two runs must be the same.
-  basic   no cartridge, ECS on: the ECS menu (1: ECS BASIC), then 10 PRINT 2*3 / RUN
+  basic   no cartridge, ECS on: the ECS menu (1: ECS BASIC), then 10 PRIN 2*3 / RUN: 6.00 (the
+          print keyword is PRIN; PRINT reads as PRIN T..., T unset: 0.00, as in MAME)
   snfl    Super NFL Football (prototype), ECS on Auto (the table's flag): RTN at its title, then
           DEMO and RTN in its menu (the demonstration starts)
 It prints one line a case and ECS_OSK pass / FAIL, and keeps the pictures at a few frames of the
@@ -129,7 +130,7 @@ def main():
     ap.add_argument("--frames-snfl", type=int, default=1300)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    ok = case("basic", None, "on", "300-306:Enter,420-426:1,500-506:Enter", 800, "10 PRINT 2*3\nRUN\n",
+    ok = case("basic", None, "on", "300-306:Enter,420-426:1,500-506:Enter", 800, "10 PRIN 2*3\nRUN\n",
               a.frames_basic, a.out, 600)
     if a.snfl:
         ok &= case("snfl", a.snfl, "auto", "", 400, "\nDEMO\n", a.frames_snfl, a.out, 300)

@@ -160,6 +160,6 @@ random block: about 6 minutes each instead of 12), and `--all --part K/N` splits
 N jobs (part 1 also runs the frames): the 35 plants take about 3.5 slot-hours.
 `sim/check/ecs_osk_check.py` runs the system model twice per case, once typing into the ECS
 matrix directly and once with only Pocket buttons through the keyboard (Start, the cursor walked
-in the gaps, A held over the same frames, Y for SHIFT): ECS BASIC (10 PRINT 2*3, RUN) and Super
+in the gaps, A held over the same frames, Y for SHIFT): ECS BASIC (10 PRIN 2*3, RUN: 6.00; its print keyword is PRIN) and Super
 NFL Football (RTN at its title, DEMO and RTN in its menu: the demonstration starts) give the same
 picture in every frame.

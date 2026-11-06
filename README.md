@@ -5,6 +5,9 @@ Master Component (NTSC Model 2609) with the Entertainment Computer System (ECS),
 Intellivoice and JLP cartridges, loads cartridge images directly, and has save states and sleep.
 Its timing was measured against a real console.
 
+1.0.3 is the first public release; the 0.0.x versions before it were test builds. Releases:
+[github.com/Miasmark/openFPGA-Intellivision/releases](https://github.com/Miasmark/openFPGA-Intellivision/releases).
+
 ## Features
 
 - **The console:** the CP1610, the STIC (backgrounds in all three modes, MOBs, collisions) and the

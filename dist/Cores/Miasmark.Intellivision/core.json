@@ -7,8 +7,8 @@
       "description": "Mattel Intellivision with the ECS, Intellivoice and JLP.",
       "author": "Miasmark",
       "url": "https://github.com/Miasmark/openFPGA-Intellivision",
-      "version": "0.0.24",
-      "date_release": "2026-11-05"
+      "version": "1.0.3",
+      "date_release": "2026-11-06"
     },
     "framework": {
       "target_product": "Analogue Pocket",

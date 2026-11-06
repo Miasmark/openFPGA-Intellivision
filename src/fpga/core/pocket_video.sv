@@ -8,10 +8,12 @@
 // Windows (DESIGN.md 6.1; the scaler modes are dist/Cores/
 // Miasmark.Intellivision/video.json, slots 0 and 1). Counted in pixel
 // clocks (hcnt) and Pocket lines (vline, see intv_timing):
-//   playfield  159 x 192  hcnt PF_X0 ..+158, vline PF_Y0 ..+191: the STIC's
+//   playfield  158 x 192  hcnt PF_X0 ..+157, vline PF_Y0 ..+191: the STIC's
 //              160th column (x 159) is never displayed on the console, only
 //              border colour (GI80 p.5-10; STIC_NOTES D13), so the window
-//              ends before it (the owner, 2026-11-04: crop it; 160 until 0.0.22)
+//              ends before it (the owner, 2026-11-04: crop it; 160 until 0.0.22);
+//              x 158 goes too, for an even width (0.0.23's 159 was drawn with
+//              columns dropped on the Pocket's screen, as Show's 167 was)
 //              (20 x 12 cards of 8 x 8 pixels, each card-pixel row on two
 //              lines: MAME stic.h:30-37, Y_SCALE 2)
 //   border     168 x 210  4 pixels left, 4 right, 9 lines above and below
@@ -91,7 +93,7 @@ module pocket_video #(
     assign pf_x  = 8'(hcnt - 9'(PF_X0));
     assign pf_y  = 8'(vline - 9'(PF_Y0));
 
-    wire logic in_view = in_pf && pf_x != 8'(PF_W - 1);        // playfield window: 159 columns
+    wire logic in_view = in_pf && pf_x < 8'(PF_W - 2);         // playfield window: 158 columns
     wire logic de_now  = border_on ? in_bd : in_view;
 
     logic [23:0] pal_rgb;

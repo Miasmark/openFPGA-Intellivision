@@ -512,13 +512,13 @@ def main():
     print("-- video.json")
     vj = js[f"Cores/{cname}/video.json"][0]["video"]
     modes = [(s["width"], s["height"], s["aspect_w"], s["aspect_h"]) for s in vj["scaler_modes"]]
-    check(modes == [(159, 192, 159, 112), (168, 210, 48, 35), (160, 192, 20, 13), (168, 208, 67, 45)],
+    check(modes == [(158, 192, 79, 56), (168, 210, 48, 35), (160, 192, 20, 13), (168, 208, 67, 45)],
           f"scaler modes = DESIGN.md 6.1's: {modes}")
     pw_, ph_ = param(video, "PF_W"), param(video, "PF_H")
     bw = pw_ + param(video, "BD_L") + param(video, "BD_R")
     bh = ph_ + param(video, "BD_T") + param(video, "BD_B")
-    check(modes[0][:2] == (pw_ - 1, ph_) and "pf_x != 8'(PF_W - 1)" in video,
-          f"slot 0 = pocket_video's playfield window {pw_ - 1} x {ph_} (the STIC's 160th column cropped)")
+    check(modes[0][:2] == (pw_ - 2, ph_) and "pf_x < 8'(PF_W - 2)" in video,
+          f"slot 0 = pocket_video's playfield window {pw_ - 2} x {ph_} (the STIC's 160th column cropped, and x 158 for an even width)")
     check(modes[1][:2] == (bw, bh), f"slot 1 = pocket_video's border window {bw} x {bh}")
     check("{8'd0, 2'd0, border_on, 13'd0}" in video, "pocket_video sends slot 0 or 1 (border_on) in rgb[23:13]")
     # Pixel aspect: NTSC square pixels at 135/11 MHz on 480 lines, so a 240p

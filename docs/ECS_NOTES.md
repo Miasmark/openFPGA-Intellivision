@@ -189,13 +189,22 @@ load with it off, or with another ECS ROM (docs/SAVESTATE.md).
   over the MAME runs' keys.
 - `sim/tb/tb_input.py` classes 10-11 (the key mapping, in modes off, on and attached);
   `sim/tb/tb_loader.py` the Auto rule on every image (ecsoffcfg, ecsoffrom: the incompatible tag);
-  `sim/tb/tb_savestate.py` ecsbasic, ecssound, ecsavail, Atlantis and Super NFL Football under
-  Auto (attached), the E runs (a state with the ECS into a core with it off) and the X runs (into a
+  `sim/tb/tb_savestate.py` ecsbasic, ecssound, ecsavail, Atlantis (attached) and Super NFL Football
+  (on) under Auto, the E runs (a state with the ECS into a core with it off) and the X runs (into a
   core whose ECS ROM differs by one byte): refused.
 - `sim/tb/tb_system.py` also: ecsnorom (the ECS on with no ECS ROM slot: `$2000`, `$7000`, `$E000`
-  read `$FFFF`), and library games under Auto with the ECS attached, the hardware default: Super NFL
-  Football (writes the ECS RAM), Atlantis (its `$4800` hook), Body Slam (a Super Pro title: clears
-  `$00E0-$00FF`); every image's `L ecs full` line (the key routing's mode).
+  read `$FFFF`), and library games under Auto: Super NFL Football with the ECS on (the CRC table's
+  ECS flag since 0.0.24; see below), and with the ECS attached, the hardware default: Atlantis
+  (its `$4800` hook), Body Slam (a Super Pro title: clears `$00E0-$00FF`); every image's `L ecs
+  full` line (the key routing's mode).
+- Super NFL Football (prototype, no list has it; owner, 2026-11-05: "supposed to be an ECS game
+  ... starts up but goes black"): it is an ECS title. It calls the ECS ROM at `$7BE0` from frame 15
+  and is driven from the ECS keyboard (RTN leaves the title; its menu takes typed words, e.g.
+  `demo`). Attached (the ROMs paged out, as if a `$4800` hook had run) and off, the call reads
+  empty space and the CPU runs away with the display off; with the ECS on, the ECS boot starts it
+  straight (its `$500C` header passes) and it plays. jzIntv (black box, our map as a .cfg) does the
+  same: `-s0` stops at `$7BE0`, `-s1` reaches the title. `data/cart_extra.csv` now sets its ECS
+  flag, so Auto turns the ECS on.
 - `tools/ecs_mix_check.py` on WSMLB: no sample of the mix at the ceiling.
 - ECS BASIC's `CALL GRAB` (owner, 2026-10-27: it copies a MOB picture from the cartridge in the
   slot, so the cartridge stays mapped under ECS BASIC): `--ecs-play` run `grab`, ECS on with AD&D

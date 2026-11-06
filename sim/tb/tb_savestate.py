@@ -126,9 +126,8 @@ SS_IMAGES = [
      [(40, 'sound'), (55, 'midinst'), (70, 'sound'), (78, 'any')], (82, 6), 86),
     ('ecsavail', ('step9', 'ecsavail'), None, (0xFF, 0xFF), 60, None,
      [(25, 'midinst'), (32, 'any'), (40, 'busrq'), (44, 'any')], (48, 6), 52),
-    # the step-9 review: a library game under Auto (attached) that uses the ECS RAM (Super NFL
-    # Football writes about 135 cells from frame 14; its display stays off this early, so no
-    # BUSRQ or row-fetch save points)
+    # the step-9 review: a library game under Auto that uses the ECS (Super NFL Football: the ECS
+    # on by the table's flag since 0.0.24; the ECS boot, then its ECS RAM and ECS ROM calls)
     ('nfl', 'Super NFL Footbal (USA) (Proto).zip', None, (0xFF, 0xFF), 110, None,
      [(30, 'midinst'), (50, 'any'), (65, 'midinst'), (80, 'any')], (88, 8), 98),
     # build step 10 (SS_VOICE): our voicetest.py in the EXEC slot with the Intellivoice on, saves in
@@ -154,7 +153,7 @@ SS_ECS = {
     'ecssound': dict(ovr=0, mode=1),
     'ecsavail': dict(ovr=0, mode=2),
     'atlantis': dict(ovr=0, mode=2),       # Auto: attached (the hardware's default for it)
-    'nfl': dict(ovr=0, mode=2),
+    'nfl': dict(ovr=0, mode=1),          # Auto: on (the table's ECS flag)
 }
 # step 10: the Intellivoice of an image (images not listed run with it Off): the menu override (0
 # Auto, 1 On); B-17 Bomber under Auto (the CRC table's flag): speech in flight

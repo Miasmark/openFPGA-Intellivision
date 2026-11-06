@@ -184,7 +184,7 @@ BB175383,23,00,,4000,mame:intv,mame,spatrol,5000-6FFF D000-DFFF F000-FFFF
 BB939881,13,00,,4000,mame:intv,mame,polepos,5000-6FFF 9000-AFFF
 BD731E3C,7,00,,2000,mame:intv,mame,minotaur,5000-6FFF
 BD8A6569,11,20,ecs_off,2000,mame:intv,mame,mte201,5000-5FFF 7000-7FFF
-BE4D7996,24,40,estimated,6000,extra,jumps,Super NFL Football (Proto),5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
+BE4D7996,24,41,ecs+estimated,6000,extra,jumps,Super NFL Football (Proto),5000-6FFF 9000-AFFF D000-DFFF F000-FFFF
 BEF0B0C7,15,41,ecs+estimated,3000,extra,hsi,Mr. BASIC Meets Bits 'N Bytes,5000-6FFF D000-DFFF
 BF4D0E9B,7,00,,2000,mame:intv,mame,dfactorp,5000-6FFF
 C047D487,2,00,,2000,mame:intv,mame,beauty,4800-67FF

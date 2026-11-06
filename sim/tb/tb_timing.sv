@@ -17,7 +17,7 @@
 // Clocks as the PLL makes them (core/pll/pll_core.v): clk_sys 42.954545 MHz
 // and clk_vid = clk_sys / 12, rising edges together. +vidph=N (0-11) moves
 // clk_vid's edge N clk_sys cycles against the reset, which on the board is
-// arbitrary; +border=0/1 picks the scaler mode (slot 0: 159 x 192, slot 1:
+// arbitrary; +border=0/1 picks the scaler mode (slot 0: 160 x 192, slot 1:
 // 168 x 210). Every check prints a line; the last line is
 // "TB_TIMING pass" or "TB_TIMING FAIL (n)".
 //
@@ -456,8 +456,8 @@ module tb_timing;
               frozen_frames, frozen_lit));
         check(all_eq(frame_hs, 262), $sformatf("HS pulses per frame %s", ql(frame_hs)));
         check(all_eq(frame_lines, border ? 210 : 192), $sformatf("active lines per frame %s (%0d)", ql(frame_lines), border ? 210 : 192));
-        check(all_eq(line_px, border ? 168 : 159), $sformatf("active pixels per line: %0d lines, all %0d: %0d",
-              line_px.size(), border ? 168 : 159, all_eq(line_px, border ? 168 : 159)));
+        check(all_eq(line_px, border ? 168 : 160), $sformatf("active pixels per line: %0d lines, all %0d: %0d",
+              line_px.size(), border ? 168 : 160, all_eq(line_px, border ? 168 : 160)));
         check(vs_hs_clash == 0 && de_on_sync == 0, $sformatf("HS never on the VS pixel, DE never on HS / VS (%0d, %0d)", vs_hs_clash, de_on_sync));
         check(slot_seen > 0 && slot_bad == 0, $sformatf("scaler slot %0d in rgb[23:13] after every line (%0d lines, %0d bad)", border, slot_seen, slot_bad));
         check(skip_seen == 0, "video_skip never set");
@@ -474,11 +474,11 @@ module tb_timing;
             end
             ok = 1;
             for (int y = 0; y < 192; y++) begin
-                ok &= lines_rgb[oy + y][ox] == pal(7) && (!border || lines_rgb[oy + y][ox + 159] == pal(7));   // x 159: only with the border (Hide crops it)
+                ok &= lines_rgb[oy + y][ox] == pal(7) && lines_rgb[oy + y][ox + 159] == (border ? pal(7) : 24'd0);   // x 159: black without the border
             end
-            for (int x = 0; x < (border ? 160 : 159); x++)
+            for (int x = 0; x < 159; x++)
                 ok &= lines_rgb[oy][ox + x] == pal(7) && lines_rgb[oy + 191][ox + x] == pal(7);
-            check(ok, "playfield edge ring white (crop marks)");
+            check(ok, border ? "playfield edge ring white (crop marks)" : "playfield edge ring white (crop marks), x 159 black");
             ok = 1;
             for (int y = 1; y < 96; y++)
                 for (int x = 1; x < 159; x++)

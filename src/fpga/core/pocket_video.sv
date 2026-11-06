@@ -8,10 +8,14 @@
 // Windows (DESIGN.md 6.1; the scaler modes are dist/Cores/
 // Miasmark.Intellivision/video.json, slots 0 and 1). Counted in pixel
 // clocks (hcnt) and Pocket lines (vline, see intv_timing):
-//   playfield  159 x 192  hcnt PF_X0 ..+158, vline PF_Y0 ..+191: the STIC's
+//   playfield  160 x 192  hcnt PF_X0 ..+159, vline PF_Y0 ..+191: the STIC's
 //              160th column (x 159) is never displayed on the console, only
-//              border colour (GI80 p.5-10; STIC_NOTES D13), so the window
-//              ends before it (the owner, 2026-11-04: crop it; 160 until 0.0.22)
+//              border colour (GI80 p.5-10; STIC_NOTES D13); this window draws
+//              it black, the colour of the Pocket's screen around the picture
+//              (the owner, 2026-11-04: crop it). The width stays 160: the
+//              Pocket's scaler drew 167, 159 and 158 with columns dropped and a
+//              dashed left edge (the owner's photos, 0.0.22-0.0.24 tests) and
+//              160 and 168 clean
 //              (20 x 12 cards of 8 x 8 pixels, each card-pixel row on two
 //              lines: MAME stic.h:30-37, Y_SCALE 2)
 //   border     168 x 210  4 pixels left, 4 right, 9 lines above and below
@@ -91,8 +95,8 @@ module pocket_video #(
     assign pf_x  = 8'(hcnt - 9'(PF_X0));
     assign pf_y  = 8'(vline - 9'(PF_Y0));
 
-    wire logic in_view = in_pf && pf_x != 8'(PF_W - 1);        // playfield window: 159 columns
-    wire logic de_now  = border_on ? in_bd : in_view;
+    wire logic de_now  = border_on ? in_bd : in_pf;
+    wire logic cropped = !border_on && pf_x == 8'(PF_W - 1);   // the 160th column, black without the border
 
     logic [23:0] pal_rgb;
     intv_palette palette (
@@ -110,7 +114,7 @@ module pocket_video #(
             p_hs  <= hcnt == 9'(HS_X);
             p_vs  <= hcnt == 9'd0 && vline == 9'd0;
             if (de_now)
-                p_rgb <= blank ? 24'd0
+                p_rgb <= blank || cropped ? 24'd0
                        : !in_pf || ovl == 2'd0 ? pal_rgb
                        : ovl == 2'd1 ? 24'hFFFFFF : ovl == 2'd2 ? 24'h000000 : 24'hFFD800;
             else if (p_de)

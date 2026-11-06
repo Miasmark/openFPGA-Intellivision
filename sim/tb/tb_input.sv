@@ -181,7 +181,7 @@ module tb_input;
         end
     end
 
-    intv_input dut (
+    intv_input #(.KBD_HEX(`OSK_KBD_HEX)) dut (
         .clk_74a    ( clk_74a ),
         .clk        ( clk ),
         .cont1_key  ( bus[213:182] ),
@@ -203,6 +203,10 @@ module tb_input;
         .osk_open   ( ),
         .osk_cur    ( ),
         .osk_held   ( ),
+        .kb_open    ( ),                // the ECS keyboard never opens here either (tb_osk)
+        .kb_cur     ( ),
+        .kb_held    ( ),
+        .kb_mods    ( ),
         .pad_r      ( pad_r ),
         .pad_l      ( pad_l ),
         .ecs_keys   ( ecs_keys ),

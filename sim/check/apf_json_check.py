@@ -535,10 +535,15 @@ def main():
     mp = js[f"Cores/{cname}/input.json"][0]["input"]["controllers"][0]["mappings"]
     check(len({x["id"] for x in mp}) == len(mp) and len({x["key"] for x in mp}) == len(mp) and all(x["name"] for x in mp),
           "input.json: unique ids and keys, every button named")
-    check([x["key"] for x in mp] == ["pad_btn_a", "pad_btn_b", "pad_btn_x", "pad_btn_y", "pad_trig_l", "pad_trig_r"]
+    check([x["key"] for x in mp] == ["pad_btn_a", "pad_btn_b", "pad_btn_x", "pad_btn_y", "pad_trig_l", "pad_trig_r",
+                                     "pad_btn_select", "pad_btn_start"]
           and [x["name"] for x in mp][:4] == ["Side lower right", "Side lower left", "Side top", "Clear (with R)"],
           "input.json: A/B/X side actions lower right / lower left / top, Y Clear with R, L the disc turn, R the number pad "
-          "(intv_input.sv Layer mode)")
+          "(intv_input.sv Layer mode), Select and Start")
+    inp = open(os.path.join(rtl, "intv_input.sv")).read()
+    check([x["name"] for x in mp][6:] == ["On-screen keypad", "ECS keyboard"]
+          and "if (rise[14] && !kb_on) begin" in inp and "if (rise[15] && ecs_ok && !kp_was && !kp_now) begin" in inp,
+          "input.json: Select the on-screen keypad, Start the ECS keyboard (intv_input.sv: rise[14], rise[15])")
     info = open(os.path.join(core_dir, "info.txt")).read()
     check(all(w in info for w in ("exec.bin", "grom.bin", "ecs.bin", "ivoice.bin", "/Assets/intv/common/")),
           "info.txt names the system ROM files and their folder")

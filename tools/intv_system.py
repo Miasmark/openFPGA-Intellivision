@@ -100,6 +100,7 @@ import stic as sticm  # noqa: E402
 import psg as psgm  # noqa: E402
 import intv_input as inm  # noqa: E402
 import ecs as ecsm  # noqa: E402
+import osk as oskm  # noqa: E402
 from stic import FRAME, VBLANK, WINDOW, STIC_DEF, STIC_REGS, STIC_DER, STIC_GMR  # noqa: E402,F401
 
 VEC_RESET, VEC_INTR = 0x1000, 0x1004
@@ -150,7 +151,39 @@ for _i, _n in enumerate(DISC_NAMES):
 
 # Pocket buttons for "pocket:" presses (tools/intv_input.py's bit numbers)
 POCKET_BTN = {"up": inm.UP, "down": inm.DOWN, "left": inm.LEFT, "right": inm.RIGHT, "A": inm.A, "B": inm.B,
-              "X": inm.X, "Y": inm.Y, "L": inm.L1, "R": inm.R1}
+              "X": inm.X, "Y": inm.Y, "L": inm.L1, "R": inm.R1, "sel": inm.SELECT, "start": inm.START}
+OSK_BTNS = 1 << inm.SELECT | 1 << inm.START
+
+
+class Presses(list):
+    """parse_presses' list. When a "pocket:" press holds Select or Start (osk_used), the Pocket
+    buttons go frame by frame through the on-screen keypads and ECS keyboard (tools/osk.py
+    step_all, as intv_input.sv: replay()), and their keys join the pads and the ECS matrix;
+    ecs_ok (set by SystemBus): the ECS fully on with the computer keyboard."""
+    osk_used = False
+    ecs_ok = False
+    _rep = None
+
+    def replay(self, k):
+        """(player 1's pad byte from the Pocket buttons, the keyboard's ECS keys) after frame
+        notifier k, the models stepped once a notifier from 0."""
+        if self._rep is None:
+            self._rep = dict(pl=[oskm.Player(), oskm.Player()], kb=oskm.Keyboard(), k=-1, out={})
+        r = self._rep
+        if k < 0:
+            return 0xFF, 0
+        while r["k"] < k:
+            r["k"] += 1
+            bits = 0
+            for f1, f2, code in self:
+                if f1 <= r["k"] < f2 and isinstance(code, tuple) and code[0] == "pocket":
+                    bits |= code[1]
+            k1 = (1 << 28) | bits
+            oskm.step_all(r["pl"], r["kb"], k1, 0, self.ecs_ok)
+            v = dict(key1=k1, joy1=0x80808080, key2=0, joy2=0x80808080, key3=0, joy3=0, trig3=0,
+                     mode=inm.LAYER, swap=0)
+            r["out"][r["k"]] = (inm.ports(v, osk=r["pl"], kb=r["kb"])[1], r["kb"].keys())
+        return r["out"][k]
 
 
 def parse_presses(text):
@@ -163,8 +196,9 @@ def parse_presses(text):
     "ecs:K1+K2..." holds ECS keyboard keys (tools/ecs.py KEYPOS names) and
     "synth:N1+N2..." synthesizer keys (0 = C2 ... 48 = C6; bit 8 row +
     column of the matrix, MAME ecs_ctrl.cpp SYNTH.n): (F1, F2, ("ecs",
-    matrix bits)), read by press_keys."""
-    out = []
+    matrix bits)), read by press_keys. Pocket presses holding "sel" or
+    "start" go through the on-screen keypads and ECS keyboard (Presses)."""
+    out = Presses()
     for p in filter(None, (text or "").split(",")):
         fr, key = p.split(":", 1)
         f1, f2 = (int(x) for x in fr.split("-"))
@@ -186,6 +220,7 @@ def parse_presses(text):
                 if b not in POCKET_BTN:
                     raise SystemExit("unknown Pocket button %r" % b)
                 bits |= 1 << POCKET_BTN[b]
+            out.osk_used = out.osk_used or bool(bits & OSK_BTNS)
             out.append((f1, f2, ("pocket", bits)))
             continue
         if key not in KEYCODE:
@@ -210,6 +245,7 @@ def press_pads(presses, k):
     direction, not two discs)."""
     v = 0xFF
     pocket = 0
+    osk = getattr(presses, "osk_used", False)
     for f1, f2, code in presses:
         if f1 <= k < f2:
             if isinstance(code, tuple):
@@ -217,7 +253,9 @@ def press_pads(presses, k):
                     pocket |= code[1]
             else:
                 v &= ~code & 0xFF
-    if pocket:
+    if osk:
+        v &= presses.replay(k)[0]
+    elif pocket:
         v &= ~pocket_lines(pocket) & 0xFF
     return v
 
@@ -229,6 +267,8 @@ def press_keys(presses, k):
     for f1, f2, code in presses or ():
         if f1 <= k < f2 and isinstance(code, tuple) and code[0] == "ecs":
             v |= code[1]
+    if getattr(presses, "osk_used", False):
+        v |= presses.replay(k)[1]
     return v
 
 
@@ -402,6 +442,11 @@ class SystemBus:
     def handshake(self, cycle):
         return self.vid.handshake(self.timing.frame(self._t(cycle)))
 
+    def _osk_ecs(self):
+        """The on-screen ECS keyboard opens only with the ECS fully on and the computer keyboard."""
+        if getattr(self.presses, "osk_used", False):
+            self.presses.ecs_ok = self.ecs is not None and self.ecs.mode == ecsm.ON and not self.ecs.synth
+
     def boundary(self, cycle):
         """The run loop calls this after every CPU step (cycle = cpu.cycle):
         MAME's frame starts and the STIC's boundary-timed events."""
@@ -459,6 +504,7 @@ class SystemBus:
             n = a & 0xF
             pads = self.pad
             if self.presses is not None:
+                self._osk_ecs()
                 p = press_pads(self.presses, self.timing.frame(self._t(cycle)) - 1)
                 pads = (p, p)
             v &= self.snd.read(n, pads)
@@ -477,6 +523,7 @@ class SystemBus:
             v &= self.voice.access(self._t(cycle), ('R', a))
         if self.ecs is not None and self.ecs.owns(a):
             if self.ecs.keys_at is None and self.presses is not None:
+                self._osk_ecs()
                 self.ecs.keys_at = lambda f: press_keys(self.presses, f - 1)
             return v & self.ecs.read(a, self._t(cycle), self.timing.frame(self._t(cycle)))
         if self.jlp is not None:

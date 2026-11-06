@@ -30,6 +30,19 @@
 //   when it closes stay masked until let go. It steps once a frame (frame,
 //   the video frame's start) on the word of that moment; its state goes to
 //   intv_osk_draw (osk_open, osk_cur, osk_held). It is not machine state.
+// - the on-screen ECS keyboard (1.0.4, tools/osk.py Keyboard): with the ECS
+//   fully on and the computer keyboard (ecs_full, not synth), Start on player
+//   1's controller opens it; B or Start closes it, and it closes when the ECS
+//   is no longer on. The D-pad moves its cursor over 5 rows (rows 0-3 ten
+//   keys, row 4 six keys over the ten columns: the column is kept for up and
+//   down, left and right go key by key), wrapping; A presses the cursor's key
+//   until let go; Y held is SHIFT, X held CTL. It takes all of player 1's
+//   buttons while open and masks those held when it closes, as the keypad;
+//   its keys join the USB keyboard's in ecs_keys (osk_kbd.hex: each cell's
+//   matrix bit). It and the keypads are never open together: Start opens it
+//   only while no keypad is open before or after this frame's step, and
+//   Select opens no keypad while it is open. Its state goes to intv_osk_draw
+//   (kb_open, kb_cur, kb_held, kb_mods); it steps with the keypads.
 // - analog left stick: the disc in 16 directions, never turned by L;
 //   opposite directions cancel;
 // - USB keyboard (cont3 type 4): player 1's keypad (1-9, 0 on the number
@@ -80,7 +93,9 @@
 
 `default_nettype none
 
-module intv_input (
+module intv_input #(
+    parameter KBD_HEX = "core/tables/osk_kbd.hex"
+) (
     input  wire logic        clk_74a,       // the words' and settings' clock
     input  wire logic        clk,           // clk_sys
     input  wire logic [31:0] cont1_key,
@@ -102,6 +117,10 @@ module intv_input (
     output logic      [1:0]  osk_open,      // clk: the keypads, player 1 [0], player 2 [1]
     output logic      [7:0]  osk_cur,       //   cursor cells 0-11 (player 1 [3:0])
     output logic      [7:0]  osk_held,      //   the pressed cell + 1, 0 none
+    output logic             kb_open,       // clk: the on-screen ECS keyboard
+    output logic      [5:0]  kb_cur,        //   the cursor's cell (0-45)
+    output logic      [5:0]  kb_held,       //   the pressed cell + 1, 0 none
+    output logic      [1:0]  kb_mods,       //   SHIFT (Y) [0], CTL (X) [1] held
     output logic      [7:0]  pad_r,         // $01FE, PSG port A
     output logic      [7:0]  pad_l,         // $01FF, PSG port B
     output logic      [63:0] ecs_keys,      // clk: the ECS matrix's pressed switches
@@ -437,36 +456,80 @@ module intv_input (
         endcase
     endfunction
 
+    // the ECS keyboard's cells: 10 r + c in rows 0-3; row 4: ESC (columns 0-1), SPACE (2-4),
+    // RTN (5-6), left, down, right (7, 8, 9) = cells 40-45 (tools/osk.py KB_ROW4)
+    function automatic logic [2:0] key4(input logic [3:0] c);
+        key4 = c < 4'd2 ? 3'd0 : c < 4'd5 ? 3'd1 : c < 4'd7 ? 3'd2 : c == 4'd7 ? 3'd3 : c == 4'd8 ? 3'd4 : 3'd5;
+    endfunction
+    function automatic logic [3:0] key4_x(input logic [2:0] k);    // a row-4 key's first column
+        unique case (k)
+            3'd0:    key4_x = 4'd0;
+            3'd1:    key4_x = 4'd2;
+            3'd2:    key4_x = 4'd5;
+            3'd3:    key4_x = 4'd7;
+            3'd4:    key4_x = 4'd8;
+            default: key4_x = 4'd9;
+        endcase
+    endfunction
+    function automatic logic [5:0] kb_cell(input logic [2:0] r, input logic [3:0] c);
+        kb_cell = r < 3'd4 ? 6'(r) * 6'd10 + {2'd0, c} : 6'd40 + {3'd0, key4(c)};
+    endfunction
+
+    // each cell's ECS matrix bit (bit 8 row + column) at 35:30 (the character codes below it
+    // are intv_osk_draw's)
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [35:0] kbd_rom [64];
+    /* verilator lint_on UNUSEDSIGNAL */
+    initial $readmemh(KBD_HEX, kbd_rom);
+
     logic [15:0] o_prev [2], o_mask [2];
     logic [3:0]  o_cur [2], o_held [2];
     logic        o_open [2];
     initial for (int n = 0; n < 2; n++) begin
         o_prev[n] = 16'd0; o_mask[n] = 16'd0; o_cur[n] = 4'd4; o_held[n] = 4'd0; o_open[n] = 1'b0;
     end
+    logic        kb_on;
+    logic [2:0]  kb_r;
+    logic [3:0]  kb_c;
+    logic [5:0]  kb_hd;
+    logic [15:0] kb_mask;
+    logic [1:0]  kb_md;
+    initial begin
+        kb_on = 1'b0; kb_r = 3'd4; kb_c = 4'd5; kb_hd = 6'd0; kb_mask = 16'd0; kb_md = 2'd0;   // RTN
+    end
+    wire logic ecs_ok = ecs_full && !sy;    // the ECS on with the computer keyboard
 
     always_ff @(posedge clk) begin
         if (frame) begin
+            logic kp_was, kp_now;           // a keypad open before / after this frame's step
+            kp_was = o_open[0] || o_open[1];
+            kp_now = 1'b0;
             for (int n = 0; n < 2; n++) begin : step
                 /* verilator lint_off UNUSEDSIGNAL */
                 logic [31:0] k;
                 logic [15:0] b, rise;
                 /* verilator lint_on UNUSEDSIGNAL */
                 logic [1:0]  r, c;
+                logic        nop;
                 k = n == 0 ? k1 : k2;
                 b = k[15:0];
                 rise = b & ~o_prev[n];
                 r = o_cur[n] >= 4'd9 ? 2'd3 : o_cur[n] >= 4'd6 ? 2'd2 : o_cur[n] >= 4'd3 ? 2'd1 : 2'd0;
                 c = 2'(o_cur[n] - 4'(3 * r));
+                nop = o_open[n];
                 if (!(k[31:28] == 4'd1 || k[31:28] == 4'd2 || k[31:28] == 4'd3)) begin
+                    nop = 1'b0;
                     o_open[n] <= 1'b0; o_held[n] <= 4'd0; o_mask[n] <= 16'd0; o_prev[n] <= 16'd0;
                 end else begin
                     o_prev[n] <= b;
                     if (!o_open[n]) begin
                         o_mask[n] <= o_mask[n] & b;
-                        if (rise[14]) begin
+                        if (rise[14] && !kb_on) begin                   // Select (not with the keyboard)
+                            nop = 1'b1;
                             o_open[n] <= 1'b1; o_held[n] <= 4'd0;
                         end
                     end else if (rise[14] || rise[5]) begin            // Select, B
+                        nop = 1'b0;
                         o_open[n] <= 1'b0; o_held[n] <= 4'd0; o_mask[n] <= b;
                     end else begin
                         o_mask[n] <= o_mask[n] & b;
@@ -479,6 +542,48 @@ module intv_input (
                         o_cur[n] <= 4'(3 * r) + {2'd0, c};
                     end
                 end
+                kp_now = kp_now | nop;
+            end
+            // the ECS keyboard (player 1's word; its rises from the keypad's o_prev[0], the same
+            // word before)
+            begin : kstep
+                /* verilator lint_off UNUSEDSIGNAL */
+                logic [15:0] b, rise;           // (rise: the D-pad, A, B and Start)
+                /* verilator lint_on UNUSEDSIGNAL */
+                logic [2:0]  r, k;
+                logic [3:0]  c;
+                logic        on;
+                b = k1[15:0];
+                rise = b & ~o_prev[0];
+                r = kb_r; c = kb_c; on = kb_on;
+                if (!(k1[31:28] == 4'd1 || k1[31:28] == 4'd2 || k1[31:28] == 4'd3)) begin
+                    on = 1'b0; kb_hd <= 6'd0; kb_mask <= 16'd0;
+                end else if (!kb_on) begin
+                    kb_mask <= kb_mask & b;
+                    if (rise[15] && ecs_ok && !kp_was && !kp_now) begin  // Start
+                        on = 1'b1; kb_hd <= 6'd0;
+                    end
+                end else if (!ecs_ok || rise[15] || rise[5]) begin     // Start, B
+                    on = 1'b0; kb_hd <= 6'd0; kb_mask <= b;
+                end else begin
+                    kb_mask <= kb_mask & b;
+                    if (rise[0]) r = r == 3'd0 ? 3'd4 : r - 3'd1;       // up
+                    if (rise[1]) r = r == 3'd4 ? 3'd0 : r + 3'd1;       // down
+                    if (r < 3'd4) begin
+                        if (rise[2]) c = c == 4'd0 ? 4'd9 : c - 4'd1;   // left
+                        if (rise[3]) c = c == 4'd9 ? 4'd0 : c + 4'd1;   // right
+                    end else if (rise[2] || rise[3]) begin              // row 4: key by key
+                        k = key4(c);
+                        if (rise[2]) k = k == 3'd0 ? 3'd5 : k - 3'd1;
+                        if (rise[3]) k = k == 3'd5 ? 3'd0 : k + 3'd1;
+                        c = key4_x(k);
+                    end
+                    if (!b[4]) kb_hd <= 6'd0;
+                    else if (rise[4]) kb_hd <= kb_cell(kb_r, kb_c) + 6'd1;
+                end
+                kb_on <= on;
+                kb_r <= r; kb_c <= c;
+                kb_md <= on ? {b[6], b[7]} : 2'd0;                      // CTL (X), SHIFT (Y)
             end
         end
     end
@@ -487,7 +592,15 @@ module intv_input (
         osk_open = {o_open[1], o_open[0]};
         osk_cur  = {o_cur[1], o_cur[0]};
         osk_held = {o_held[1], o_held[0]};
+        kb_open  = kb_on;
+        kb_cur   = kb_cell(kb_r, kb_c);
+        kb_held  = kb_hd;
+        kb_mods  = kb_md;
     end
+    wire logic [63:0] kb_keys = !kb_on || !ecs_ok ? 64'd0
+                              : (kb_hd != 6'd0 ? 64'd1 << kbd_rom[kb_hd - 6'd1][35:30] : 64'd0)
+                              | (kb_md[0] ? 64'd1 << 55 : 64'd0)                // SHIFT: row 6, column 7
+                              | (kb_md[1] ? 64'd1 << 46 : 64'd0);               // CTL: row 5, column 6
 
     // Auto (3): the profile's mode and sides; the fixed modes: the usual sides
     wire logic       auto = md == 2'd3;
@@ -496,7 +609,8 @@ module intv_input (
 
     logic [7:0]  p1, p2;
     always_comb begin
-        p1 = player({k1[31:16], k1[15:0] & ~(o_open[0] ? 16'hFFFF : o_mask[0])}, j1, pmd, psd) | kb_acc
+        p1 = player({k1[31:16], k1[15:0] & ~((o_open[0] ? 16'hFFFF : o_mask[0]) | (kb_on ? 16'hFFFF : kb_mask))},
+                    j1, pmd, psd) | kb_acc
            | (o_open[0] && o_held[0] != 4'd0 ? cell_code(o_held[0] - 4'd1) : 8'h00);
         p2 = player({k2[31:16], k2[15:0] & ~(o_open[1] ? 16'hFFFF : o_mask[1])}, j2, pmd, psd)
            | (o_open[1] && o_held[1] != 4'd0 ? cell_code(o_held[1] - 4'd1) : 8'h00);
@@ -519,7 +633,7 @@ module intv_input (
         if (ph == 3'd6) begin
             pad_l <= ~(sw ? p2 : p1);
             pad_r <= ~(sw ? p1 : p2);
-            ecs_keys <= ek_acc
+            ecs_keys <= ek_acc | kb_keys
                       | (kbd && ecs_full && !sy && (k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)   // Shift: row 6, column 7
                       | (kbd && ecs_full && !sy && (k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);  // Ctrl: row 5, column 6
         end

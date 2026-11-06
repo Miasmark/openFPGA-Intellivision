@@ -10,7 +10,9 @@
           { "id": 2, "name": "Side top", "key": "pad_btn_x" },
           { "id": 3, "name": "Clear (with R)", "key": "pad_btn_y" },
           { "id": 4, "name": "Disc 1/16 turn", "key": "pad_trig_l" },
-          { "id": 5, "name": "Keypad 1-9 C 0 E 5", "key": "pad_trig_r" }
+          { "id": 5, "name": "Keypad 1-9 C 0 E 5", "key": "pad_trig_r" },
+          { "id": 6, "name": "On-screen keypad", "key": "pad_btn_select" },
+          { "id": 7, "name": "ECS keyboard", "key": "pad_btn_start" }
         ]
       }
     ]

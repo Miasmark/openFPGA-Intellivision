@@ -58,9 +58,12 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   S, SW, W, NW; L + D-pad NNE, ENE, ESE, SSE, SSW, WSW, WNW, NNW, so the
   D-pad reaches all 16 disc directions (the owner's "Precision controls",
   2026-10-26; PGA Golf aims with all 16). The chords and the turned disc
-  work together (L + up + A = disc NNE and lower right). R beats L. Y alone,
-  L+Y and Start do nothing yet; Select opens the on-screen keypad (build
-  step 13, tools/osk.py: hands() takes the keypads and the profile).
+  work together (L + up + A = disc NNE and lower right). R beats L. Y alone
+  and L+Y do nothing; Select opens the on-screen keypad (build step 13,
+  tools/osk.py: hands() takes the keypads and the profile); Start opens the
+  on-screen ECS keyboard on player 1's controller while the ECS is fully on
+  with the computer keyboard (1.0.4, tools/osk.py Keyboard: hands() masks the
+  buttons it takes, ecs_keys() adds its keys).
 - Keypad mode Auto (3, the default from step 13): the game profile's mode,
   and in its Layer modes the profile's side actions on A / B / X; Layer
   without a profile.
@@ -278,13 +281,16 @@ def keyboard(key3, joy3, trig3, hand, ecs=0):
     return hand
 
 
-def ecs_keys(v):
+def ecs_keys(v, kb=None):
     """The ECS keyboard's pressed switches (bit 8 row + column) from the USB keyboard, while
     the ECS is fully on (v["ecs"] == ECS_ON; attached or off: none); v["synth"]: the
-    synthesizer instead (tracker rows)."""
-    if v.get("ecs") != ECS_ON or v["key3"] >> 28 != 4:
+    synthesizer instead (tracker rows). kb: the on-screen ECS keyboard (tools/osk.py
+    Keyboard), its keys with the computer keyboard."""
+    if v.get("ecs") != ECS_ON:
         return 0
-    bits = 0
+    bits = kb.keys() if kb is not None and not v.get("synth") else 0
+    if v["key3"] >> 28 != 4:
+        return bits
     codes = hid_codes(v["joy3"], v["trig3"])
     if v.get("synth"):
         for c in codes:
@@ -330,10 +336,12 @@ def code_mame(h):
 AUTO = 3                                    # Keypad Mode 3: the game profile's (build step 13)
 
 
-def hands(v, osk=None, prof=None):
+def hands(v, osk=None, prof=None, kb=None):
     """v: dict with key1 joy1 key2 joy2 key3 joy3 trig3 mode swap -> (p1, p2). osk: the two
     on-screen keypads (tools/osk.py Player, build step 13): the buttons they take are masked
-    and their keys pressed; prof: the game's profile (tools/osk.py), used in mode Auto (3)."""
+    and their keys pressed; prof: the game's profile (tools/osk.py), used in mode Auto (3); kb:
+    the on-screen ECS keyboard (tools/osk.py Keyboard): the buttons it takes on player 1's
+    controller are masked."""
     sides = ("lr", "ll", "top")
     mode = v["mode"]
     if mode == AUTO:
@@ -346,6 +354,8 @@ def hands(v, osk=None, prof=None):
     for n, (k, j) in enumerate(((v["key1"], v["joy1"]), (v["key2"], v["joy2"]))):
         if osk:
             k &= ~osk[n].buttons_mask() & 0xFFFFFFFF
+        if kb is not None and n == 0:
+            k &= ~kb.buttons_mask() & 0xFFFFFFFF
         h = virtual(k, j, mode, sides=sides)
         if osk and osk[n].key() is not None:
             h.key(osk[n].key())
@@ -354,9 +364,9 @@ def hands(v, osk=None, prof=None):
     return hs[0], hs[1]
 
 
-def ports(v, mame=False, osk=None, prof=None):
+def ports(v, mame=False, osk=None, prof=None, kb=None):
     """(pad_r, pad_l): $01FE (port A, right) and $01FF (port B, left)."""
-    p1, p2 = hands(v, osk, prof)
+    p1, p2 = hands(v, osk, prof, kb)
     c = code_mame if mame else code
     left, right = (p2, p1) if v["swap"] & 1 else (p1, p2)
     return c(right), c(left)

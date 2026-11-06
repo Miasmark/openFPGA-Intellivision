@@ -21,8 +21,9 @@ Its timing was measured against a real console.
   - `.bin` + `.cfg` (jzIntv's format): `NAME.cfg` beside `NAME.bin` is loaded by itself;
   - Intellicart `.rom` (`.itv`);
   - cartridge RAM, page switching and Intellicart bank switching.
-- **ECS:** its ROMs, RAM and second sound chip, and its computer keyboard and music synthesizer
-  from a USB keyboard on the Dock (no diodes, as the real keyboard: keys mask and ghost).
+- **ECS:** its ROMs, RAM and second sound chip, its computer keyboard on screen (Start) or from a
+  USB keyboard on the Dock, and its music synthesizer from the USB keyboard (no diodes, as the
+  real keyboard: keys mask and ghost).
 - **Intellivoice:** the SP0256 speech chip with its own volume; clean or the chip's 7-bit DAC
   sound.
 - **JLP:** 8,000 words of extra RAM, multiply / divide, CRC, random numbers and flash saves, kept in
@@ -63,6 +64,7 @@ button is which side action. Without a profile, Auto is Layer.
 | R + Y / B / A | the keypad's bottom row: Clear / 0 / Enter |
 | R + X | 5 |
 | Select | the on-screen keypad |
+| Start | the on-screen ECS keyboard (with the ECS on) |
 
 - **Face-button ring:** the face buttons are the keypad's ring (X = 2, B = 8, Y = 4, A = 6, pairs for
   the corners), R = 5 and L = the top side button. For games like TRON Deadly Discs.
@@ -76,6 +78,14 @@ button is which side action. Without a profile, Auto is Layer.
 - With a game's profile, the cursor's key shows its function above the keypad (for example "BOMB
   BAY" in B-17 Bomber).
 - A docked second controller opens player 2's keypad with its own Select.
+
+**On-screen ECS keyboard.**
+- With the ECS on (ECS games, or ECS set to On), **Start** opens the ECS computer keyboard over the
+  game, laid out as the real one: 1-0, Q-P, A-L ;, Z-M , . and the arrows, ESC, SPACE and RTN.
+- The **D-pad** moves the cursor and **A** presses the key until you let go. Hold **Y** for SHIFT and
+  **X** for CTL (shown above the keyboard). **B** or Start closes it.
+- It is player 1's: it takes that controller's buttons while open. It and the keypad never open
+  together. With the ECS off, or the ECS Keyboard setting on the synthesizer, Start does nothing.
 
 **USB keyboard (Dock):**
 - The number keys, Enter and Backspace (Clear) are player 1's keypad.
@@ -100,9 +110,9 @@ button is which side action. Without a profile, Auto is Layer.
 - **Colours:** MAME's palette. A palette calibrated to the console is future work.
 - **No PAL machine:** the PAL console's timing has not been measured.
 - **No ECS cassette:** tape saves complete as with no tape plugged in, and nothing loads.
-- **The ECS computer keyboard needs the Dock:** it comes only from a USB keyboard there; there is no
-  on-screen ECS keyboard. Without the Dock, games that wait for typing stay on their first screen:
-  ECS BASIC, Game Factory, Scooby Doo's Maze Chase and Super NFL Football (prototype).
+- **The music synthesizer needs the Dock:** it plays only from a USB keyboard there. Typing games
+  (ECS BASIC, Game Factory, Scooby Doo's Maze Chase, Super NFL Football) work with the on-screen
+  ECS keyboard, one key at a time; a USB keyboard on the Dock is quicker.
 - **The on-screen keypad** shows text labels, not overlay pictures.
 - **Game profiles** exist for B-17 Bomber, Space Spartans, TRON Deadly Discs and AD&D Cloudy
   Mountain so far.

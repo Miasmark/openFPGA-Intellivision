@@ -101,3 +101,62 @@ end of each round of 64.
   Layer, as before.
 - `apf_json_check`: Keypad Mode's options and its power-up value Auto (core_top's
   `set_kp_mode`).
+
+## 5 The ECS keyboard (1.0.4)
+
+The owner's decisions (2026-11-06): Start opens an on-screen ECS computer keyboard; with the
+ECS off it does nothing; laid out like the real keyboard; SHIFT and CTL held by buttons.
+
+| Input (player 1's controller) | Keyboard closed | Keyboard open |
+|---|---|---|
+| Start | opens it (the ECS on, the computer keyboard set) | closes it |
+| B | lower left side action (Layer) | closes it |
+| D-pad | the disc | moves the cursor, wrapping at the edges |
+| A | lower right side action (Layer) | presses the cursor's key, held until A is let go |
+| Y | Clear with R | SHIFT, while held |
+| X | top side action | CTL, while held |
+| other buttons | as the keypad mode says | nothing |
+| analog sticks | as the keypad mode says | as the keypad mode says |
+
+- **When:** only with the ECS fully on (mode on: ECS games under Auto, no cartridge, the
+  menu's On) and the ECS Keyboard setting on Computer keyboard: the same condition under which
+  a USB keyboard is the ECS keyboard. With the ECS off or attached (Auto's mode for most games:
+  no ECS ROM code reads the keyboard) or the synthesizer set, Start does nothing, and if the ECS
+  stops being on while the keyboard is open it closes.
+- **Whose:** player 1's controller (cont1: the Pocket's own buttons, or the first docked
+  controller). The ECS has one keyboard; a second controller's Start does nothing.
+- **Layout:** five rows. Rows 0-3 have ten keys each: 1-0, Q-P, A-L ;, Z-M , . and the up
+  arrow. Row 4 has ESC (two columns wide), SPACE (three), RTN (two) and the left, down and right
+  arrows. With SHIFT and CTL on Y and X, all 48 keys of the ECS matrix (tools/ecs.py KEYPOS) are
+  reachable. The cursor starts on RTN, the key most title screens wait for, and stays where it
+  was between openings.
+- **Moving:** up and down keep the column. In row 4, left and right go key by key and put the
+  cursor on the key's first column (so up from SPACE lands on its first column).
+- **Keys:** the key pressed is the one under the cursor when A went down, held until A is let
+  go, as on the keypad. Its matrix switch goes into `ecs_keys` with the USB keyboard's; the ECS
+  reads the matrix with the same no-diode rule (ECS_NOTES 4), so a USB key and an on-screen key
+  together mask each other as two real keys would.
+- **Never with a keypad:** Start opens the keyboard only while no keypad is open before or after
+  this frame's step (so Select and Start together open the keypad), and Select opens no keypad,
+  either player's, while the keyboard is open.
+- **Masks:** while open it takes all 16 of player 1's buttons (the sticks still play); the
+  buttons held when it closes stay masked until let go, as the keypad's.
+- **Drawing** (`intv_osk_draw`): 151 x 102 (ten 15-pixel columns, five 20-line rows, with the
+  outlines) at x 4 and line 88, inside the Hide window's 159 visible columns; the keypad's style:
+  white outlines (in row 4 only at each key's left edge), each key's text centred in our font
+  with a shadow, the cursor key yellow, filled yellow with a dark text while pressed. Above it,
+  at line 70, "Y:SHIFT" at its left edge and "X:CTL" ending at its right edge, each yellow while
+  its button is held.
+- **Tables:** `osk_kbd.hex` (osk.py `kbd_hex`): each cell's matrix bit and up to five
+  characters. The font gained `;` `,` and the four arrows.
+
+Gates: `tb_osk` compares the keyboard frame by frame with the model (the pads, the ECS keys and
+every pixel): spec frames for every key pressed, the moves and wraps, SHIFT and CTL, the closes
+and masks, the ECS off, attached and the synthesizer, the keypad interlock both ways, a
+non-controller; two random blocks, the second with Select absent and the ECS mostly on so the
+keyboard stays open; 21 planted faults (`kb_*`, `keypad_over_kb`), each caught.
+`sim/check/ecs_osk_check.py` runs the system model twice per case, once typing into the ECS
+matrix directly and once with only Pocket buttons through the keyboard (Start, the cursor walked
+in the gaps, A held over the same frames, Y for SHIFT): ECS BASIC (10 PRINT 2*3, RUN) and Super
+NFL Football (RTN at its title, DEMO and RTN in its menu: the demonstration starts) give the same
+picture in every frame.

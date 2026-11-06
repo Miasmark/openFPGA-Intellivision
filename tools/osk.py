@@ -30,13 +30,25 @@ Keypad Mode 3, the default from 0.0.22; 0-2 are the fixed modes), the side actio
 Auto's Layer mode, and the keypad's labels (function facts from the game's overlay, our own
 words, at most 14 characters). Without a profile Auto is Layer with the usual side actions.
 
+The ECS keyboard (1.0.4; the owner's decisions of 2026-11-06): with the ECS fully on (mode on,
+the USB keyboard's condition) and the ECS Keyboard setting on Computer keyboard, Start on player 1's
+controller (cont1) opens an on-screen ECS computer keyboard (Keyboard below), laid out as the real
+one: 1-0, Q-P, A-L ;, Z-M , . and the up arrow, then ESC, SPACE, RTN and the left, down and right
+arrows. The D-pad moves the cursor (wrapping); A presses the cursor's key until A is let go; Y held
+is SHIFT and X held is CTL (shown above the keyboard, yellow while held), so all 48 keys of the
+ECS matrix are reachable; B or Start closes it. It takes all of player 1's buttons while open and
+masks the ones held when it closes, as the keypad does; its keys go into the ECS matrix as the
+USB keyboard's do. Start does nothing with the ECS off or attached, or with the synthesizer set.
+The keyboard and the keypads are never open together: Start opens the keyboard only while no
+keypad is open (and none opens in that frame), and Select opens no keypad while it is open.
+
 The font is our own: 5 x 7 glyphs in 8 x 8 cells, each row drawn on two lines (as the STIC's
 card pixels).
 """
 import sys
 
 # ---------------------------------------------------------------------- font (our own glyphs)
-CHARS = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ./:-&'!?()"
+CHARS = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ./:-&'!?();,\u2191\u2193\u2190\u2192"     # + the ECS keyboard's
 _G = {
     ' ': [".....", ".....", ".....", ".....", ".....", ".....", "....."],
     '0': [".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."],
@@ -85,6 +97,12 @@ _G = {
     '?': [".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."],
     '(': ["...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."],
     ')': [".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#..."],
+    ';': [".....", ".##..", ".##..", ".....", ".##..", "..#..", ".#..."],
+    ',': [".....", ".....", ".....", ".....", ".##..", "..#..", ".#..."],
+    '\u2191': ["..#..", ".###.", "#.#.#", "..#..", "..#..", "..#..", "..#.."],      # up arrow
+    '\u2193': ["..#..", "..#..", "..#..", "..#..", "#.#.#", ".###.", "..#.."],      # down arrow
+    '\u2190': [".....", "..#..", ".#...", "#####", ".#...", "..#..", "....."],      # left arrow
+    '\u2192': [".....", "..#..", "...#.", "#####", "...#.", "..#..", "....."],      # right arrow
 }
 assert set(_G) == set(CHARS) and len(CHARS) <= 64
 
@@ -129,8 +147,9 @@ class Player:
         self.held = 0               # the pressed cell + 1 (0: none)
         self.mask = 0               # buttons masked after a close until let go
 
-    def step(self, key):
-        """The controller word at this frame's start."""
+    def step(self, key, block=False):
+        """The controller word at this frame's start; block: the ECS keyboard is open (Select
+        opens no keypad)."""
         if key >> 28 not in (1, 2, 3):
             self.open = self.held = self.mask = self.prev = 0
             return
@@ -138,7 +157,7 @@ class Player:
         rise = b & ~self.prev
         self.mask &= b
         if not self.open:
-            if rise >> SELECT & 1:
+            if rise >> SELECT & 1 and not block:
                 self.open = 1
                 self.held = 0
         elif rise >> SELECT & 1 or rise >> B & 1:
@@ -169,6 +188,126 @@ class Player:
     def key(self):
         """The hand-controller key the keypad presses, or None."""
         return KEYS[self.held - 1] if self.open and self.held else None
+
+
+# ---------------------------------------------------------------------- the ECS keyboard
+# Cells: rows 0-3 ten keys each (cell 10 r + c), row 4 six keys over the ten columns (cells
+# 40-45): ESC (columns 0-1), SPACE (2-4), RTN (5-6), the left, down and right arrows (7, 8, 9).
+# Names as tools/ecs.py KEYPOS; SHIFT and CTL are Y and X held.
+KB_ROWS = [list("1234567890"), list("QWERTYUIOP"), list("ASDFGHJKL;"), list("ZXCVBNM,.") + ["UP"]]
+KB_ROW4 = [("ESC", 0, 2), ("SPACE", 2, 3), ("RTN", 5, 2), ("LEFT", 7, 1), ("DOWN", 8, 1), ("RIGHT", 9, 1)]
+KB_CELLS = [k for r in KB_ROWS for k in r] + [k for k, _, _ in KB_ROW4]
+KB_TEXT = {"UP": "\u2191", "DOWN": "\u2193", "LEFT": "\u2190", "RIGHT": "\u2192"}
+KB_NCELL = len(KB_CELLS)                    # 46
+KB_START = (4, 5)                           # the cursor at power-up: RTN (row, column)
+KB_SHIFT, KB_CTL = (6, 7), (5, 6)           # their matrix positions (tools/ecs.py KEYPOS)
+KUW, KCH = 15, 20                           # a column 15 pixels, a row 20 lines
+KGW, KGH = 10 * KUW + 1, 5 * KCH + 2        # 151 x 102 with the outlines
+KGX = (PF_W - 1 - KGW) // 2                 # x 4-154: inside the Hide window's 159 columns
+KGY = PF_H - 2 - KGH                        # lines 88-189
+KLY = KGY - KCH + 2                         # the SHIFT / CTL line, 70-85
+KB_MODS = (("Y:SHIFT", 0), ("X:CTL", KGW - 8 * len("X:CTL")))     # text, x from the grid's left edge
+
+
+def kb_text(cell):
+    k = KB_CELLS[cell]
+    return KB_TEXT.get(k, k)
+
+
+def kb_key4(c):
+    """Row 4: the key (0-5) over column c."""
+    return next(i for i, (_, x, w) in enumerate(KB_ROW4) if x <= c < x + w)
+
+
+def kb_cell(r, c):
+    return 10 * r + c if r < 4 else 40 + kb_key4(c)
+
+
+def kb_box(cell):
+    """(row, x from the grid's left edge, width) of a cell's key."""
+    if cell < 40:
+        return cell // 10, KUW * (cell % 10), KUW
+    _, x, w = KB_ROW4[cell - 40]
+    return 4, KUW * x, KUW * w
+
+
+class Keyboard:
+    """The on-screen ECS keyboard (state changes only in step(), once a frame)."""
+
+    def __init__(self):
+        self.open = 0
+        self.r, self.c = KB_START
+        self.prev = 0
+        self.held = 0               # the pressed cell + 1 (0: none)
+        self.mask = 0
+        self.mods = 0               # bit 0 SHIFT (Y), bit 1 CTL (X), while open
+
+    def step(self, key, ecs_ok, keypads_open):
+        """Player 1's word at this frame's start; ecs_ok: the ECS fully on with the computer
+        keyboard; keypads_open: a keypad is open (before or after its own step this frame)."""
+        if key >> 28 not in (1, 2, 3):
+            self.open = self.held = self.mask = self.prev = self.mods = 0
+            return
+        b = key & 0xFFFF
+        rise = b & ~self.prev
+        self.mask &= b
+        if not self.open:
+            if rise >> START & 1 and ecs_ok and not keypads_open:
+                self.open = 1
+                self.held = 0
+        elif not ecs_ok or rise >> START & 1 or rise >> B & 1:
+            self.open = 0
+            self.held = 0
+            self.mask = b
+        else:
+            r, c = self.r, self.c
+            if rise >> UP & 1:
+                r = (r + 4) % 5
+            if rise >> DOWN & 1:
+                r = (r + 1) % 5
+            if r < 4:
+                if rise >> LEFT & 1:
+                    c = (c + 9) % 10
+                if rise >> RIGHT & 1:
+                    c = (c + 1) % 10
+            elif rise >> LEFT & 1 or rise >> RIGHT & 1:
+                # row 4: by key, to the key's first column (the column kept for up / down)
+                k = (kb_key4(c) + 5 * (rise >> LEFT & 1) + (rise >> RIGHT & 1)) % 6
+                c = KB_ROW4[k][1]
+            if not b >> A & 1:
+                self.held = 0
+            elif rise >> A & 1:
+                self.held = kb_cell(self.r, self.c) + 1     # the key under the cursor before this frame's move
+            self.r, self.c = r, c
+        self.mods = (b >> Y & 1 | (b >> X & 1) << 1) if self.open else 0
+        self.prev = b
+
+    def cur(self):
+        return kb_cell(self.r, self.c)
+
+    def buttons_mask(self):
+        return 0xFFFF if self.open else self.mask
+
+    def keys(self):
+        """The ECS matrix's pressed switches (bit 8 row + column)."""
+        if not self.open:
+            return 0
+        sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+        import ecs as ecsm
+        v = ecsm.keybits(KB_CELLS[self.held - 1]) if self.held else 0
+        if self.mods & 1:
+            v |= 1 << (8 * KB_SHIFT[0] + KB_SHIFT[1])
+        if self.mods & 2:
+            v |= 1 << (8 * KB_CTL[0] + KB_CTL[1])
+        return v
+
+
+def step_all(players, kb, k1, k2, ecs_ok):
+    """One frame: both keypads, then the keyboard (player 1's controller), as intv_input.sv."""
+    was = players[0].open or players[1].open
+    players[0].step(k1, block=kb.open)
+    players[1].step(k2, block=kb.open)
+    kb.step(k1, ecs_ok, was or players[0].open or players[1].open)
 
 
 # ---------------------------------------------------------------------- profiles
@@ -222,9 +361,10 @@ def label(p, cell):
 
 
 # ---------------------------------------------------------------------- drawing
-def draw(players, prof):
+def draw(players, prof, kb=None):
     """The overlay over the playfield: {(x, y): colour} for x 0-159, y 0-191 (lines), colours
-    WHITE, DARK, YELLOW (absent: transparent). players: the two Player objects."""
+    WHITE, DARK, YELLOW (absent: transparent). players: the two Player objects; kb: the ECS
+    keyboard (Keyboard), never open with a keypad."""
     px = {}
 
     def glyph(x0, y0, ch, colour):
@@ -267,6 +407,37 @@ def draw(players, prof):
         ly = LY - CH if n == 1 and players[0].open else LY      # above player 1's when both are open
         for i, ch in enumerate(t):
             glyph(lx + 8 * i, ly, ch, WHITE)
+    if kb is not None and kb.open:
+        # outlines: every key's left edge, the right edge, two lines atop each row and below
+        for y in range(KGH):
+            r = min(y // KCH, 4)
+            for x in range(KGW):
+                if r < 4:
+                    edge = x % KUW == 0
+                else:
+                    edge = x == KGW - 1 or any(x == KUW * k[1] for k in KB_ROW4)
+                if edge or y % KCH < 2 or y >= 5 * KCH:
+                    px[(KGX + x, KGY + y)] = WHITE
+        cr, cx, cw = kb_box(kb.cur())
+        for y in range(KCH + 2):
+            for x in range(cw + 1):
+                if x in (0, cw) or y < 2 or y >= KCH:
+                    px[(KGX + cx + x, KGY + cr * KCH + y)] = YELLOW
+        for cell in range(KB_NCELL):
+            r, x0, w = kb_box(cell)
+            x0, y0 = KGX + x0, KGY + r * KCH
+            pressed = kb.held == cell + 1
+            if pressed:
+                for y in range(2, KCH):
+                    for x in range(1, w):
+                        px[(x0 + x, y0 + y)] = YELLOW
+            t = kb_text(cell)
+            tx = x0 + (w + 1 - 8 * len(t)) // 2
+            for i, ch in enumerate(t):
+                glyph(tx + 8 * i, y0 + 2, ch, DARK if pressed else YELLOW if cell == kb.cur() else WHITE)
+        for n, (t, x) in enumerate(KB_MODS):
+            for i, ch in enumerate(t):
+                glyph(KGX + x + 8 * i, KLY, ch, YELLOW if kb.mods >> n & 1 else WHITE)
     return px
 
 
@@ -316,6 +487,21 @@ def llen_hex():
     return [lab[16 * i] for i in range(MAX_LABELS)]
 
 
+def kbd_hex():
+    """osk_kbd.hex: 64 cells of 36 bits: the key's ECS matrix bit (6, bit 8 row + column) at
+    35:30, then up to 5 character codes (6 bits each, the first at 5:0; 0 = none)."""
+    sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+    import ecs as ecsm
+    out = []
+    for cell in range(KB_NCELL):
+        r, c = ecsm.KEYPOS[KB_CELLS[cell]]
+        v = (8 * r + c) << 30
+        for i, ch in enumerate(kb_text(cell)):
+            v |= ccode(ch) << (6 * i)
+        out.append(v)
+    return out + [0] * (64 - len(out))
+
+
 def font_hex():
     """osk_font.hex: 64 glyphs x 8 rows."""
     return [r for g in FONT for r in g]
@@ -326,7 +512,8 @@ def tables():
             "osk_prof.hex": ["%020x" % e for e in prof_hex()],
             "osk_label.hex": ["%02x" % e for e in label_hex()],
             "osk_llen.hex": ["%x" % e for e in llen_hex()],
-            "osk_font.hex": ["%02x" % e for e in font_hex()]}
+            "osk_font.hex": ["%02x" % e for e in font_hex()],
+            "osk_kbd.hex": ["%09x" % e for e in kbd_hex()]}
 
 
 def gen(check=False):
@@ -389,6 +576,35 @@ def self_check():
         q.step(T | 1 << SELECT)
     px = draw(ps, PROFILES[1])
     chk(all(0 <= x < PF_W and 0 <= y < PF_H for x, y in px), "drawn outside the playfield")
+    # the ECS keyboard: every matrix key reachable (46 cells, SHIFT and CTL on Y and X), drawn
+    # inside the Hide window (x 0-158), texts inside their keys
+    sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+    import ecs as ecsm
+    chk(sorted(KB_CELLS + ["SHIFT", "CTL"]) == sorted(ecsm.KEYPOS), "keyboard: the 48 ECS keys")
+    chk(all(w + 1 - 8 * len(kb_text(c)) >= 4 for c in range(KB_NCELL) for _, _, w in [kb_box(c)]),
+        "keyboard: every key's text fits")
+    kb = Keyboard()
+    kb.step(T | 1 << START, True, False)
+    seen = set()
+    for d in [RIGHT] * 10 + [DOWN] + [LEFT] * 10 + [DOWN] + [RIGHT] * 10 + [DOWN] + [LEFT] * 10 + [DOWN] \
+            + [RIGHT] * 10 + [UP] * 5:             # every cell, and back round through the wraps
+        for b in (1 << d, 0):
+            kb.step(T | b, True, False)
+        seen.add(kb.cur())
+    chk(len(seen) == KB_NCELL, "keyboard: the cursor reaches %d of %d cells" % (len(seen), KB_NCELL))
+    kb.step(T | 1 << A | 1 << Y | 1 << X, True, False)
+    chk(kb.keys() == ecsm.keybits(KB_CELLS[kb.cur()], "SHIFT", "CTL"), "keyboard: A + Y + X")
+    px = draw([Player(), Player()], None, kb)
+    chk(all(0 <= x < PF_W - 1 and 0 <= y < PF_H for x, y in px), "keyboard drawn outside x 0-158")
+    kb2, pl2 = Keyboard(), [Player(), Player()]
+    step_all(pl2, kb2, T | 1 << START | 1 << SELECT, T, True)
+    chk(pl2[0].open and not kb2.open, "Select and Start together: the keypad, not the keyboard")
+    step_all(pl2, kb2, T, T, True)
+    step_all(pl2, kb2, T | 1 << START, T, True)
+    chk(not kb2.open, "keypad open: Start does nothing")
+    kb3 = Keyboard()
+    kb3.step(T | 1 << START, False, False)
+    chk(not kb3.open, "ECS not on: Start does nothing")
     chk(len(FONT) == 64 and all(r & 0x81 == 0 for g in FONT for r in g), "glyph columns 1-5 only")
     if fails:
         print("OSK_SELFTEST FAIL:", "; ".join(fails))

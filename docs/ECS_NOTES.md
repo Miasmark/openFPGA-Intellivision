@@ -156,7 +156,15 @@ accumulating registers (keypad lines, matrix switches), one decoder instead of t
 ALMs; DESIGN 4.5); a new word from the clock crossing is taken only between rounds, so the outputs
 always come from one whole word. With the setting
 "ECS Keyboard" on Music synthesizer, two tracker rows play it: Z S X D C V G B H N J M = C3-B3,
-Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5. ECS hand controllers 3/4 are not provided (no game reads them,
+Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5.
+
+**The on-screen ECS keyboard** (1.0.4, docs/KEYPAD_NOTES.md 5): Start on player 1's controller
+opens it under the same condition (mode on, the computer keyboard); its key, SHIFT (Y) and CTL
+(X) go into the same matrix bits as the USB keyboard's, ORed with them, so the matrix rule above
+applies to both together. `sim/check/ecs_osk_check.py` shows typing through it gives a game the
+same frames as typing into the matrix (ECS BASIC, Super NFL Football).
+
+ECS hand controllers 3/4 are not provided (no game reads them,
 REPORT 5.6); their port bytes read as the matrix gives.
 
 ## 5 UART stub

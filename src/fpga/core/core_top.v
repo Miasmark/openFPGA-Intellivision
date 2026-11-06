@@ -793,6 +793,10 @@ end
     wire    [1:0]   prof_mode, osk_open;
     wire    [5:0]   prof_sides;
     wire    [7:0]   osk_cur, osk_held;
+    // the on-screen ECS keyboard (1.0.4, Start with the ECS on)
+    wire            kb_open;
+    wire    [5:0]   kb_cur, kb_held;
+    wire    [1:0]   kb_mods;
     wire    [63:0]  ecs_keys;
     wire            ecs_synth, ecs_full;
     wire    [1:0]   ecs_ovr;
@@ -819,6 +823,10 @@ intv_input input_map (
     .osk_open   ( osk_open ),
     .osk_cur    ( osk_cur ),
     .osk_held   ( osk_held ),
+    .kb_open    ( kb_open ),
+    .kb_cur     ( kb_cur ),
+    .kb_held    ( kb_held ),
+    .kb_mods    ( kb_mods ),
     .pad_r      ( pad_r ),
     .pad_l      ( pad_l ),
     .ecs_keys   ( ecs_keys ),
@@ -947,8 +955,8 @@ test_pattern pattern (
 );
 
 // Build step 13: the game profile (by the cartridge's CRC) and the
-// on-screen keypads drawn over the playfield (tools/osk.py; intv_input
-// steps them at each frame's start).
+// on-screen keypads and (1.0.4) ECS keyboard drawn over the playfield
+// (tools/osk.py; intv_input steps them at each frame's start).
     wire    [71:0]  prof_labels;
     wire    [1:0]   osk_ovl;
     assign osk_frame = ce_pix && hcnt == 9'd0 && vline == 9'd0;
@@ -971,6 +979,10 @@ intv_osk_draw osk_draw (
     .osk_open   ( osk_open ),
     .osk_cur    ( osk_cur ),
     .osk_held   ( osk_held ),
+    .kb_open    ( kb_open ),
+    .kb_cur     ( kb_cur ),
+    .kb_held    ( kb_held ),
+    .kb_mods    ( kb_mods ),
     .prof_ok    ( prof_ok ),
     .labels     ( prof_labels ),
     .ovl        ( osk_ovl )

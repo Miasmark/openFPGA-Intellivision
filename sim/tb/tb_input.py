@@ -634,6 +634,7 @@ def build(work, rtl_dir, verilator, strict=True, defines=()):
     cmd = [verilator, '--binary', '--timing', '--verilate-jobs', '1', '--build-jobs', '2', '-Wall', '-Wno-fatal', '-Wno-TIMESCALEMOD',
            '-Wno-PROCASSINIT', '--top-module', 'tb_input', '-Mdir', obj, '-o', 'tb_input']
     cmd += ['-D' + d for d in defines]
+    cmd += ['-DOSK_KBD_HEX="%s"' % os.path.join(ROOT, 'src', 'fpga', 'core', 'tables', 'osk_kbd.hex')]
     cmd += [os.path.join(rtl_dir, f) for f in RTL] + [TB]
     log = os.path.join(work, 'build.log')
     with open(log, 'w') as f:

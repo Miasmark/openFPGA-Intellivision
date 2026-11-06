@@ -18,6 +18,8 @@ Controls (Keypad Mode Auto: by the game, else Layer):
   R + D-pad    keypad 1-9 by position
   R + Y B A    keypad Clear / 0 / Enter;  R + X: 5
   Select       the on-screen keypad (D-pad, A presses, B closes)
+  Start        the on-screen ECS keyboard, with the ECS on (D-pad,
+               A presses, hold Y for SHIFT and X for CTL, B closes)
 
 ECS (menu, taken at the next Reset or load): Auto attaches it as each
 cartridge needs. "ECS Keyboard": the USB keyboard on the Dock as the

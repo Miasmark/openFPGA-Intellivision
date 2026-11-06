@@ -703,7 +703,7 @@ PLANTS = [
     # step 9, the ECS keyboard: Shift on the wrong switch; Backspace not the left arrow; the number row
     # still the keypad with the ECS; the synthesizer an octave off; right Ctrl ignored; the keys sent
     # without the ECS; the ECS setting's bits swapped
-    ('ecs_shift_pos', 'intv_input.sv', "? 64'd1 << 55 : 64'd0)", "? 64'd1 << 54 : 64'd0)"),
+    ('ecs_shift_pos', 'intv_input.sv', "(k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)", "(k3[1] | k3[5]) ? 64'd1 << 54 : 64'd0)"),
     ('ecs_bs_none', 'intv_input.sv', "8'h50: p = 7'd0;   8'h2A: p = 7'd0;", "8'h50: p = 7'd0;"),
     ('ecs_numrow_keypad', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)",
      "ecs_full ? (ph == 3'd0 ? hid_code(hc) : hid_code_ecs(hc)) : hid_code(hc)"),

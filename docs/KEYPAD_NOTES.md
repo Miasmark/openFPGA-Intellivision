@@ -154,7 +154,10 @@ Gates: `tb_osk` compares the keyboard frame by frame with the model (the pads, t
 every pixel): spec frames for every key pressed, the moves and wraps, SHIFT and CTL, the closes
 and masks, the ECS off, attached and the synthesizer, the keypad interlock both ways, a
 non-controller; two random blocks, the second with Select absent and the ECS mostly on so the
-keyboard stays open; 21 planted faults (`kb_*`, `keypad_over_kb`), each caught.
+keyboard stays open; 21 planted faults (`kb_*`, `keypad_over_kb`), each caught. A plant runs
+its own frames (the keyboard's spec and second random block, or the keypad's spec and first
+random block: about 6 minutes each instead of 12), and `--all --part K/N` splits the plants over
+N jobs (part 1 also runs the frames): the 35 plants take about 3.5 slot-hours.
 `sim/check/ecs_osk_check.py` runs the system model twice per case, once typing into the ECS
 matrix directly and once with only Pocket buttons through the keyboard (Start, the cursor walked
 in the gaps, A held over the same frames, Y for SHIFT): ECS BASIC (10 PRINT 2*3, RUN) and Super

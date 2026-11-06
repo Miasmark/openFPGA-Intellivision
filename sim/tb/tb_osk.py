@@ -7,6 +7,8 @@ sim/tb/tb_osk.sv) against tools/osk.py and tools/intv_input.py, frame by frame: 
 the ECS matrix's pressed keys, and every overlay pixel of every frame.
 
   python3 -I sim/tb/tb_osk.py --all       the gate: the frames, then the planted faults
+  python3 -I sim/tb/tb_osk.py --all --part K/N   the gate in N jobs: part 1 the frames, each part
+                                          every Nth plant (a plant runs its own frame set)
   python3 -I sim/tb/tb_osk.py [--no-build] [--frames N]
 
 Frames (one vector each: both controllers' words, Keypad Mode, Swap, the cartridge's CRC, the
@@ -115,6 +117,17 @@ def spec_frames():
     fr.append(frame(k1=T1, k2=T2, swap=1, crc=CRCS[0]))
     fr += kb_spec_frames()
     return fr
+
+
+def plant_frames(name, n):
+    """A plant's frames: the keyboard's (kb_*, keypad_over_kb) its spec frames and the second
+    random block, the others the keypad's spec frames and the first random block (each half the
+    run, every plant still caught: about 6 minutes a plant instead of 12)."""
+    if name.startswith('kb_') or name == 'keypad_over_kb':
+        return kb_spec_frames() + random_frames(n, random.Random(14), sel=0.0, start=0.04, b_pr=0.01,
+                                                ecs_set=(1, 1, 1, 1, 1, 1, 1, 1, 0, 3))
+    sp = spec_frames()
+    return sp[:len(sp) - len(kb_spec_frames())] + random_frames(n, random.Random(13))
 
 
 def kb_spec_frames():
@@ -314,7 +327,7 @@ PLANTS = [
      "else o_held[n] <= o_cur[n] + 4'd1;"),
     ('osk_close_unmasked', 'intv_input.sv', "o_open[n] <= 1'b0; o_held[n] <= 4'd0; o_mask[n] <= b;",
      "o_open[n] <= 1'b0; o_held[n] <= 4'd0; o_mask[n] <= 16'd0;"),
-    ('osk_buttons_leak', 'intv_input.sv', "k1[15:0] & ~(o_open[0] ? 16'hFFFF : o_mask[0])", "k1[15:0] & ~o_mask[0]"),
+    ('osk_buttons_leak', 'intv_input.sv', "~((o_open[0] ? 16'hFFFF : o_mask[0]) | (kb_on", "~(o_mask[0] | (kb_on"),
     ('osk_p2_key_lost', 'intv_input.sv', "| (o_open[1] && o_held[1] != 4'd0 ? cell_code(o_held[1] - 4'd1) : 8'h00);", ";"),
     ('auto_sides_ignored', 'intv_input.sv', "wire logic [5:0] psd  = auto && prof_ok ? prof_sides : 6'b10_01_00;",
      "wire logic [5:0] psd  = 6'b10_01_00;"),
@@ -322,7 +335,8 @@ PLANTS = [
      "wire logic [1:0] pmd  = auto ? 2'd0 : md;"),
     ('prof_first_entry_lost', 'intv_profile.sv', "end else if (e[39] && e[38:7] == crc) begin",
      "end else if (e[39] && e[38:7] == crc && ie != 6'd0) begin"),
-    ('draw_no_shadow', 'intv_osk_draw.sv', ": (sh && !q_press) ? DARK", ": 1'b0 ? DARK"),
+    ('draw_no_shadow', 'intv_osk_draw.sv', ": (sh && !q_press) ? DARK\n                     : (q_press && q_ox",
+     ": 1'b0 ? DARK\n                     : (q_press && q_ox"),
     ('draw_p2_label_row', 'intv_osk_draw.sv', "ly1 = osk_open[0] ? 8'(LY - 20) : 8'(LY);", "ly1 = 8'(LY);"),
     ('draw_cursor_box', 'intv_osk_draw.sv', "|| by < 7'd2 || by >= 7'd20);", "|| by < 7'd2 || by >= 7'd21);"),
     ('draw_shadow_row', 'intv_osk_draw.sv', "ph == 4'd1 ? grow : grow - 3'd1", "grow"),
@@ -363,7 +377,9 @@ PLANTS = [
 ]
 
 
-def run_plant(name, fname, a, b, verilator, work, frames, want):
+def run_plant(name, fname, a, b, verilator, work, n):
+    frames = plant_frames(name, n)
+    want = expect(frames)
     d = os.path.join(work, 'plant_' + name)
     shutil.rmtree(d, ignore_errors=True)
     rtl = os.path.join(d, 'rtl')
@@ -388,18 +404,20 @@ def main():
     ap.add_argument('--no-build', action='store_true')
     ap.add_argument('--frames', type=int, default=400, help='random frames')
     ap.add_argument('--plant', help='comma-separated plant names (implies the plants only)')
+    ap.add_argument('--part', default='1/1', help='K/N: the frames (part 1 only) and every Nth plant from K')
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_osk'))
     os.makedirs(work, exist_ok=True)
     if osk.gen(check=True):
         return 1
+    pk, pn = (int(x) for x in a.part.split('/'))
     frames = spec_frames() + random_frames(a.frames, random.Random(13)) \
         + random_frames(a.frames, random.Random(14), sel=0.0, start=0.04, b_pr=0.01,
                         ecs_set=(1, 1, 1, 1, 1, 1, 1, 1, 0, 3))
     want = expect(frames)
     ok = True
-    if not a.plant:
+    if not a.plant and pk == 1:
         binary = os.path.join(work, 'obj', 'tb_osk') if a.no_build else build(work, CORE, verilator)
         if binary is None:
             print('TB_OSK FAIL: build')
@@ -409,13 +427,13 @@ def main():
         ok = bad == 0
     if a.all or a.plant:
         sel = a.plant.split(',') if a.plant else None
-        for name, fname, x, y in PLANTS:
-            if sel and name not in sel:
+        for i, (name, fname, x, y) in enumerate(PLANTS):
+            if sel and name not in sel or not sel and i % pn != pk - 1:
                 continue
-            r = run_plant(name, fname, x, y, verilator, work, frames, want)
+            r = run_plant(name, fname, x, y, verilator, work, a.frames)
             print('PLANT %s: %s' % (name, r))
             ok = ok and r.startswith('caught')
-    print('TB_OSK%s %s' % ('_ALL' if a.all else '', 'pass' if ok else 'FAIL'))
+    print('TB_OSK%s%s %s' % ('_ALL' if a.all else '', '' if pn == 1 else ' part %d/%d' % (pk, pn), 'pass' if ok else 'FAIL'))
     return 0 if ok else 1
 
 

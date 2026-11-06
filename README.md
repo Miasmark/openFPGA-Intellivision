@@ -82,7 +82,7 @@ button is which side action. Without a profile, Auto is Layer.
 
 | Setting | Options |
 |---|---|
-| Border | Show (168 x 210) or Hide (the 159 x 192 picture only) |
+| Border | Show (168 x 210) or Hide (the 160 x 192 picture only) |
 | Keypad Mode | Auto (by game), Layer, Face-button ring, Right stick |
 | Swap Controllers | player 1 on the left (default) or right controller |
 | Pause in Menu | On / Off |
@@ -97,12 +97,15 @@ button is which side action. Without a profile, Auto is Layer.
 - **Colours:** MAME's palette. A palette calibrated to the console is future work.
 - **No PAL machine:** the PAL console's timing has not been measured.
 - **No ECS cassette:** tape saves complete as with no tape plugged in, and nothing loads.
+- **The ECS computer keyboard needs the Dock:** it comes only from a USB keyboard there; there is no
+  on-screen ECS keyboard. Without the Dock, games that wait for typing stay on their first screen:
+  ECS BASIC, Game Factory, Scooby Doo's Maze Chase and Super NFL Football (prototype).
 - **The on-screen keypad** shows text labels, not overlay pictures.
 - **Game profiles** exist for B-17 Bomber, Space Spartans, TRON Deadly Discs and AD&D Cloudy
   Mountain so far.
-- **Library sweep:** a run of 188 library images through the core's model found no failures. Some
-  games stay on their title screen until a key the test did not press; Super NFL Football
-  (prototype) shows nothing, in MAME too.
+- **Library sweep:** a run of 188 library images through the core's model found one fault, now
+  fixed: Super NFL Football (prototype) needs the ECS, which no game list recorded. Some games stay
+  on their title screen until a key the test did not press.
 
 ## Clean room
 

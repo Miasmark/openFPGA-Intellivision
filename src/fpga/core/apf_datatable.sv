@@ -73,6 +73,7 @@ module apf_datatable #(
     parameter logic [31:0] SLOT_ID = 32'h0000_0100,
     parameter logic [31:0] CFG_ID  = 32'h0000_0101,
     parameter int          JLP_IDX = 6,
+    parameter int          TAPE_IDX = 7,     // the ECS tape slot (0x107): 16,384 bytes while tape_on
     parameter int          ENTRIES = 16,       // pairs scanned
     parameter bit          FETCH   = 1'b1,     // the CFG found by name (apf_cfgfetch)
     parameter int          WD_BITS = 26,       // apf_cfgfetch's time limit per command (2^WD_BITS clk_74a)
@@ -98,6 +99,7 @@ module apf_datatable #(
     output logic             cfg_inlist,
     output logic             len_valid,
     input  wire logic [4:0]  jlp_sectors,     // clk_sys: the JLP flash slot's size (x 1,536 bytes)
+    input  wire logic        tape_on,         // clk_sys: the game has an ECS tape (its slot's size 16,384, else 0)
 
     // apf_cfgfetch (FETCH): core_bridge_cmd's target commands, its struct
     // RAM on the bridge, and how the fetch went (apf_cfgfetch's res)
@@ -161,10 +163,13 @@ module apf_datatable #(
     assign d_phase = st == D_FWAIT ? 2'd1 : reached ? 2'd2 : 2'd0;
 
     logic [4:0] js_a = 5'd0, js_s = 5'd0, js_b = 5'd0;
+    logic [2:0] tp_s = 3'd0;
+    logic       tw = 1'b0;                     // idle size writes alternate: JLP, tape
     always_ff @(posedge clk) begin
         js_a <= jlp_sectors;
         js_s <= js_a;
         if (js_s == js_a) js_b <= js_s;
+        tp_s <= {tp_s[1:0], tape_on};
     end
 
     always_ff @(posedge clk) begin
@@ -188,9 +193,10 @@ module apf_datatable #(
             len_valid <= 1'b0;
         case (st)
             D_IDLE: begin
-                // the JLP size word, rewritten while idle
-                dt_addr <= 10'(2 * JLP_IDX + 1);
-                dt_data <= 32'(js_b) * 32'd1536;
+                // the JLP and tape size words, rewritten while idle (one a clock, in turn)
+                tw <= !tw;
+                dt_addr <= tw ? 10'(2 * TAPE_IDX + 1) : 10'(2 * JLP_IDX + 1);
+                dt_data <= tw ? (tp_s[2] ? 32'd16384 : 32'd0) : 32'(js_b) * 32'd1536;
                 dt_wren <= 1'b1;
                 if (allcomplete && !ac_d) begin
                     reached <= 1'b0;

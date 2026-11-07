@@ -64,6 +64,7 @@ SLOTS = [
     ("ECS ROM", 0x104, "ecs.bin", 24576, False),
     ("Intellivoice", 0x105, "ivoice.bin", 2048, False),
     ("JLP flash", 0x106, None, None, False),
+    ("ECS tape", 0x107, None, None, False),
 ]
 
 # Analogue's documented fields and limits, from the APF developer pages
@@ -372,9 +373,9 @@ def main():
     slots = js[f"Cores/{cname}/data.json"][0]["data"]["data_slots"]
     check([s["name"] for s in slots] == [s[0] for s in SLOTS], f"slot names and order {[s['name'] for s in slots]}")
     ids = [int(s["id"], 16) for s in slots]
-    check(ids == [s[1] for s in SLOTS], "slot ids 0x100-0x106 (DESIGN.md 5.6)")
+    check(ids == [s[1] for s in SLOTS], "slot ids 0x100-0x107 (DESIGN.md 5.6; 0x107 the ECS tape, 1.0.5)")
     m = dict(re.findall(r"localparam \[15:0\] (SLOT_\w+)\s*=\s*16'h([0-9A-Fa-f]+);", core_top))
-    want = dict(zip(("SLOT_CART", "SLOT_CFG", "SLOT_EXEC", "SLOT_GROM", "SLOT_ECS", "SLOT_IVOICE", "SLOT_JLP"), ids))
+    want = dict(zip(("SLOT_CART", "SLOT_CFG", "SLOT_EXEC", "SLOT_GROM", "SLOT_ECS", "SLOT_IVOICE", "SLOT_JLP", "SLOT_TAPE"), ids))
     check({k: int(v, 16) for k, v in m.items()} == want, "core_top.v SLOT_* = data.json ids")
     sizes = re.search(r"SIZE \[6\] = '\{([^}]*)\}", stub)
     stub_sizes = [int(x.split("'d")[1]) for x in sizes.group(1).split(",")] if sizes else []
@@ -407,9 +408,18 @@ def main():
           "JLP flash: nonvolatile, one file per game (0x84)")
     check(int(jlp["address"], 16) == 0x20000000, "JLP flash at 0x20000000 (core_top's bridge map, intv_jlp_nv)")
     dt = re.findall(r"\.JLP_IDX\s*\(\s*(\d+)\s*\)", core_top)
-    dw = re.findall(r"dt_addr <= 10'\(2 \* JLP_IDX \+ 1\);\s*\n\s*dt_data <= 32'\(js_b\) \* 32'd(\d+);", dtab)
+    dw = re.findall(r"dt_addr <= tw \? 10'\(2 \* TAPE_IDX \+ 1\) : 10'\(2 \* JLP_IDX \+ 1\);\s*\n\s*dt_data <= tw \? \(tp_s\[2\] \? 32'd16384 : 32'd0\) : 32'\(js_b\) \* 32'd(\d+);", dtab)
     check(dt == ["6"] and dw == ["1536"],
           f"core_top reports JLP flash (slot index 6) as the cartridge's sectors x 1,536 bytes (apf_datatable, step 11): {dt} {dw}")
+    tape = slots[7]
+    check(tape.get("nonvolatile") is True and int(tape["parameters"], 16) == 0x84 and "filename" not in tape
+          and tape["extensions"] == ["ecs"] and int(tape["size_maximum"], 16) == 0x4000,
+          "ECS tape: nonvolatile, one .ecs file per game (0x84), 16 KiB")
+    check(int(tape["address"], 16) == 0x30000000 and "ba[31:24] == 8'h30 && ba[23:14] == 10'd0" in open(os.path.join(rtl, "intv_tape_nv.sv")).read()
+          and re.search(r"32'h30xxxxxx:\s*begin\s*bridge_rd_data\s*<=\s*tape_bridge_rd_data;", core_top) is not None,
+          "ECS tape at 0x30000000 (core_top's bridge map, intv_tape_nv: 4,096 words)")
+    check("parameter int          TAPE_IDX = 7," in dtab,
+          "apf_datatable reports the ECS tape (slot index 7) as 16,384 bytes while the game has a tape, else 0")
     ss = re.search(r"localparam \[31:0\] SS_ADDR = 32'h([0-9A-Fa-f]+);", core_top)
     ss = int(ss.group(1), 16) if ss else None
     check(ss == 0x50000000 and all(int(s["address"], 16) >> 24 != ss >> 24 for s in slots),

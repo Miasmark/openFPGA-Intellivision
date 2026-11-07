@@ -83,6 +83,9 @@ module intv_core #(
     output logic      [31:0] ss_bridge_rd_data,
     output logic      [31:0] jlp_bridge_rd_data,   // the JLP flash slot (0x20000000; step 11)
     output logic      [4:0]  jlp_sectors,          // its size in 1.5 KiB sectors (0: no flash)
+    output logic      [31:0] tape_bridge_rd_data,  // the ECS tape slot (0x30000000; 1.0.5)
+    input  wire logic        tape_erase,           // clk_sys pulse: blank the tape (the menu)
+    input  wire logic        tape_trial,           // clk_sys pulse: the two-slot trial's stamp
     input  wire logic        savestate_start,
     output logic             savestate_start_ack,
     output logic             savestate_start_busy,
@@ -168,6 +171,12 @@ module intv_core #(
     end
     wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01 && !jlp_nv_seen;
     assign jlp_sectors = jlp_sect;
+
+    // the ECS tape (1.0.5): its store, its nonvolatile slot (0x107) and engine
+    intv_tape tape (
+        .clk(clk), .len_valid(len_valid), .erase(tape_erase), .trial(tape_trial),
+        .clk_74a(clk_74a), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr), .bridge_addr(bridge_addr),
+        .bridge_wr_data(bridge_wr_data), .bridge_rd_data(tape_bridge_rd_data));
 
     intv_jlp_nv jlpnv (
         .clk_74a(clk_74a), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr), .bridge_addr(bridge_addr),

@@ -94,7 +94,9 @@ button is which side action. Without a profile, Auto is Layer.
   get no tape file.
 - Every save is kept, newest first, up to 16 KiB: saving again under a program's name (ECS BASIC's
   `CSAV NAME`) replaces the older copy, and when the tape is full the oldest saves go. `CLOD NAME`
-  finds a program by its name; `CLOD` alone loads the newest.
+  finds a program by its name; `CLOD` alone loads the newest. A game's save made of several parts
+  (Game Factory) keeps its parts together and in order. Games that do not name their saves load
+  the newest one.
 - At ECS BASIC's SET and GO prompts press a hand-controller button (A, say; the ECS ROM waits for
   the hand controller there, not the keyboard: close the on-screen keyboard first). The tape rewinds
   by itself, and loads at about twice a real tape's speed.

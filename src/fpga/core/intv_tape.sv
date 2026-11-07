@@ -13,12 +13,17 @@
 //   CLEAR   all zeros (a load without a tape file, the menu's Erase ECS tape)
 //   END     find the tape's end (whole blocks from 0) into tlen, zero the rest (after a load with
 //           a tape file, a save, a stopped save)
-//   INSERT  a save's length is known: the tape moves up by the block's length (from the top
-//           down, what passes the end is lost), then its sync, $00 and length are written at 0
-//   COMMIT  record has stopped with every byte in: an older block with the same name (the first
-//           4 data bytes) is removed (the tape above it moves down, the top is zeroed); END
-//   ABORT   record stopped short (or a reset or a state load during a save): the tape moves back
-//           down by the block's length, the top is zeroed; END
+//   FLOOR   record starts: where the save goes in (rins): the last block start at or before the
+//           head (0 after a rewind; right after the previous block when a game writes one save
+//           as several blocks back to back, as Game Factory does)
+//   INSERT  a save's length is known: the tape from rins moves up by the block's length (from
+//           the top down, what passes the end is lost), then its sync, $00 and length are written
+//           at rins
+//   COMMIT  record has stopped with every byte in: the head goes after the new block; if its
+//           first 4 data bytes are an ECS BASIC name, another block with that name is removed
+//           (the tape above it moves down, the top is zeroed); END
+//   ABORT   record stopped short (or a reset or a state load during a save): the tape from rins
+//           moves back down by the block's length, the top is zeroed; END
 // A move is 3 clocks a byte (at most 16,384 bytes: 1.2 ms), so the engine is done long before
 // the ECS ROM's next tape access (one a frame at most; the save's data bytes queue behind an
 // INSERT in pend). The rewind: the head goes to 0 at a machine reset and when the motor starts
@@ -93,6 +98,7 @@ module intv_tape #(
     logic [15:0] rn = 16'd0, rgot = 16'd0;
     logic [14:0] rlen = 15'd0;                  // the block's length (<= 16,384)
     logic [31:0] rname = 32'd0;                 // the first 4 data bytes, byte 0 in 31:24
+    logic [14:0] rins = 15'd0;                  // where the save goes in
 
     wire logic motor   = mode[4];
     wire logic playing = mode[4] && !mode[5];
@@ -116,7 +122,7 @@ module intv_tape #(
         E_IDLE, E_PF1, E_PF2,
         E_MV_RD, E_MV_W1, E_MV_W2,              // a move
         E_ZERO,                                 // zeros from zp to the top
-        E_HDR,                                  // INSERT: the header at 0
+        E_HDR,                                  // INSERT: the header at rins
         E_DATA,                                 // a queued data byte
         E_W_START, E_W_RD, E_W_K1, E_W_K2, E_W_L1, E_W_L2, E_W_H0, E_W_H1, E_W_H2,
         E_W_N0, E_W_N1, E_W_N2,                 // a walk: blocks from wo; the name compare
@@ -133,7 +139,8 @@ module intv_tape #(
     logic [14:0] wo = 15'd0, wk = 15'd0;        // walk: the block's offset, its sync count
     logic [16:0] wbl = 17'd0;                   // its length
     logic [15:0] wn = 16'd0;
-    logic        wsearch = 1'b0;                // a COMMIT's name search (else END)
+    typedef enum logic [1:0] {W_END, W_SEARCH, W_FLOOR} wm_t;
+    wm_t         wm = W_END;                    // the walk's job: END, a COMMIT's name search, FLOOR
     logic [1:0]  wj = 2'd0;
     logic [14:0] hj = 15'd0;                    // the header's byte
     logic [13:0] pf_a = 14'd0;
@@ -141,11 +148,20 @@ module intv_tape #(
     logic [7:0]  pv = 8'd0;
     logic [15:0] pi = 16'd0;                    // its index in the data
     // requests (taken by E_IDLE)
-    logic        q_clr = 1'b0, q_walk = 1'b0, q_ins = 1'b0, q_com = 1'b0, q_abt = 1'b0;
+    logic        q_clr = 1'b0, q_walk = 1'b0, q_ins = 1'b0, q_com = 1'b0, q_abt = 1'b0, q_flr = 1'b0;
     assign busy = st != E_IDLE && st != E_PF1 && st != E_PF2;
 
     function automatic logic [15:0] neg16(input logic [7:0] lo, input logic [7:0] hi);
         return 16'(-{hi, lo});
+    endfunction
+    // an ECS BASIC name (ecs_tape.basic_name): the first character a letter or a digit, all four
+    // $20-$5A; a game's data (Game Factory's 00 00 00 00, `;`;) never is one
+    function automatic logic basic_name(input logic [31:0] nm);
+        logic ok;
+        ok = (nm[31:24] >= 8'h41 && nm[31:24] <= 8'h5A) || (nm[31:24] >= 8'h30 && nm[31:24] <= 8'h39);
+        for (int j = 0; j < 4; j++)
+            ok = ok && nm[8 * j +: 8] >= 8'h20 && nm[8 * j +: 8] <= 8'h5A;
+        return ok;
     endfunction
 
     // the walk's block end: wo + wk + 3 + wn (17 bits: may pass the tape)
@@ -191,8 +207,8 @@ module intv_tape #(
                     R_HI:   begin
                         rhi <= wdata[7:0];
                         rn  <= neg16(rlo, wdata[7:0]);
-                        if (17'(rk) + 17'd3 + 17'(neg16(rlo, wdata[7:0])) > 17'(TSIZE))
-                            rph <= R_SKIP;              // too long for the tape
+                        if (17'(rins) + 17'(rk) + 17'd3 + 17'(neg16(rlo, wdata[7:0])) > 17'(TSIZE))
+                            rph <= R_SKIP;              // does not fit from rins: not recorded
                         else begin
                             rlen  <= 15'(17'(rk) + 17'd3 + 17'(neg16(rlo, wdata[7:0])));
                             q_ins <= 1'b1;
@@ -225,6 +241,7 @@ module intv_tape #(
                 end
                 if (wdata[4] && wdata[5] && !recording) begin     // record starts
                     rph <= R_SYNC; rk <= 15'd0; rgot <= 16'd0; rname <= 32'd0;
+                    q_flr <= 1'b1;
                 end
             end
             if (clr) begin head <= 15'd0; hb_ok <= 1'b0; end       // the tape blanked: rewound
@@ -241,29 +258,32 @@ module intv_tape #(
                     st <= E_ZERO;
                 end else if (q_walk) begin
                     q_walk <= 1'b0;
-                    wo <= 15'd0; wsearch <= 1'b0; st <= E_W_START;
-                end else if (q_abt) begin
-                    q_abt <= 1'b0; pend <= 1'b0;
-                    // down by rlen: t[i] = t[i + rlen], then zeros from the top's rlen
-                    ms <= 14'(rlen); md <= 14'd0; mc <= TSIZE - rlen; mup <= 1'b0;
-                    mret <= J_ABORTZ;
-                    st <= TSIZE == rlen ? E_ZERO : E_MV_RD;
-                    zp <= TSIZE - rlen; zret <= J_END;
+                    wo <= 15'd0; wm <= W_END; st <= E_W_START;
+                end else if (q_flr) begin
+                    q_flr <= 1'b0;
+                    wo <= 15'd0; wm <= W_FLOOR; st <= E_W_START;
                 end else if (q_ins) begin
                     q_ins <= 1'b0;
-                    // up by rlen, from the top down: t[i + rlen] = t[i]
-                    ms <= 14'(TSIZE - rlen - 15'd1); md <= 14'h3FFF; mc <= TSIZE - rlen; mup <= 1'b1;
+                    // up by rlen from rins, from the top down: t[i + rlen] = t[i]
+                    ms <= 14'(TSIZE - rlen - 15'd1); md <= 14'h3FFF; mc <= TSIZE - rlen - rins; mup <= 1'b1;
                     mret <= J_HDR; hj <= 15'd0;
-                    st <= TSIZE == rlen ? E_HDR : E_MV_RD;
+                    st <= TSIZE == rins + rlen ? E_HDR : E_MV_RD;
+                end else if (pend) begin                // a data byte before an end of the save
+                    st <= E_DATA;
+                end else if (q_abt) begin
+                    q_abt <= 1'b0; pend <= 1'b0;
+                    // down by rlen from rins: t[i] = t[i + rlen], then zeros from the top's rlen
+                    ms <= 14'(rins + rlen); md <= 14'(rins); mc <= TSIZE - rins - rlen; mup <= 1'b0;
+                    mret <= J_ABORTZ;
+                    st <= TSIZE == rins + rlen ? E_ZERO : E_MV_RD;
+                    zp <= TSIZE - rlen; zret <= J_END;
                 end else if (q_com) begin
                     q_com <= 1'b0;
-                    // the name search from the block after the new one (a name: 4 data bytes),
-                    // else straight to END
-                    wo <= rn >= 16'd4 ? rlen : 15'd0;
-                    wsearch <= rn >= 16'd4;
+                    head <= rins + rlen; hb_ok <= 1'b0;     // the head after the new block
+                    // a BASIC name: the search over every other block, else straight to END
+                    wo <= 15'd0;
+                    wm <= rn >= 16'd4 && basic_name(rname) ? W_SEARCH : W_END;
                     st <= E_W_START;
-                end else if (pend) begin
-                    st <= E_DATA;
                 end else if (!hb_ok && !head[14]) begin
                     a_addr <= head[13:0]; pf_a <= head[13:0];
                     st <= E_PF1;
@@ -276,7 +296,7 @@ module intv_tape #(
             end
             E_DATA: begin
                 pend <= 1'b0;
-                a_addr <= 14'(17'(rk) + 17'd3 + 17'(pi)); a_d <= pv; a_we <= 1'b1;
+                a_addr <= 14'(17'(rins) + 17'(rk) + 17'd3 + 17'(pi)); a_d <= pv; a_we <= 1'b1;
                 st <= E_IDLE;
             end
 
@@ -302,14 +322,14 @@ module intv_tape #(
             E_ZERO: begin
                 a_addr <= zp[13:0]; a_d <= 8'd0; a_we <= !zp[14];
                 if (zp[14] || zp == TSIZE - 15'd1) begin
-                    if (zret == J_END) begin wo <= 15'd0; wsearch <= 1'b0; st <= E_W_START; end
+                    if (zret == J_END) begin wo <= 15'd0; wm <= W_END; st <= E_W_START; end
                     else st <= E_IDLE;
                 end else zp <= zp + 15'd1;
             end
 
             // ---------------- INSERT's header: sync x rk, $00, lo, hi
             E_HDR: begin
-                a_addr <= 14'(hj); a_we <= 1'b1;
+                a_addr <= 14'(rins + hj); a_we <= 1'b1;
                 a_d <= hj < rk ? 8'hAA : hj == rk ? 8'h00 : hj == rk + 15'd1 ? rlo : rhi;
                 if (hj == rk + 15'd2) st <= E_IDLE;
                 else hj <= hj + 15'd1;
@@ -338,7 +358,8 @@ module intv_tape #(
                 // the block's end; wn is its data length
                 wbl <= 17'(w_end - 18'(wo));
                 if (w_end > 18'(TSIZE)) st <= E_W_H0;                   // cut at the top: the end
-                else if (wsearch && wn >= 16'd4) begin
+                else if (wm == W_FLOOR && w_end > 18'(head)) st <= E_W_H0;  // the block past the head
+                else if (wm == W_SEARCH && wn >= 16'd4 && wo != rins) begin
                     wj <= 2'd0; a_addr <= 14'(wo + wk + 15'd3); st <= E_W_N1;
                 end else begin wo <= 15'(w_end); st <= E_W_START; end
             end
@@ -350,13 +371,18 @@ module intv_tape #(
             end
             // the walk ends at wo: a search found nothing (END next), or END is done
             E_W_H0: begin
-                if (wsearch) begin wo <= 15'd0; wsearch <= 1'b0; st <= E_W_START; end
+                if (wm == W_SEARCH) begin wo <= 15'd0; wm <= W_END; st <= E_W_START; end
+                else if (wm == W_FLOOR) begin rins <= wo; st <= E_IDLE; end
                 else begin tlen <= wo; zp <= wo; zret <= J_IDLE; st <= E_ZERO; end
             end
             // remove the block at wo (wbl bytes): down by wbl, zeros at the top, then END
             E_DEL: begin
                 ms <= 14'(17'(wo) + wbl); md <= 14'(wo); mc <= 15'(17'(TSIZE) - 17'(wo) - wbl); mup <= 1'b0;
                 mret <= J_DELZ; zp <= 15'(17'(TSIZE) - wbl); zret <= J_END;
+                if (wo < rins) begin                    // the old copy was before the new block
+                    rins <= 15'(17'(rins) - wbl);
+                    head <= 15'(17'(rins) - wbl + 17'(rlen));
+                end
                 st <= 17'(wo) + wbl == 17'(TSIZE) ? E_ZERO : E_MV_RD;
             end
             default: st <= E_IDLE;

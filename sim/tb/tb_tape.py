@@ -101,7 +101,7 @@ class Script:
 
     def save_raw(self, seq):
         """A save of exactly these bytes (record on, the bytes, motor off)."""
-        self.w(0xE2, 0x39, 200)
+        self.w(0xE2, 0x39, IDLE + 10)
         for j, b in enumerate(seq):
             self.r(0xE0, 3)
             self.w(0xE1, b, 3)
@@ -115,10 +115,13 @@ class Script:
         self.c += ROOM
 
     # -- as the ECS ROM does it
-    def save(self, name, data, sync=9, stop_after=None, quick=False, hold_motor=False):
+    def save(self, name, data, sync=9, stop_after=None, quick=False, hold_motor=False, session=False):
+        """A save as the ECS ROM writes it. session: right after the previous save (the motor off
+        for a moment, no rewind: Game Factory's second block); else after more than 1 s, so the
+        record start rewinds (ECS BASIC's prompts)."""
         body = (name.ljust(4).encode() if name else b'') + bytes(data)
         n = len(body)
-        self.w(0xE2, 0x39, 200)
+        self.w(0xE2, 0x39, 20 if session else IDLE + 10)
         seq = [0xAA] * sync + [0x00, (-n) & 0xFF, ((-n) >> 8) & 0xFF] + list(body)
         for j, b in enumerate(seq):
             if stop_after is not None and j == stop_after:
@@ -196,6 +199,37 @@ def spec_scripts():
     s.dump()
     # junk inside the sync: the count starts again (k = 2 here)
     s.save_raw([0xAA, 0xAA, 0x55, 0xAA, 0xAA, 0x00, 0xFC, 0xFF] + list(b'JUNK'))
+    s.dump()
+    out.append(s)
+
+    s = Script('session')
+    # Game Factory: one save is two blocks back to back (ECS RAM, then cartridge RAM), no name
+    for v in (1, 2):
+        s.save(None, bytes([0, 0, 0, 0, v]) * 60)
+        s.save(None, b'`;`;' + bytes([v]) * 40, session=True)
+    s.dump()                                      # newest pair first, each pair in its order
+    s.gap(IDLE + 10)
+    s.read_block()
+    s.read_block()                                # the newest pair, in order
+    # a BASIC name saved after the old copy: the old one (before the head) goes, the head with it
+    s.save('AAA', b'old')
+    s.save('BBB', b'b')                           # tape: BBB, AAA(old), the pairs
+    s.gap(IDLE + 10)
+    s.read_block()
+    s.read_block()                                # the head after AAA(old)
+    s.save('AAA', b'new one', session=True)       # in at the head: after AAA(old)...
+    s.dump()                                      # ...which is removed; the head moves down with it
+    s.state()
+    s.save('CCC', b'right after', session=True)   # goes in after the new AAA
+    s.dump()
+    # the head inside a block: a save goes in at that block's start
+    s.gap(IDLE + 10)
+    s.w(0xE2, 0x1D, 10)
+    for _ in range(5):
+        s.r(0xE0, 3)
+        s.r(0xE1, 2)
+    s.w(0xE2, 0x00, 10)
+    s.save(None, b'\x01\x02\x03\x04 inside', session=True)
     s.dump()
     out.append(s)
 
@@ -281,7 +315,7 @@ def random_scripts(seed, n):
                 name = rnd.choice([None, 'A', 'B', 'CC', 'DDDD'])
                 stop = rnd.choice([None] * 4 + [rnd.randint(0, 9 + 3 + ln + 4)])
                 s.save(name, bytes(rnd.randrange(256) for _ in range(ln)), sync=rnd.choice([9, 9, 1, 3]),
-                       stop_after=stop)
+                       stop_after=stop, session=rnd.random() < 0.4)
             elif x < 0.7:
                 s.gap(rnd.choice([10, IDLE + 50]))
                 s.read_block()
@@ -368,8 +402,8 @@ PLANTS = [
     ('name_off_by_one', 'intv_tape.sv', "a_addr <= 14'(wo + wk + 15'd3); st <= E_W_N1;",
      "a_addr <= 14'(wo + wk + 15'd2); st <= E_W_N1;"),
     ('no_replace', 'intv_tape.sv', "else if (wj == 2'd3) st <= E_DEL;", "else if (wj == 2'd3) begin wo <= 15'(w_end); st <= E_W_START; end"),
-    ('oldest_first', 'intv_tape.sv', "ms <= 14'(TSIZE - rlen - 15'd1); md <= 14'h3FFF; mc <= TSIZE - rlen; mup <= 1'b1;",
-     "ms <= 14'(TSIZE - rlen - 15'd1); md <= 14'h3FFF; mc <= 15'd0; mup <= 1'b1;"),
+    ('no_move_up', 'intv_tape.sv', "mc <= TSIZE - rlen - rins; mup <= 1'b1;\n                    mret <= J_HDR; hj <= 15'd0;\n                    st <= TSIZE == rins + rlen ? E_HDR : E_MV_RD;",
+     "mc <= TSIZE - rlen - rins; mup <= 1'b1;\n                    mret <= J_HDR; hj <= 15'd0;\n                    st <= E_HDR;"),
     ('cut_block_kept', 'intv_tape.sv', "if (w_end > 18'(TSIZE)) st <= E_W_H0;", "if (1'b0) st <= E_W_H0;"),
     ('no_short_abort', 'intv_tape.sv', "                        else q_abt <= 1'b1;\n", "                        else q_com <= 1'b1;\n"),
     ('no_tail_zero', 'intv_tape.sv', "else begin tlen <= wo; zp <= wo; zret <= J_IDLE; st <= E_ZERO; end",
@@ -377,8 +411,7 @@ PLANTS = [
     ('clr_ignored', 'intv_tape.sv', "        if (clr)  q_clr  <= 1'b1;", "        if (1'b0) q_clr  <= 1'b1;"),
     ('walk_ignored', 'intv_tape.sv', "        if (walk) q_walk <= 1'b1;", "        if (1'b0) q_walk <= 1'b1;"),
     ('too_long_recorded', 'intv_tape.sv', "> 17'(TSIZE))\n                            rph <= R_SKIP;", "> 17'(TSIZE) + 17'd70000)\n                            rph <= R_SKIP;"),
-    ('pend_lost', 'intv_tape.sv', "                end else if (pend) begin\n                    st <= E_DATA;",
-     "                end else if (pend) begin\n                    pend <= 1'b0;"),
+    ('pend_lost', 'intv_tape.sv', "                    st <= E_DATA;\n", "                    pend <= 1'b0;\n"),
     ('ss_head_lost', 'intv_tape.sv', "            head <= ss_wdata[14:0];\n", "            head <= 15'd0;\n"),
     ('ss_offc_lost', 'intv_tape.sv', "            offc <= ss_wdata[19:0];", "            offc <= 20'd0;"),
     ('ss_save_kept', 'intv_tape.sv', "            if (rph == R_DATA) q_abt <= 1'b1;   // a state load during a save: taken out\n",
@@ -387,6 +420,15 @@ PLANTS = [
      "\n"),
     ('offc_off_by_one', 'intv_tape.sv', "if (!wdata[4] && motor) offc <= 20'd1;", "if (!wdata[4] && motor) offc <= 20'd0;"),
     ('sync_count_reset', 'intv_tape.sv', "                            else rk <= 15'd0;\n", "\n"),
+    ('insert_at_front', 'intv_tape.sv', "else if (wm == W_FLOOR) begin rins <= wo; st <= E_IDLE; end",
+     "else if (wm == W_FLOOR) begin rins <= 15'd0; st <= E_IDLE; end"),
+    ('floor_on_boundary', 'intv_tape.sv', "else if (wm == W_FLOOR && w_end > 18'(head)) st <= E_W_H0;",
+     "else if (wm == W_FLOOR && w_end >= 18'(head)) st <= E_W_H0;"),
+    ('any_name_replaces', 'intv_tape.sv', "wm <= rn >= 16'd4 && basic_name(rname) ? W_SEARCH : W_END;",
+     "wm <= rn >= 16'd4 ? W_SEARCH : W_END;"),
+    ('head_not_after_save', 'intv_tape.sv', "head <= rins + rlen; hb_ok <= 1'b0;     // the head after the new block",
+     "hb_ok <= 1'b0;"),
+    ('del_before_head_kept', 'intv_tape.sv', "                    head <= 15'(17'(rins) - wbl + 17'(rlen));\n", "\n"),
     ('stale_read_ahead', 'intv_tape.sv', "&& !a_we && !nv_we && !head_chg) begin hb <= a_q;", "&& !a_we && !nv_we) begin hb <= a_q;"),
 ]
 

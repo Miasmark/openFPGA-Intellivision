@@ -29,13 +29,17 @@ Fast: a byte is ready whenever the ROM looks (it takes one a frame at most, abou
   - rewind: the head goes to 0 at a machine reset (a game load, the menu's Reset) and when the
     motor starts after REWIND_IDLE CPU cycles (60 frames, 1 s) or more with it off. The ROM's name
     search (CLOD) restarts the motor within a few frames between blocks, so it reads on.
-  - a save: the sync is counted until $00, then the length; the block (k + 3 + N bytes) goes to
-    the front: everything on the tape moves up by its length (what passes the tape's end is lost)
-    and its bytes are written at 0 on. It is committed when the motor stops (or record goes off)
-    with all N data bytes in: an older block of the same name (its first 4 data bytes, both N >= 4)
-    is removed, the tape's end is found again (a block cut at the end is dropped) and the rest is
-    zeroed. A save that stops short is taken out again (the tape moves back down). A block over
-    16,384 bytes is not recorded.
+  - a save goes in at the head (the last block start at or before it): after a rewind that is the
+    front, so the newest save comes first; right after another save (the motor off for less than
+    1 s, no rewind) it is the end of that save, so a game that writes one save as several blocks
+    (Game Factory: its ECS RAM, then its cartridge RAM) keeps them in their order. The sync is
+    counted until $00, then the length; the block (k + 3 + N bytes) goes in: the tape from there
+    moves up by its length (what passes the tape's end is lost) and its bytes are written there.
+    It is committed when the motor stops (or record goes off) with all N data bytes in: if its
+    first 4 data bytes are an ECS BASIC name (basic_name), another block with that name is
+    removed; the head then sits after the new block; the tape's end is found again (a block cut at
+    the end is dropped) and the rest is zeroed. A save that stops short is taken out again (the
+    tape moves back down). A block that does not fit from where it goes in is not recorded.
   - the tape's end (tape_len): the first offset that does not start a whole block (sync, $00,
     length, all within the tape), found at a load with a tape file, after a save and an erase.
   - a load without a tape file, and the menu's "Erase ECS tape": all zeros.
@@ -98,6 +102,24 @@ def tape_end(t, limit=None):
 
 def name_of(t, o, k, n):
     return bytes(t[o + k + 3:o + k + 3 + NAME_LEN]) if n >= NAME_LEN else None
+
+
+def basic_name(nm):
+    """An ECS BASIC program's name: 4 characters, space-padded, upper case (first a letter or a
+    digit, the rest $20-$5A). Only such a block replaces an older one of the same name: a game's
+    data (Game Factory's 00 00 00 00, `;`;) is never a name."""
+    return (nm is not None and (0x41 <= nm[0] <= 0x5A or 0x30 <= nm[0] <= 0x39)
+            and all(0x20 <= c <= 0x5A for c in nm))
+
+
+def floor_block(t, head):
+    """The last block start at or before head (0 if none): where a save goes in."""
+    o = 0
+    while True:
+        b = parse_block(t, o, SIZE)
+        if b is None or o + b[2] > head:
+            return o
+        o += b[2]
 
 
 class Tape:
@@ -173,7 +195,7 @@ class Tape:
         if was_rec and not self.recording:
             self._finish()
         if self.recording and not was_rec:
-            self.rec = dict(ph="sync", k=0, n=0, got=0, length=0, lo=0)
+            self.rec = dict(ph="sync", k=0, n=0, got=0, length=0, lo=0, ins=floor_block(self.t, self.head))
 
     # -- saving ------------------------------------------------------------
     def _rec_byte(self, b):
@@ -190,43 +212,47 @@ class Tape:
         elif r["ph"] == "hi":
             r["n"] = (-(r["lo"] | b << 8)) & 0xFFFF
             r["length"] = r["k"] + 3 + r["n"]
-            if r["length"] > SIZE:
-                r["ph"] = "skip"                    # too long for the tape: not recorded
+            i = r["ins"]
+            if i + r["length"] > SIZE:
+                r["ph"] = "skip"                    # does not fit from there: not recorded
                 return
-            # the block goes to the front: the tape moves up by its length
+            # the block goes in at i: the tape from there moves up by its length
             ln = r["length"]
-            self.t[ln:] = self.t[:SIZE - ln]
-            self.t[:r["k"]] = b"\xAA" * r["k"]
-            self.t[r["k"]:r["k"] + 3] = bytes((0, r["lo"], b))
+            self.t[i + ln:] = self.t[i:SIZE - ln]
+            self.t[i:i + r["k"]] = b"\xAA" * r["k"]
+            self.t[i + r["k"]:i + r["k"] + 3] = bytes((0, r["lo"], b))
             r["ph"] = "data"
         elif r["ph"] == "data":
             if r["got"] < r["n"]:
-                self.t[r["k"] + 3 + r["got"]] = b
+                self.t[r["ins"] + r["k"] + 3 + r["got"]] = b
                 r["got"] += 1
 
     def _finish(self):
         r, self.rec = self.rec, None
         if r is None or r["ph"] in ("sync", "lo", "hi", "skip"):
             return
-        ln = r["length"]
+        ln, i = r["length"], r["ins"]
         if r["got"] < r["n"]:
             # stopped short: taken out again (the tape moves back down; what had passed the
             # tape's end is gone)
-            self.t[:SIZE - ln] = self.t[ln:]
+            self.t[i:SIZE - ln] = self.t[i + ln:]
             self.t[SIZE - ln:] = bytes(ln)
         else:
-            new = name_of(self.t, 0, r["k"], r["n"])
-            o = ln
-            while new is not None:
+            new = name_of(self.t, i, r["k"], r["n"])
+            o = 0
+            while basic_name(new):
                 b = parse_block(self.t, o, SIZE)
                 if b is None:
                     break
                 k, n, bl = b
-                if name_of(self.t, o, k, n) == new:
+                if o != i and name_of(self.t, o, k, n) == new:
                     self.t[o:SIZE - bl] = self.t[o + bl:]
                     self.t[SIZE - bl:] = bytes(bl)
+                    if o < i:
+                        i -= bl
                     break
                 o += bl
+            self.head = i + ln
         self.tape_len = tape_end(self.t)
         self.t[self.tape_len:] = bytes(SIZE - self.tape_len)
 
@@ -377,31 +403,62 @@ def selftest():
 
     tp = Tape()
     cyc = 10 ** 7
+    gap = REWIND_IDLE + 100                 # separate saves: the SET prompt's motor start rewinds
     chk(tp.read(0xE0, cyc) == 2, "a blank tape: status $0002 (ready, no byte)")
-    _save(tp, cyc, b"first program", "AAA")
-    _save(tp, cyc + 10, b"second", "BBB")
+
+    def save_at(c, data, name=None, **kw):
+        tp.write(0xE2, 0x1D, c)             # SET: the motor on (rewinds after 1 s off)
+        tp.write(0xE2, 0x00, c)
+        return _save(tp, c, data, name, **kw)
+    cyc += gap
+    save_at(cyc, b"first program", "AAA")
+    cyc += gap
+    save_at(cyc, b"second", "BBB")
     bl = blocks(tp.t)
     chk(len(bl) == 2 and name_of(tp.t, 0, bl[0][1], bl[0][2]) == b"BBB " and tp.tape_len == bl[1][0] + bl[1][3],
         "two saves: two blocks, newest first, the end after them")
-    _save(tp, cyc + 20, b"first, changed", "AAA")
+    cyc += gap
+    save_at(cyc, b"first, changed", "AAA")
     bl = blocks(tp.t)
     names = [name_of(tp.t, o, k, n) for o, k, n, _ in bl]
     chk(names == [b"AAA ", b"BBB "] and all(v == 0 for v in tp.t[tp.tape_len:]),
         "a save under an existing name replaces it and goes to the front; the rest is zeros")
-    cyc += REWIND_IDLE + 100
+    cyc += gap
     d = _load(tp, cyc)
     chk(d == b"AAA first, changed", "a load after 1 s: rewound, the newest block")
     d = _load(tp, cyc + 1000)
     chk(d == b"BBB second", "the next load within 1 s reads on: the next block")
     chk(_load(tp, cyc + 2000) is None, "past the last block: no byte (the ROM waits, as at a tape's end)")
     # a save that stops short is taken out
+    cyc += gap
     before = bytes(tp.t)
-    _save(tp, cyc + 3000, b"x" * 100, "CCC", stop_after=60)
+    save_at(cyc, b"x" * 100, "CCC", stop_after=60)
     chk(bytes(tp.t) == before, "a save stopped short: the tape as before")
+    # one save as two blocks back to back (Game Factory: ECS RAM, then cartridge RAM), twice
+    tg = Tape()
+    for v in (1, 2):
+        c = cyc + v * gap
+        tg.write(0xE2, 0x1D, c)
+        tg.write(0xE2, 0x00, c)
+        _save(tg, c, bytes([0, 0, 0, 0, v]) * 40)          # no name (zeros)
+        _save(tg, c + 50, b"`;`;" + bytes([v]) * 30)       # right after: no rewind
+    bl = blocks(tg.t)
+    firsts = [tg.t[o + k + 3 + 4] for o, k, n, _ in bl]
+    chk(len(bl) == 4 and firsts == [2, 2, 1, 1] and [n for _, _, n, _ in bl] == [200, 34, 200, 34],
+        "a save of two blocks back to back keeps their order, the newest save first; same data "
+        "bytes, no BASIC name: nothing replaced")
+    c = cyc + 4 * gap
+    chk(_load(tg, c) == bytes([0, 0, 0, 0, 2]) * 40 and _load(tg, c + 100) == b"`;`;" + bytes([2]) * 30,
+        "loading it: the two blocks in their order")
+    chk(basic_name(b"AAA ") and basic_name(b"R2D2") and not basic_name(b"\0\0\0\0")
+        and not basic_name(b"`;`;") and not basic_name(b"    "), "BASIC names")
     # a full tape drops the oldest
     tp2 = Tape()
     for i in range(6):
-        _save(tp2, cyc, bytes([i]) * 4000, "P%d" % i)
+        c = cyc + (i + 1) * gap
+        tp2.write(0xE2, 0x1D, c)
+        tp2.write(0xE2, 0x00, c)
+        _save(tp2, c, bytes([i]) * 4000, "P%d" % i)
     names = [name_of(tp2.t, o, k, n) for o, k, n, _ in blocks(tp2.t)]
     chk(names == [b"P5  ", b"P4  ", b"P3  ", b"P2  "] and tp2.tape_len == 4 * (12 + 4004),
         "a full tape: the oldest blocks are dropped, whole")

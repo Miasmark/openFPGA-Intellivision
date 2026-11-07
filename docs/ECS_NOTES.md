@@ -202,13 +202,21 @@ rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-
 - `$E0` reads `$0002`, plus bit 0 while playing with a byte under the head; `$E1` reads the byte
   (`$00xx`) and, playing, moves the head on: the ROM takes one a frame, about twice a real 300-baud
   tape. Bits 3-5 (errors) are never set.
-- A save is a block of the tape. When its length comes in, everything on the tape moves up by the
-  block's length (what passes the end is lost: the oldest blocks) and the block is written from
-  byte 0, so the newest is first. When the motor stops with every byte in, an older block with the
-  same name (the first 4 data bytes; both blocks with 4 or more) is removed, the tape's end is
-  found again (a block cut at the end is dropped) and the rest is zeroed. A save that stops short
-  (or is cut by a reset or a state load) is taken out again. A block over 16,384 bytes is not
-  recorded.
+- A save is a block of the tape, and goes in at the head: after a rewind that is the front, so the
+  newest save comes first; right after another save (the motor off for a moment, no rewind) it is
+  just after that block, so a game that writes one save as several blocks keeps them in their
+  order. Game Factory does (owner's 1.0.5 test, 2026-11-07: its game came back scrambled while
+  each block went to the front): its save is two engine calls back to back, ECS RAM `$4085-$47C8`
+  (1,859 bytes) then cartridge RAM `$8800-$8B0C` (780 bytes), and its load reads them in that
+  order. When the length comes in, the tape from there moves up by the block's length (what
+  passes the end is lost: the oldest blocks) and the block is written there. When the motor stops
+  with every byte in, the head goes after the new block, and if its first 4 data bytes are an ECS
+  BASIC name (a letter or digit, then `$20-$5A`) another block with that name is removed; a
+  game's data (Game Factory's `00 00 00 00`, `` `;`; ``) never replaces anything. The tape's end
+  is found again (a block cut at the end is dropped) and the rest is zeroed. A save that stops
+  short (or is cut by a reset or a state load) is taken out again. A block that does not fit from
+  where it goes in is not recorded. (The head inside a block: the save goes in at that block's
+  start.)
 - The head goes to 0 at a machine reset and when the motor starts after 1 s (60 frames) or more
   with it off: CLOD's SET / GO prompts rewind, its search from block to block does not.
 - The printer's output is still discarded.

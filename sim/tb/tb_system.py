@@ -487,6 +487,41 @@ def _typed(start, text):
     return ecsm.type_presses(start, text)[0]
 
 
+def _tape_basic():
+    """1.0.5, the ECS cassette: ECS BASIC saves two named programs (CSAV AAA, CSAV BBB: the tape
+    then holds BBB, AAA), loads AAA past BBB by name and runs it (1.00), then BBB (22.00). At the SET
+    and GO prompts the ECS ROM waits for the hand controller ($7E0D reads $01FE / $01FF): Enter.
+    -> (presses, frames)."""
+    sys.path.insert(0, os.path.join(ROOT, 'tools'))
+    import ecs as ecsm
+    out, t = ['300-306:Enter,420-426:1,500-506:Enter'], 800
+
+    def typ(text, after=30):
+        nonlocal t
+        p, end = ecsm.type_presses(t, text)
+        out.append(p)
+        t = end + after
+
+    def key(after=100):
+        nonlocal t
+        out.append('%d-%d:Enter' % (t, t + 6))
+        t += 6 + after
+    typ('10 PRIN 1\nCSAV AAA\n', 100)
+    key()
+    key(260)                                    # the save: 9 sync bytes 8 frames apart, then 34
+    typ('NEW\n10 PRIN 22\nCSAV BBB\n', 100)
+    key()
+    key(260)
+    typ('NEW\nCLOD AAA\n', 100)
+    key()
+    key(300)                                    # BBB read past, then AAA
+    typ('RUN\nCLOD BBB\n', 100)
+    key()
+    key(200)
+    typ('RUN\n', 100)
+    return ','.join(out), t
+
+
 ECS_PLAY = [
     ('ecsbasic', None, 1200, '300-306:Enter,420-426:1,500-506:Enter,' + _typed(800, '10 PRINT 2*3\nRUN\n'),
      dict(ovr='auto')),
@@ -513,6 +548,7 @@ ECS_PLAY = [
     # without commas (the press list is comma-separated: DATA 0,7,0,0 / READ D,N,M,O give D=0, N=7,
     # M=0, O=0) and RUN; MOB 0 then shows GRAM card 62 = the cartridge's $53F5 picture (the boat).
     # MAME's intvecs agrees instruction by instruction and on 4 snapshots (ecs_ref_compare, 2026-10-29).
+    ('ecstape', None, _tape_basic()[1], _tape_basic()[0], dict(ovr='auto')),
     ('grab', 'Advanced Dungeons & Dragons (USA, Europe).zip', 2056,
      '300-306:Enter,420-426:1,500-506:Enter,'
      + _typed(800, '140 D=0\n150 N=7\n160 M=0\n170 O=0\n180 CALL GRAB\n190 CO(0)=11\n200 XS(0)=1\n210 GOTO 210\nRUN\n'),

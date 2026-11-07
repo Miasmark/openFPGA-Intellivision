@@ -2014,7 +2014,8 @@ PLANTS = [
                                        ("            r1 <= r1 | to_rows(c1, k);\n", "            r1 <= r1;\n")],
      'ecstest', None),
     ('ecs_env2', 'intv_ecs.sv', [(".ENV2(1'b0)", ".ENV2(1'b1)")], 'ecstest', None),
-    ('ecs_uart_0', 'intv_ecs.sv', [("a[1:0] == 2'd0 ? 16'h0002 : 16'h0000", "16'h0000")], 'ecstest', None),
+    ('ecs_uart_0', 'intv_tape.sv', [("if (a[1:0] == 2'd0) q = {14'd0, 1'b1, dr};", "if (a[1:0] == 2'd0) q = 16'h0000;")],
+     'ecstest', None),
     ('ecs_ram_not_owned', 'intv_cart.sv', [("ba[15:11] == 5'b01000));", "1'b0));")], 'cart4000_on', None),
     # step 10: the Intellivoice: mapped while off (reads $0000 / $8000, not the pull-ups), the level's
     # x2 lost, the voice added to the mix as unsigned (its negative half wraps), the DAC sound's bits

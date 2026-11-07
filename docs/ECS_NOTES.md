@@ -218,16 +218,24 @@ rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-
   (300-baud FSK: 4,800 Hz 1, 2,400 Hz 0, 8 data bits LSB first, odd parity, 2 stop bits, for a real
   ECS and recorder), `join` (several `.ecs` files into one tape).
 
-## 6 Save state (blob version 3)
+## 6 Save state (blob version 3; the tape's module since version 6)
 
 Module `ecs` ($0E, 1 word: the three page latches, the port latches, the mode), `psg2` ($0F, 21
 words as `psg`), `ecsram` ($10-$11, 512 words, four cells a word); header word 13 the ECS ROM's
 CRC32 while the ECS is attached, flags bit 0 "ECS attached". A state saved with the ECS refuses to
-load with it off, or with another ECS ROM (docs/SAVESTATE.md).
+load with it off, or with another ECS ROM (docs/SAVESTATE.md). Since 1.0.5 (blob version 6) the
+module `tape` ($22, 2 words): the head and the mode, the motor-off count; not the tape.
 
 ## 7 Checks
 
 - `tools/ecs.py` selftest (ECS_SELFTEST): the matrix rule's cases, pages, modes, the 8917's select.
+- The cassette (1.0.5): `tools/ecs_tape.py` selftest (TAPE_SELFTEST: saves by name, newest first,
+  the rewind, a stopped save, a full tape, a block too long, a jzIntv file, the state, the .wav
+  round trip); `sim/tb/tb_tape.py` (RTL = model on 5 spec and 12 random UART scripts: every read,
+  state word and store dump; planted faults); `sim/tb/run_tb_tape_nv.sh` (the slot at the bridge:
+  a file with its tail zeroed, the clear, the erase); `sim/tb/tb_system.py --ecs-play` ecstape (ECS
+  BASIC CSAV AAA, CSAV BBB, CLOD AAA past BBB and RUN 1.00, CLOD BBB and RUN 22.00: RTL = model
+  frame by frame); tb_system's state dumps compare the tape's words.
 - `tools/refs/ecs_ref_compare.py`: the model (MAME mode: MAME's ECS) against MAME intvecs traces
   and snapshots (`tools/refs/mame_ecs_trace.sh`): ECS BASIC typing, Mind Strike to its board,
   WSMLB to the field and pitching (its `$EA50` and `$FA50`/`$FA51`), Melody Blaster on the

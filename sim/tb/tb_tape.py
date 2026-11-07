@@ -94,9 +94,19 @@ class Script:
         self.tp.clear()
         self.settle()
 
-    def reset(self):
-        self.ops.append('M')
+    def reset(self, delay=0):
+        self.ops.append('M %d' % delay)
         self.tp.reset()
+        self.settle()
+
+    def save_raw(self, seq):
+        """A save of exactly these bytes (record on, the bytes, motor off)."""
+        self.w(0xE2, 0x39, 200)
+        for j, b in enumerate(seq):
+            self.r(0xE0, 3)
+            self.w(0xE1, b, 3)
+            self.settle()
+        self.w(0xE2, 0x00, 20)
         self.settle()
 
     def dump(self):
@@ -184,6 +194,9 @@ def spec_scripts():
     s.dump()
     s.save('Q', b'pend', quick=True)              # a data byte while the tape moves up
     s.dump()
+    # junk inside the sync: the count starts again (k = 2 here)
+    s.save_raw([0xAA, 0xAA, 0x55, 0xAA, 0xAA, 0x00, 0xFC, 0xFF] + list(b'JUNK'))
+    s.dump()
     out.append(s)
 
     s = Script('full')
@@ -232,6 +245,26 @@ def spec_scripts():
     s.state()
     s.gap(500)
     s.state()                                     # the motor-off count
+    s.gap(IDLE + 100)
+    w3 = s.state()                                # off long enough to rewind...
+    s.w(0xE2, 0x1D, 10)                           # (playing moves the head on)
+    for _ in range(5):
+        s.r(0xE1, 2)
+    s.w(0xE2, 0x00, 10)
+    s.load_state(w3)                              # ...and back to that count
+    s.state()
+    s.w(0xE2, 0x1D, 10)                           # the start rewinds
+    s.r(0xE1, 2)
+    s.w(0xE2, 0x00, 10)
+    # a reset in the clock the read ahead finishes: the byte under the head is head 0's again
+    s.gap(IDLE + 10)
+    s.w(0xE2, 0x1D, 10)
+    for _ in range(11):                           # the head on a byte that is not head 0's ($AA)
+        s.r(0xE0, 3)
+        s.r(0xE1, 2)
+    s.reset(delay=2)
+    s.r(0xE1, 20)
+    s.r(0xE0, 3)
     out.append(s)
     return out
 

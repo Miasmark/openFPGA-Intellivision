@@ -6,7 +6,8 @@
 //   W c a v     at CPU cycle c, a CPU write of v to a                    (nothing logged)
 //   R c a       at CPU cycle c, a CPU read of a                          -> Q n value
 //   F n         the Pocket's file: bytes 0..n-1 of +file=HEX into the store's port B
-//   K / C / M   the media's walk pulse / clear pulse / a machine reset (one clock)
+//   K / C       the media's walk pulse / clear pulse (one clock)
+//   M d         a machine reset (one clock), d clocks after the operation before
 //   S c         the state words before CPU cycle c                      -> S w0 w1
 //   L c w0 w1   a state load before CPU cycle c (word 0, then word 1)
 //   Z           wait until the engine is idle
@@ -111,7 +112,11 @@ module tb_tape;
                 end
                 "K": begin walk = 1'b1; @(negedge clk); walk = 1'b0; end
                 "C": begin clr = 1'b1; @(negedge clk); clr = 1'b0; end
-                "M": begin mreset = 1'b1; @(negedge clk); mreset = 1'b0; end
+                "M": begin
+                    void'($fscanf(fd, "%d", cnt));
+                    repeat (cnt) @(negedge clk);
+                    mreset = 1'b1; @(negedge clk); mreset = 1'b0;
+                end
                 "S": begin
                     void'($fscanf(fd, "%d", g));
                     before_cycle(g);

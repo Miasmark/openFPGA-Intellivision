@@ -84,8 +84,7 @@ module intv_core #(
     output logic      [31:0] jlp_bridge_rd_data,   // the JLP flash slot (0x20000000; step 11)
     output logic      [4:0]  jlp_sectors,          // its size in 1.5 KiB sectors (0: no flash)
     output logic      [31:0] tape_bridge_rd_data,  // the ECS tape slot (0x30000000; 1.0.5)
-    input  wire logic        tape_erase,           // clk_sys pulse: blank the tape (the menu)
-    input  wire logic        tape_trial,           // clk_sys pulse: the two-slot trial's stamp
+    input  wire logic        tape_erase,           // clk_sys pulse: blank the tape (the menu's Erase ECS tape)
     input  wire logic        savestate_start,
     output logic             savestate_start_ack,
     output logic             savestate_start_busy,
@@ -172,11 +171,25 @@ module intv_core #(
     wire  logic  jlp_fl_clr = jlv_s[2:1] == 2'b01 && !jlp_nv_seen;
     assign jlp_sectors = jlp_sect;
 
-    // the ECS tape (1.0.5): its store, its nonvolatile slot (0x107) and engine
-    intv_tape tape (
-        .clk(clk), .len_valid(len_valid), .erase(tape_erase), .trial(tape_trial),
+    // the ECS tape (1.0.5): its nonvolatile slot (0x107, intv_tape_nv) on the store's port B in
+    // intv_machine's intv_tape. As the JLP flash: at the load's len_valid rise, a load that wrote
+    // a tape file has its end found (walk), one without is blanked (clr); the menu's Erase blanks.
+    logic [13:0] tape_nv_addr;
+    logic        tape_nv_we;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        tape_busy;                         // the tape engine works (benches)
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic [7:0]  tape_nv_wdata, tape_nv_q;
+    logic        tape_nv_seen = 1'b0;
+    always_ff @(posedge clk)
+        if (jlv_s[2:1] == 2'b01) tape_nv_seen <= 1'b0;
+        else if (tape_nv_we) tape_nv_seen <= 1'b1;
+    wire  logic  tape_clr  = (jlv_s[2:1] == 2'b01 && !tape_nv_seen) || tape_erase;
+    wire  logic  tape_walk = jlv_s[2:1] == 2'b01 && tape_nv_seen;
+    intv_tape_nv tapenv (
         .clk_74a(clk_74a), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr), .bridge_addr(bridge_addr),
-        .bridge_wr_data(bridge_wr_data), .bridge_rd_data(tape_bridge_rd_data));
+        .bridge_wr_data(bridge_wr_data), .bridge_rd_data(tape_bridge_rd_data),
+        .clk(clk), .nv_addr(tape_nv_addr), .nv_we(tape_nv_we), .nv_wdata(tape_nv_wdata), .nv_q(tape_nv_q));
 
     intv_jlp_nv jlpnv (
         .clk_74a(clk_74a), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr), .bridge_addr(bridge_addr),
@@ -263,7 +276,7 @@ module intv_core #(
         .SS_CPU(SS_CPU), .SS_BUS(SS_BUS), .SS_STIC(SS_STIC), .SS_PSG(SS_PSG),
         .SS_SCR(SS_SCRATCH), .SS_SYS(SS_SYSRAM), .SS_GRAM(SS_GRAM), .SS_ROW(SS_ROW),
         .SS_LINE(SS_LINE), .SS_ECS(SS_ECS), .SS_PSG2(SS_PSG2), .SS_ERAM(SS_ECSRAM), .SS_VOICE(SS_VOICE),
-        .SS_JLP(SS_JLP)
+        .SS_JLP(SS_JLP), .SS_TAPE(SS_TAPE)
     ) machine (
         .clk(clk), .mreset(machine_reset), .ce(ce_cpu), .ce_pix(ce_stic), .live(live),
         .hcnt(hcnt), .vcnt(vcnt),
@@ -276,6 +289,8 @@ module intv_core #(
         .jm_req(jm_req), .jm_we(jm_we), .jm_addr(jm_addr), .jm_wdata(jm_wdata), .jm_ack(jm_ack), .jm_rdata(jm_rdata),
         .jlp_fl_clr(jlp_fl_clr),
         .jlp_nv_addr(jlp_nv_addr), .jlp_nv_we(jlp_nv_we), .jlp_nv_wdata(jlp_nv_wdata), .jlp_nv_q(jlp_nv_q),
+        .tape_clr(tape_clr), .tape_walk(tape_walk), .tape_nv_addr(tape_nv_addr), .tape_nv_we(tape_nv_we),
+        .tape_nv_wdata(tape_nv_wdata), .tape_nv_q(tape_nv_q), .tape_busy(tape_busy),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
         .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),

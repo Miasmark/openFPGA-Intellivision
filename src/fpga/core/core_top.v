@@ -408,6 +408,7 @@ localparam [31:0] SS_ADDR = 32'h50000000;
     wire    [31:0]  jlp_bridge_rd_data;    // intv_jlp_nv (the JLP flash slot), held likewise
     wire    [4:0]   jlp_sectors;           // clk_sys: the cartridge's JLP flash sectors
     wire    [31:0]  tape_bridge_rd_data;   // intv_tape_nv (the ECS tape slot), held likewise
+    wire            ecs_full;              // clk_sys: the ECS fully on (the tape slot's size; key routing)
 localparam [31:0] SS_SIZE = 32'd153600;
 
 // Settings, written by the host from interact.json (clk_74a).
@@ -422,7 +423,7 @@ localparam [31:0] SS_SIZE = 32'd153600;
     reg             set_vdac = 1'b0;        // Voice sound: 0 clean (14 bits), 1 the chip's 7-bit DAC
     reg     [2:0]   set_elevel = 3'd2;      // ECS level: PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: as 0.0.9; the ECS has its own knob)
     reg     [7:0]   menu_reset_cnt = 8'd0;
-    reg             tape_trial_t = 1'b0;    // the menu's tape trial action: a toggle into clk_sys
+    reg             tape_erase_t = 1'b0;    // the menu's Erase ECS tape: a toggle into clk_sys
 
 always @(posedge clk_74a) begin
     if (menu_reset_cnt != 0)
@@ -441,7 +442,7 @@ always @(posedge clk_74a) begin
             12'h220: set_vlevel     <= bridge_wr_data[2:0];
             12'h224: set_vdac       <= bridge_wr_data[0];
             12'h228: set_elevel     <= bridge_wr_data[2:0];
-            12'h22C: tape_trial_t   <= ~tape_trial_t;
+            12'h22C: tape_erase_t   <= ~tape_erase_t;
             default: ;
         endcase
     end
@@ -701,7 +702,7 @@ apf_datatable #(
     .cfg_inlist ( cfg_inlist ),
     .len_valid  ( cart_len_valid ),
     .jlp_sectors( jlp_sectors ),
-    .tape_on    ( 1'b1 ),           // TRIAL: every game has a tape file
+    .tape_on    ( ecs_full ),       // the ECS fully on: the game has a tape file (GAME.ecs)
     .t_read         ( target_dataslot_read ),
     .t_getfile      ( target_dataslot_getfile ),
     .t_openfile     ( target_dataslot_openfile ),
@@ -773,7 +774,7 @@ data_loader #(
     reg     [2:0]   vlevel_s0 = 3'd4, vlevel_s1 = 3'd4;
     reg     [2:0]   elevel_s0 = 3'd2, elevel_s1 = 3'd2;     // the ECS level (any time)
     reg     [1:0]   vdac_s = 2'b00;
-    reg     [2:0]   ttrial_s = 3'd0;        // the tape trial toggle
+    reg     [2:0]   terase_s = 3'd0;        // the tape erase toggle
     reg             timing_reset = 1'b1;
 
 always @(posedge clk_sys) begin
@@ -785,7 +786,7 @@ always @(posedge clk_sys) begin
     vlevel_s0 <= set_vlevel; vlevel_s1 <= vlevel_s0;
     elevel_s0 <= set_elevel; elevel_s1 <= elevel_s0;
     vdac_s   <= {vdac_s[0], set_vdac};
-    ttrial_s <= {ttrial_s[1:0], tape_trial_t};
+    terase_s <= {terase_s[1:0], tape_erase_t};
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
     timing_reset  <= ~lock_s[2];
@@ -809,7 +810,7 @@ end
     wire    [5:0]   kb_cur, kb_held;
     wire    [1:0]   kb_mods;
     wire    [63:0]  ecs_keys;
-    wire            ecs_synth, ecs_full;
+    wire            ecs_synth;
     wire    [1:0]   ecs_ovr;
 
 intv_input input_map (
@@ -909,8 +910,7 @@ intv_core machine_side (
     .jlp_bridge_rd_data ( jlp_bridge_rd_data ),
     .jlp_sectors        ( jlp_sectors ),
     .tape_bridge_rd_data( tape_bridge_rd_data ),
-    .tape_erase         ( 1'b0 ),
-    .tape_trial         ( ttrial_s[2] ^ ttrial_s[1] ),
+    .tape_erase         ( terase_s[2] ^ terase_s[1] ),
     .savestate_start        ( savestate_start ),
     .savestate_start_ack    ( savestate_start_ack ),
     .savestate_start_busy   ( savestate_start_busy ),

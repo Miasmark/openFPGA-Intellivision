@@ -10,7 +10,7 @@ Everything else is generated from LAYOUT below or checked against it:
   docs/SAVESTATE.md              the table between the GENERATED markers
   the SS_ID defaults of the RTL modules and intv_machine's parameters (checked only)
 
-The blob (format version 5, build step 11; 4 was step 10's, 3 step 9's, 2 step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
+The blob (format version 6, 1.0.5: the ECS cassette's module; 5 was step 11's, 4 step 10's, 3 step 9's, 2 step 8's, 1 step 7's) is 153,600 bytes (DESIGN decision 6),
 32-bit words stored big-endian (the Pocket's bridge byte order):
   bytes 0-63        header, 16 words (HEADER below)
   bytes 64-8191     the modules' state words in id order (1,853 used; the rest zero)
@@ -83,15 +83,19 @@ LAYOUT = [
     (0x20, 'jlp', 28, 'intv_jlp.sv', 'SS_ID',
      'JLP: switch and busy count, multiply / divide operands and results, CRC, random, flash registers, '
      'extended registers, the cycle count (step 11; its RAM is the JLP RAM region)'),
+    (0x22, 'tape', 2, 'intv_tape.sv', 'SS_ID',
+     'ECS cassette: the head and the mode, the motor-off count (1.0.5, version 6; the tape itself is media, '
+     'not state)'),
 ]
 # Ids kept for later build steps.
 RESERVED_IDS = []
 # intv_machine's id parameters (the rest are in core_top / intv_core)
 MACHINE_PARAMS = {'SS_CPU': 0x02, 'SS_BUS': 0x03, 'SS_STIC': 0x04, 'SS_PSG': 0x05, 'SS_SCR': 0x06,
                   'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D,
-                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10, 'SS_VOICE': 0x18, 'SS_JLP': 0x20}
+                  'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10, 'SS_VOICE': 0x18, 'SS_JLP': 0x20,
+                  'SS_TAPE': 0x22}
 
-VERSION = 5
+VERSION = 6
 MAGIC = 0x494E5456                 # "INTV"
 BLOB_BYTES = 153600                # DESIGN 4.4, decision 6
 HDR_WORDS = 16

@@ -26,32 +26,33 @@ package intv_ss_pkg;
     localparam logic [7:0] SS_VOICE    = 8'h18;   // 24 words
     localparam logic [7:0] SS_VOICEFIFO = 8'h19;   // 64 words
     localparam logic [7:0] SS_JLP      = 8'h20;   // 28 words
+    localparam logic [7:0] SS_TAPE     = 8'h22;   // 2 words
 
-    // the blob (format version 5), byte offsets
+    // the blob (format version 6), byte offsets
     localparam logic [31:0] SS_MAGIC      = 32'h494E5456;
-    localparam logic [31:0] SS_VERSION    = 32'd5;
+    localparam logic [31:0] SS_VERSION    = 32'd6;
     localparam int          SS_BLOB_BYTES = 153600;
     localparam int          SS_HDR_WORDS  = 16;
     localparam int          SS_MOD_BYTE   = 64;
-    localparam int          SS_MOD_WORDS  = 1969;
+    localparam int          SS_MOD_WORDS  = 1971;
     localparam int          SS_MOD_END    = 8192;     // module area end
     localparam int          SS_CRAM_BYTE  = 8192;
     localparam int          SS_CRAM_CELLS = 16384;
     localparam int          SS_JRAM_BYTE  = 40960;
     localparam int          SS_JRAM_CELLS = 8000;
-    localparam int          SS_LIVE_END   = 56960;    // version 5 uses bytes below
+    localparam int          SS_LIVE_END   = 56960;    // version 6 uses bytes below
     localparam int          SS_PAYLOAD    = 56896;    // payload bytes from SS_MOD_BYTE
 
     // header words
     localparam int          SS_H_MAGIC      = 0;   // $494E5456 "INTV"
-    localparam int          SS_H_VERSION    = 1;   // format version (5)
+    localparam int          SS_H_VERSION    = 1;   // format version (6)
     localparam int          SS_H_SIZE       = 2;   // blob size in bytes (153600)
     localparam int          SS_H_LENGTH     = 3;   // payload bytes from byte 64 (56896)
     localparam int          SS_H_CART_CRC   = 4;   // the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge)
     localparam int          SS_H_CART_WORDS = 5;   // the cartridge image length in 16-bit words
     localparam int          SS_H_FLAGS      = 6;   // bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core)
     localparam int          SS_H_CRC        = 7;   // CRC32 of the payload (bytes 64 .. 64 + length - 1)
-    localparam int          SS_H_MOD_WORDS  = 8;   // module state words (1969)
+    localparam int          SS_H_MOD_WORDS  = 8;   // module state words (1971)
     localparam int          SS_H_CRAM_CELLS = 9;   // cart RAM cells (16384)
     localparam int          SS_H_EXEC_CRC   = 10;   // the EXEC slot's CRC32 (the bytes the loader took)
     localparam int          SS_H_GROM_CRC   = 11;   // the GROM slot's CRC32
@@ -116,6 +117,9 @@ package intv_ss_pkg;
         end else if (i < 11'd1969) begin
             k = i - 11'd1941;
             ss_word_addr = {8'h20, k[7:0]};
+        end else if (i < 11'd1971) begin
+            k = i - 11'd1969;
+            ss_word_addr = {8'h22, k[7:0]};
         end else begin
             k = 11'd0;
             ss_word_addr = 16'h0000;

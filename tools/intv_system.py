@@ -602,6 +602,9 @@ class SystemBus:
                 "psg2x": self._psg2x(cycle),
                 "ecsram": self.ecs.ram_words() if self.ecs is not None else [0] * 512,
                 "voice": self._voice_words(cycle),
+                # 1.0.5: the ECS cassette's words (tools/ecs_tape.py Tape.state)
+                "tape": (self.ecs.tape.state(self._t(cycle)) if self.ecs is not None
+                         else [0, (1 << 20) - 1]),
                 # step 11: intv_jlp's words 0-26 and 27 {started, cycle mod 2^16}
                 "jlp": (self.jlp.state(self._t(cycle)) + [1 << 16 | (self._t(cycle) & 0xFFFF)]
                         if self.jlp is not None else None)}

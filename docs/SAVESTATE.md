@@ -133,14 +133,14 @@ Header (bytes 0-63, 32-bit words, big-endian):
 | Word | Byte | Field | Value |
 |---|---|---|---|
 | 0 | 0 | magic | $494E5456 "INTV" |
-| 1 | 4 | version | format version (5) |
+| 1 | 4 | version | format version (6) |
 | 2 | 8 | size | blob size in bytes (153600) |
 | 3 | 12 | length | payload bytes from byte 64 (56896) |
 | 4 | 16 | cart_crc | the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge) |
 | 5 | 20 | cart_words | the cartridge image length in 16-bit words |
 | 6 | 24 | flags | bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core) |
 | 7 | 28 | crc | CRC32 of the payload (bytes 64 .. 64 + length - 1) |
-| 8 | 32 | mod_words | module state words (1969) |
+| 8 | 32 | mod_words | module state words (1971) |
 | 9 | 36 | cram_cells | cart RAM cells (16384) |
 | 10 | 40 | exec_crc | the EXEC slot's CRC32 (the bytes the loader took) |
 | 11 | 44 | grom_crc | the GROM slot's CRC32 |
@@ -170,7 +170,8 @@ Modules (state words in id order; one 32-bit word per state word):
 | $18 | voice | 24 | 7476-7571 | intv_voice.sv | Intellivoice: SP0256 sequencer, parameters, decoded copy, filter, the sample enable and busy window (step 10) |
 | $19 | voicefifo | 64 | 7572-7827 | intv_ram.sv | the SPB640's FIFO 64 x 10 (step 10) |
 | $20 | jlp | 28 | 7828-7939 | intv_jlp.sv | JLP: switch and busy count, multiply / divide operands and results, CRC, random, flash registers, extended registers, the cycle count (step 11; its RAM is the JLP RAM region) |
-| | (unused, zero) | | 7940-8191 | | |
+| $22 | tape | 2 | 7940-7947 | intv_tape.sv | ECS cassette: the head and the mode, the motor-off count (1.0.5, version 6; the tape itself is media, not state) |
+| | (unused, zero) | | 7948-8191 | | |
 
 Then:
 
@@ -185,7 +186,7 @@ Ids kept for later steps:
 | Id | For |
 |---|---|
 
-Module words: 1969 (7876 bytes); payload 56896 bytes (bytes 64-56959); blob 153600 bytes.
+Module words: 1971 (7884 bytes); payload 56896 bytes (bytes 64-56959); blob 153600 bytes.
 
 <!-- END GENERATED -->
 

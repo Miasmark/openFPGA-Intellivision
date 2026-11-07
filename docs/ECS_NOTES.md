@@ -167,15 +167,56 @@ same frames as typing into the matrix (ECS BASIC, Super NFL Football).
 ECS hand controllers 3/4 are not provided (no game reads them,
 REPORT 5.6); their port bytes read as the matrix gives.
 
-## 5 UART stub
+## 5 The UART and the cassette (1.0.5)
 
 The ECS ROM's tape and printer code polls `$00E0`: bit 1 = ready to send (`$7E91`, `$7EAA`,
 `$7EB9`, `$7FF8`), bit 0 = a byte received (`$70B0`), bit 3 must be 0 (`$7FC9`); it compares a
-received byte with `$00AA` (`$7EE7`), so the UART cannot drive `$FF` into the upper byte. Status
-`$0002` ("ready, data discarded"): a tape save (WSMLB "Save Lineups", ECS BASIC CSAV) streams its
-bytes into nothing and finishes; a load waits for data that never comes, as a real ECS with no
-tape would. No game touches the UART in play (REPORT 5.5). MAME maps nothing there (reads 0), so
-its saves wait for ever.
+received byte with `$00AA` (`$7EE7`), so the UART cannot drive `$FF` into the upper byte. Until
+1.0.5 the UART was a stub (status `$0002`, "ready, data discarded": saves went nowhere, loads waited
+for ever). MAME maps nothing there (reads 0), so its saves wait for ever: MAME has no tape to
+compare with.
+
+**The tape engine in the ECS ROM** (`$7E1C-$7F61`, read in a local disassembly, never committed;
+the design study `DESIGN_CASSETTE.md` outside the repository) runs once a frame from the ECS
+interrupt; every tape user calls it: ECS BASIC's CSAV / CLOD / CVER, World Series Major League
+Baseball, Game Factory, Super NFL Football, The Jetsons' Ways with Words, Melody Blaster (loads
+only). No game touches `$E0` / `$E1` itself; games write `$E2` for their own motor prompts.
+`$E2` = `$1D` plays (motor on), `$39` records, `$00` stops the motor. A save writes `$AA` sync
+bytes (9, one every 8 frames), `$00`, the length as -N (low byte first), then the N data bytes, one
+a frame at most, each when bit 1 is set. A load waits for bit 0, counts the sync, reads `$00`, the
+length and the data. ECS BASIC keeps a program's name (4 characters, space-padded) in its first 4
+data bytes; CLOD loads block after block until the name matches (a blank name takes the first).
+That byte stream is jzIntv's `.ecs` file exactly (five files from the owner: `AA x 9, 00, -N`,
+then N bytes; N = the file's length - 12).
+
+**The cassette as a file** (the owner's decisions of 2026-11-06: one `GAME.ecs` per game, every
+save kept by name, fast, an Erase action). `tools/ecs_tape.py` is the golden model and has the
+rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-$E3` with its
+`q`) the RTL; `intv_tape_nv.sv` (in `intv_core`) the nonvolatile slot. In short:
+
+- The tape is data slot 0x107 "ECS tape" (`.ecs`, nonvolatile, 16,384 bytes at bridge
+  `0x30000000`); its size in the data table is 16,384 while the ECS is fully on (mode on: ECS
+  games under Auto, or ECS = On), else 0, so other games get no tape file. A load with a tape file
+  finds its end (whole blocks from 0) and zeroes the rest; a load without one, and the menu's
+  **Erase ECS tape** action, blank the tape (the JLP flash's rule, `intv_core`).
+- `$E0` reads `$0002`, plus bit 0 while playing with a byte under the head; `$E1` reads the byte
+  (`$00xx`) and, playing, moves the head on: the ROM takes one a frame, about twice a real 300-baud
+  tape. Bits 3-5 (errors) are never set.
+- A save is a block of the tape. When its length comes in, everything on the tape moves up by the
+  block's length (what passes the end is lost: the oldest blocks) and the block is written from
+  byte 0, so the newest is first. When the motor stops with every byte in, an older block with the
+  same name (the first 4 data bytes; both blocks with 4 or more) is removed, the tape's end is
+  found again (a block cut at the end is dropped) and the rest is zeroed. A save that stops short
+  (or is cut by a reset or a state load) is taken out again. A block over 16,384 bytes is not
+  recorded.
+- The head goes to 0 at a machine reset and when the motor starts after 1 s (60 frames) or more
+  with it off: CLOD's SET / GO prompts rewind, its search from block to block does not.
+- The printer's output is still discarded.
+- Save state: module `tape` ($22, 2 words: the head and mode, the motor-off count; blob version 6).
+  The tape itself is media, not state: a state load never undoes a save.
+- `tools/ecs_tape.py` is also the developer's tool: `list` (a tape's blocks), `towav` / `fromwav`
+  (300-baud FSK: 4,800 Hz 1, 2,400 Hz 0, 8 data bits LSB first, odd parity, 2 stop bits, for a real
+  ECS and recorder), `join` (several `.ecs` files into one tape).
 
 ## 6 Save state (blob version 3)
 

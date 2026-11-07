@@ -105,7 +105,8 @@ CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
        'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
-       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp_store.sv', 'intv_jlp.sv']
+       'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp_store.sv', 'intv_jlp.sv',
+       'intv_tape_store.sv', 'intv_tape.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)
 OTHER = [os.path.join(HERE, 'models', 'sram_as6c2016.sv'), os.path.join(HERE, 'tb_system.sv')]
 
@@ -534,7 +535,7 @@ TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
 SS = {'cpu': 0x02, 'bus': 0x03, 'stic': 0x04, 'psg': 0x05, 'scr': 0x06, 'sys': 0x07,
       'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D, 'ecs': 0x0E, 'psg2': 0x0F, 'eram': 0x10,
-      'voice': 0x18, 'jlp': 0x20}
+      'voice': 0x18, 'jlp': 0x20, 'tape': 0x22}
 
 
 # ------------------------------------------------------------------- model
@@ -1203,6 +1204,8 @@ def compare(name, run, got, exp):
         # step 11: the JLP's words (tools/jlp.py Jlp.state, and the cycle count)
         if st.get('jlp') is not None:
             checks += [('jlp word %d' % i, d[(SS['jlp'], i)], st['jlp'][i]) for i in range(28)]
+        # 1.0.5: the ECS cassette's words (the head and mode, the motor-off count)
+        checks += [('tape word %d' % i, d[(SS['tape'], i)], st['tape'][i]) for i in range(2)]
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (

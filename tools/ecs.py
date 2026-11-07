@@ -82,15 +82,14 @@ diodes let no column pull a row). No ghosting, no masking.
 A port reads its lines (the group values), whether input or output (MAME
 ay8910.cpp:1403-1425 returns the external data either way).
 
-UART ($00E0-$00E3; REPORT 5.5): a stub. The ECS ROM's tape code polls
-$00E0 bit 1 (transmitter ready: $7E91, $7EAA, $7EB9, $7FF8) and bit 0
-(received byte: $70B0), and requires bit 3 clear ($7FC9). Status reads
-$0002, "ready, data discarded": a tape save (WSMLB, BASIC) streams its
-bytes into nothing and finishes; a tape load waits for data that never
-comes, like a real ECS with no tape. $00E1-$00E3 read 0; writes are
-dropped. Upper byte 0 (the ROM compares the data register with $00AA,
-$7EE7, so the ECS cannot read $FFxx there). MAME maps nothing there (reads
-0, intv.cpp:364): a save waits for ever on MAME's "Press RETURN".
+UART ($00E0-$00E3; REPORT 5.5): the cassette (1.0.5; before it a stub that
+read $0002, "ready, data discarded"): tools/ecs_tape.py's Tape, the tape
+side of the UART as the ECS ROM's tape engine uses it ($E0 status: bit 1
+transmitter ready always, bit 0 a byte under the head; $E1 the byte, upper
+byte 0, since the ROM compares it with $00AA, $7EE7; $E2 the motor and
+record), over the game's tape file. The printer's output is discarded
+(bit 3 of the status stays 0: $7FC9). MAME maps nothing there (reads 0,
+intv.cpp:364): a save waits for ever on MAME's "Press RETURN".
 
 MAME mode (mame=True, comparisons with MAME's intvecs only): MAME's ECS
 as it is (ecs.cpp, ecs_ctrl.cpp): pages decode only $xA50 / $xA51; $2000
@@ -106,6 +105,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import psg as psgm  # noqa: E402
+import ecs_tape  # noqa: E402
 
 OFF, ON, ATTACHED = 0, 1, 2
 MODE_NAMES = {OFF: "off", ON: "on", ATTACHED: "attached"}
@@ -113,7 +113,6 @@ MODE_NAMES = {OFF: "off", ON: "on", ATTACHED: "attached"}
 RESET_PAGES = {OFF: (0, 0, 0), ON: (0, 0, 0), ATTACHED: (0, 0xF, 0)}
 ROM_RANGES = (0x2, 0x7, 0xE)
 ROM_PAGE = {0x2: 1, 0x7: 0, 0xE: 1}         # the page each ROM answers on
-UART_STATUS = 0x0002
 OVERRIDE_AUTO, OVERRIDE_ON, OVERRIDE_OFF = 0, 1, 2
 
 
@@ -238,6 +237,7 @@ class Ecs:
         self.keys = 0                           # pressed switches now (bit 8 row + col)
         self.synth = False                      # the synthesizer is plugged in
         self.keys_at = None                     # f(frame) -> keys (scripted presses)
+        self.tape = ecs_tape.Tape()             # the cassette (1.0.5): GAME.ecs, ecs_tape.py
         self.reset()
 
     def reset(self):
@@ -247,6 +247,7 @@ class Ecs:
         self.page = dict(zip(ROM_RANGES, RESET_PAGES[self.mode]))
         self.psg.reset()
         self.lat = [0, 0]                       # port A ($FE), port B ($FF) latches
+        self.tape.reset()
 
     @property
     def on(self):
@@ -283,7 +284,7 @@ class Ecs:
     def read(self, a, cycle, frame=None):
         """The word the ECS drives at a (owns(a) must be true)."""
         if 0x00E0 <= a <= 0x00E3:
-            return UART_STATUS if a == 0x00E0 else 0
+            return self.tape.read(a, cycle)
         if 0x00F0 <= a <= 0x00FF:
             n = a & 0xF
             if n >= 14:
@@ -300,6 +301,8 @@ class Ecs:
         if not self.on:
             return
         v &= 0xFFFF
+        if 0x00E0 <= a <= 0x00E3 and not self.mame:
+            self.tape.write(a, v, cycle)
         if 0x00F0 <= a <= 0x00FF:
             n = a & 0xF
             if n >= 14:

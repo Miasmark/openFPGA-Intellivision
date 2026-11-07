@@ -23,7 +23,8 @@ Its timing was measured against a real console.
   - cartridge RAM, page switching and Intellicart bank switching.
 - **ECS:** its ROMs, RAM and second sound chip, its computer keyboard on screen (Start) or from a
   USB keyboard on the Dock, and its music synthesizer from the USB keyboard (no diodes, as the
-  real keyboard: keys mask and ghost).
+  real keyboard: keys mask and ghost). Its cassette is a file: every tape save (ECS BASIC's CSAV,
+  World Series Major League Baseball, Game Factory and the rest) is kept in a `.ecs` file per game.
 - **Intellivoice:** the SP0256 speech chip with its own volume; clean or the chip's 7-bit DAC
   sound.
 - **JLP:** 8,000 words of extra RAM, multiply / divide, CRC, random numbers and flash saves, kept in
@@ -87,6 +88,18 @@ button is which side action. Without a profile, Auto is Layer.
 - It is player 1's: it takes that controller's buttons while open. It and the keypad never open
   together. With the ECS off, or the ECS Keyboard setting on the synthesizer, Start does nothing.
 
+**ECS cassette.**
+- Each ECS game has its own tape, kept by the Pocket as a `.ecs` file beside the game's saves (in
+  jzIntv's `.ecs` format: a jzIntv tape file loads as a one-program tape). Games without the ECS
+  get no tape file.
+- Every save is kept, newest first, up to 16 KiB: saving again under a program's name (ECS BASIC's
+  `CSAV NAME`) replaces the older copy, and when the tape is full the oldest saves go. `CLOD NAME`
+  finds a program by its name; `CLOD` alone loads the newest.
+- At ECS BASIC's SET and GO prompts press a hand-controller button (A, say; the ECS ROM waits for
+  the hand controller there, not the keyboard: close the on-screen keyboard first). The tape rewinds
+  by itself, and loads at about twice a real tape's speed.
+- **Erase ECS tape** (Core Settings) blanks the game's tape.
+
 **USB keyboard (Dock):**
 - The number keys, Enter and Backspace (Clear) are player 1's keypad.
 - With the ECS on, the keyboard is the ECS computer keyboard. Only the numpad stays the keypad.
@@ -104,12 +117,13 @@ button is which side action. Without a profile, Auto is Layer.
 | Intellivoice | Auto (by cartridge), On, Off |
 | Voice Level, ECS Level | the Intellivoice's and the ECS sound chip's volume |
 | Voice Sound | Clean, Chip DAC (7-bit) |
+| Erase ECS tape | blanks the game's ECS tape (its `.ecs` file) |
 
 ## Known limits
 
 - **Colours:** MAME's palette. A palette calibrated to the console is future work.
 - **No PAL machine:** the PAL console's timing has not been measured.
-- **No ECS cassette:** tape saves complete as with no tape plugged in, and nothing loads.
+- **ECS printer:** its output is discarded.
 - **The music synthesizer needs the Dock:** it plays only from a USB keyboard there. Typing games
   (ECS BASIC, Game Factory, Scooby Doo's Maze Chase, Super NFL Football) work with the on-screen
   ECS keyboard, one key at a time; a USB keyboard on the Dock is quicker.

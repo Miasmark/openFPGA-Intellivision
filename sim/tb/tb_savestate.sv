@@ -227,7 +227,7 @@ module tb_savestate;
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),
         .bridge_wr_data(bridge_wr_data), .ss_bridge_rd_data(ss_rd_data),
         .jlp_bridge_rd_data(jlp_rd_data), .jlp_sectors(),
-        .tape_bridge_rd_data(), .tape_erase(1'b0), .tape_trial(1'b0),
+        .tape_bridge_rd_data(), .tape_erase(1'b0),
         .savestate_start(savestate_start), .savestate_start_ack(s_ack),
         .savestate_start_busy(s_busy), .savestate_start_ok(s_ok), .savestate_start_err(s_err),
         .savestate_load(savestate_load), .savestate_load_ack(l_ack),

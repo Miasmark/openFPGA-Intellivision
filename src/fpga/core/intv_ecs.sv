@@ -2,9 +2,9 @@
 // module 13, 7.3, 20; build step 9). The golden model is tools/ecs.py;
 // every fact and source is listed there. In short:
 //
-//   $00E0-$00E3  UART stub: $00E0 reads $0002 (transmitter ready, nothing
-//                received: a tape save finishes with its data discarded, a
-//                load waits, as with no tape), the others 0; writes dropped
+//   $00E0-$00E3  the UART: answered here, its tape side is intv_tape (the
+//                cassette as a file, 1.0.5; until then a stub that read
+//                $0002, "ready, nothing received")
 //   $00F0-$00FF  PSG #2, the AY-3-8917 (intv_psg with ENV2 = 0: one
 //                envelope-select bit), reads $FF00 | register; $00FE /
 //                $00FF are its ports A / B: the keyboard matrix
@@ -72,6 +72,7 @@ module intv_ecs #(
     input  wire logic [15:0] wdata,
     output logic             hit,             // the ECS answers a (UART, PSG #2, RAM)
     output logic [15:0]      q,
+    input  wire logic [15:0] uart_q,          // the UART ($00E0-$00E3): intv_tape, the cassette
 
     // to intv_cart: the ROM page latches and whether the ECS is attached
     output logic             on,
@@ -212,7 +213,7 @@ module intv_ecs #(
     // ---------------------------------------------------------- read data
     always_comb begin
         q = 16'hFFFF;
-        if (sel_uart)     q = a[1:0] == 2'd0 ? 16'h0002 : 16'h0000;
+        if (sel_uart)     q = uart_q;
         else if (sel_psg) q = {8'hFF, psg_q};
         else if (sel_ram) q = {8'h00, ram_q[8 * a[1:0] +: 8]};
     end

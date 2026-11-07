@@ -83,7 +83,8 @@ module intv_machine #(
     parameter logic [7:0] SS_PSG2 = 8'h0F,
     parameter logic [7:0] SS_ERAM = 8'h10,
     parameter logic [7:0] SS_VOICE = 8'h18,
-    parameter logic [7:0] SS_JLP  = 8'h20
+    parameter logic [7:0] SS_JLP  = 8'h20,
+    parameter logic [7:0] SS_TAPE = 8'h22
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
@@ -131,6 +132,15 @@ module intv_machine #(
     input  wire logic        jlp_nv_we,
     input  wire logic [15:0] jlp_nv_wdata,
     output logic [15:0]      jlp_nv_q,
+
+    // the ECS cassette (1.0.5): its store's slot port (intv_tape_nv) and the media's events
+    input  wire logic        tape_clr,        // a load without a tape file, the menu's Erase: blank
+    input  wire logic        tape_walk,       // a tape file came in: find its end
+    input  wire logic [13:0] tape_nv_addr,
+    input  wire logic        tape_nv_we,
+    input  wire logic [7:0]  tape_nv_wdata,
+    output logic [7:0]       tape_nv_q,
+    output logic             tape_busy,
 
     // cartridge port and system ROMs (intv_media)
     output logic             cart_req,
@@ -184,7 +194,8 @@ module intv_machine #(
     logic        stic_open;
     logic [15:0] stic_q, sys_q;
     logic [7:0]  scr_q, psg_q, gram_q;
-    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs, ssr_voice, ssr_jlp;
+    logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs, ssr_voice, ssr_jlp, ssr_tape;
+    logic [15:0] uart_q;
     logic        ecs_hit, v_hit, j_hit;
     logic [15:0] ecs_q, v_q, j_q, audio1, audio2;
     logic signed [15:0] v_out;
@@ -232,10 +243,17 @@ module intv_machine #(
 
     intv_ecs #(.SS_ID(SS_ECS), .SS_PSG(SS_PSG2), .SS_RAM(SS_ERAM)) ecs (
         .clk, .mreset, .mode(ecs_mode), .ce, .run(!hold),
-        .a(addr), .wr, .wdata(dout), .hit(ecs_hit), .q(ecs_q),
+        .a(addr), .wr, .wdata(dout), .hit(ecs_hit), .q(ecs_q), .uart_q,
         .on(ecs_on), .full(ecs_full), .pg(ecs_pg), .keys(ecs_keys), .synth(ecs_synth),
         .audio(audio2), .audio_stb(audio2_stb),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_ecs));
+
+    // the ECS cassette: the UART's tape side ($00E0-$00E3, answered through intv_ecs)
+    intv_tape #(.SS_ID(SS_TAPE)) tape (
+        .clk, .mreset, .ce, .on(ecs_on), .a(addr), .rd, .wr, .wdata(dout), .q(uart_q),
+        .clr(tape_clr), .walk(tape_walk), .busy(tape_busy),
+        .nv_addr(tape_nv_addr), .nv_we(tape_nv_we), .nv_wdata(tape_nv_wdata), .nv_q(tape_nv_q),
+        .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_tape));
 
     intv_voice #(.SS_ID(SS_VOICE)) voice (
         .clk, .mreset, .mode(voice_mode), .ce, .run(!hold),
@@ -295,7 +313,7 @@ module intv_machine #(
         .addr_b(v_gram_addr), .q_b(v_gram_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_gram));
 
-    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs | ssr_voice | ssr_jlp;
+    assign ss_rdata = ssr_cpu | ssr_bus | ssr_stic | ssr_psg | ssr_scr | ssr_sys | ssr_gram | ssr_ecs | ssr_voice | ssr_jlp | ssr_tape;
 
 endmodule
 

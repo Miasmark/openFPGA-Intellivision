@@ -19,7 +19,6 @@ module intv_tape_store (
 );
 
     logic [7:0] store [16384];
-    initial for (int i = 0; i < 16384; i++) store[i] = 8'd0;
 
     always_ff @(posedge clk) begin
         if (a_we) begin

@@ -243,7 +243,11 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   state word and store dump; planted faults); `sim/tb/run_tb_tape_nv.sh` (the slot at the bridge:
   a file with its tail zeroed, the clear, the erase); `sim/tb/tb_system.py --ecs-play` ecstape (ECS
   BASIC CSAV AAA, CSAV BBB, CLOD AAA past BBB and RUN 1.00, CLOD BBB and RUN 22.00: RTL = model
-  frame by frame); tb_system's state dumps compare the tape's words.
+  frame by frame); tb_system's state dumps compare the tape's words; `sim/check/ecs_tape_check.py`
+  (model only, too long for the RTL): World Series Major League Baseball's Keep Game (RTN, 1, C,
+  SHIFT+K, RTN: one 1,792-byte block of its ECS RAM `$4100-$47FF`, 1,988 frames) and, in a fresh
+  game with that tape, Old Game (RTN, 1, C, SHIFT+O, RTN: 1,805 frames): every byte back, both end
+  on "Done". Game Factory's two-block save is covered by its rule in tb_tape's session script.
 - `tools/refs/ecs_ref_compare.py`: the model (MAME mode: MAME's ECS) against MAME intvecs traces
   and snapshots (`tools/refs/mame_ecs_trace.sh`): ECS BASIC typing, Mind Strike to its board,
   WSMLB to the field and pitching (its `$EA50` and `$FA50`/`$FA51`), Melody Blaster on the

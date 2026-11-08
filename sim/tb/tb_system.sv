@@ -449,9 +449,9 @@ module tb_system;
 
     // --------------------------------------------------------- state port
     // module id, word count (the order is the write order)
-    localparam int NMOD = 20;
-    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 32};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64, 28};
+    localparam int NMOD = 21;              // intv_ss_pkg's modules (1.0.5: + the tape, $22, 2 words)
+    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 32, 34};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64, 28, 2};
     logic [31:0] saved [NMOD][256];
     // the JLP's flash store and its row bits (build step 11): not machine state (a state load
     // keeps the flash, JLP_NOTES 5.2), so the core never rolls it back; a "later state" round

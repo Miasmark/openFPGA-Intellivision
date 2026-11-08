@@ -82,6 +82,7 @@ deleted after the run; on the owner's VM run this in a simulation slot
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -2089,6 +2090,21 @@ def main():
     a = ap.parse_args()
     verilator = os.environ.get('VERILATOR', 'verilator')
     work = os.environ.get('WORK', os.path.join(ROOT, 'sim', 'work', 'tb_system'))
+    # tb_system.sv's dump and round-trip list (mod_id / mod_n) must be the state layout's modules
+    # (1.0.5: the tape's $22 was missing there, and every dump compare died on it)
+    sys.path.insert(0, os.path.join(ROOT, 'tools'))
+    import savestate as ssl
+    sv = open(os.path.join(ROOT, 'sim', 'tb', 'tb_system.sv')).read()
+    mi = re.search(r"mod_id \[NMOD\] = '\{([^}]*)\}", sv)
+    mn = re.search(r"mod_n  \[NMOD\] = '\{([^}]*)\}", sv)
+    want_id, want_n = [], []
+    for mid, _, n, *_ in ssl.LAYOUT:
+        for k in range((n + 255) // 256):
+            want_id.append(mid + k)
+            want_n.append(min(256, n - 256 * k))
+    got = (mi and [int(x) for x in mi.group(1).split(',')], mn and [int(x) for x in mn.group(1).split(',')])
+    if got != (want_id, want_n):
+        sys.exit('tb_system.sv mod_id / mod_n %s: not the state layout\'s %s' % (got, (want_id, want_n)))
     lib = os.environ.get('INTV_LIBRARY', os.path.expanduser('~/ROMLibrary/Intellivision'))
     bdir = os.environ.get('INTV_BIOS_DIR', os.path.expanduser('~/pocket_projects/intellivision/bios'))
     troot = os.environ.get('INTV_TRACE_ROOT')

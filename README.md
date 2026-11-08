@@ -5,7 +5,7 @@ Master Component (NTSC Model 2609) with the Entertainment Computer System (ECS),
 Intellivoice and JLP cartridges, loads cartridge images directly, and has save states and sleep.
 Its timing was measured against a real console.
 
-1.0.3 is the first public release; the 0.0.x versions before it were test builds. Releases:
+1.0.5 is the first published release; 1.0.3 and 1.0.4 were not published, and the 0.0.x versions were test builds. Releases:
 [github.com/Miasmark/openFPGA-Intellivision/releases](https://github.com/Miasmark/openFPGA-Intellivision/releases).
 
 ## Features
@@ -126,6 +126,8 @@ button is which side action. Without a profile, Auto is Layer.
 - **Colours:** MAME's palette. A palette calibrated to the console is future work.
 - **No PAL machine:** the PAL console's timing has not been measured.
 - **ECS printer:** its output is discarded.
+- **Unnamed tape saves:** games that do not name their saves (World Series Major League Baseball,
+  Game Factory) load the newest save on their tape.
 - **The music synthesizer needs the Dock:** it plays only from a USB keyboard there. Typing games
   (ECS BASIC, Game Factory, Scooby Doo's Maze Chase, Super NFL Football) work with the on-screen
   ECS keyboard, one key at a time; a USB keyboard on the Dock is quicker.

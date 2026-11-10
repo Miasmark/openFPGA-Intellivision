@@ -219,6 +219,28 @@ rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-
   start.)
 - The head goes to 0 at a machine reset and when the motor starts after 1 s (60 frames) or more
   with it off: CLOD's SET / GO prompts rewind, its search from block to block does not.
+- **Tape speed** (1.0.6; Core Settings, default Normal; the owner's go of 2026-11-10 after the
+  options in `TAPE_SPEED.md`, outside the repository). Normal: the ROM's routine (`$7E70`) is
+  called once a frame while `$015E` bit 3 is set (by the ECS interrupt handler `$7261` for ECS
+  BASIC; by the game's own code for Game Factory, `$5295`, and WSMLB, `$5552`) and moves one byte a
+  call, plus its timers (an 80-frame wait and a 73-frame lead-in before a save's data, a 40-frame
+  tail after): a 1,341-byte BASIC program loads in 1,342 frames and saves in 1,525. Instant: the
+  opcode fetch that returns from such a call (the first fetch outside the routine, `$7E1C-$7F77`
+  and its status helper `$70B0-$70B9`, after the fetch of `$7E70`) reads as a branch back to the
+  3-word JSR just before it (`$0220`, `$0004`) while the transfer is busy, the tape ready
+  (recording, or a byte under the head) and the frame's cycle below 12,934: the routine is called
+  again at once, so whichever code calls it, it is called as it would be in the next frames.
+  Every byte, timer, control-block word (`$4070-$4084`), flag and error path is still the ROM's
+  own (verify, a name that does not match, the wait at the tape's end); only the frames differ.
+  The cycle limit keeps the caller inside its frame: a loop across the next frame's interrupt let
+  it nest into the routine (the first model run read a byte too many), and the display and the
+  game's frame timing  timing stay as they are. About 40-60 bytes a frame: a BASIC save in 5 frames (227 at Normal),
+  a load in 3 (44). The core's side (`intv_tape`): a copy of `$015E` bit 3 from the CPU's writes,
+  whether a call of the routine is running, and the answer for the returning fetch and its next
+  read, which `intv_bus` takes instead of the devices'; a 16-byte FIFO takes the save's bytes while the tape moves up (at Instant one comes
+  every 230 CPU cycles or so, faster than a move). Those three bits are in the tape's state words,
+  so a state may be made at any time, inside the loop too. A real ECS has no such speed; Normal
+  is the console's pace.
 - The printer's output is still discarded.
 - Save state: module `tape` ($22, 2 words: the head and mode, the motor-off count; blob version 6).
   The tape itself is media, not state: a state load never undoes a save.

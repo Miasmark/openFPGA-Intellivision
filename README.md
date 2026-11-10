@@ -100,6 +100,11 @@ button is which side action. Without a profile, Auto is Layer.
 - At ECS BASIC's SET and GO prompts press a hand-controller button (A, say; the ECS ROM waits for
   the hand controller there, not the keyboard: close the on-screen keyboard first). The tape rewinds
   by itself, and loads at about twice a real tape's speed.
+- **Tape speed** (Core Settings): **Normal** is the ECS's own pace (one byte a frame: a Game Factory
+  save takes about 50 seconds); **Instant** lets the ECS's own tape routine run again at once
+  instead of once a frame, so a save or a load takes a fraction of a second to about a second
+  (Game Factory, about 1 s). What it saves and loads is the same either way; only the waiting
+  goes. A real ECS has no such speed.
 - **Erase ECS tape** (Core Settings) blanks the game's tape.
 
 **USB keyboard (Dock):**
@@ -119,6 +124,7 @@ button is which side action. Without a profile, Auto is Layer.
 | Intellivoice | Auto (by cartridge), On, Off |
 | Voice Level, ECS Level | the Intellivoice's and the ECS sound chip's volume |
 | Voice Sound | Clean, Chip DAC (7-bit) |
+| Tape speed | Normal (the ECS's own pace), Instant |
 | Erase ECS tape | blanks the game's ECS tape (its `.ecs` file) |
 
 ## Known limits

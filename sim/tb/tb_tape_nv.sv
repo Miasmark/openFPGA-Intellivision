@@ -32,6 +32,7 @@ module tb_tape_nv;
                        .clk, .nv_addr, .nv_we, .nv_wdata, .nv_q);
     intv_tape #(.SS_ID(8'h22)) tape (
         .clk, .mreset(1'b0), .ce(1'b0), .on(1'b1), .a(16'd0), .rd(1'b0), .wr(1'b0), .wdata(16'd0), .q,
+        .fetch(1'b0), .hcnt(9'd0), .vcnt(9'd0), .instant(1'b0), .rom_ok(1'b0), .ovr_hit(), .ovr_q(),
         .clr, .walk, .busy, .nv_addr, .nv_we, .nv_wdata, .nv_q,
         .ss_addr(16'd0), .ss_we(1'b0), .ss_wdata(32'd0), .ss_rdata);
 

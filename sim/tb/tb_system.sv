@@ -124,6 +124,7 @@ module tb_system;
     logic [7:0]  pad_r = 8'hFF, pad_l = 8'hFF;
     logic [1:0]  ecs_ovr = 2'd2;
     logic        synth = 1'b0;
+    logic        instant = 1'b0;          // +instant=1: Tape speed Instant (1.0.6)
     logic        aux_req = 1'b0, aux_we = 1'b0;
     logic [16:0] aux_addr = 17'd0;
     logic [15:0] aux_wdata = 16'd0;
@@ -242,7 +243,7 @@ module tb_system;
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en,
         .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
-        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .ecs_on, .ecs_full(efull), .ecs_pg,
+        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(instant), .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .voice_mode, .voice_dac7(vdac), .voice_level(vlevel), .ecs_level(elevel), .voice_on, .voice_busy, .voice_late,
@@ -669,6 +670,7 @@ module tb_system;
             int e;
             if ($value$plusargs("ecs=%d", e)) ecs_ovr = 2'(e);
             if ($value$plusargs("synth=%d", e)) synth = e != 0;
+            if ($value$plusargs("instant=%d", e)) instant = e != 0;
             if ($value$plusargs("voice=%d", e)) voice_ovr = 2'(e);
             if ($value$plusargs("vlevel=%d", e)) vlevel = 3'(e);
             if ($value$plusargs("vdac=%d", e)) vdac = e != 0;

@@ -384,6 +384,7 @@ class SystemBus:
         self.timing = timing or FrameTiming()
         self.bias = 0                   # MAME mode: model cycle -> timing cycle
         self.scratch = [0] * 256
+        self.tp_step = self.tp_opnd = False   # Tape speed Instant (_tape_patch)
         self.sysram = [0] * 352
         self.gram = [0] * 512
         self.vid = sticm.Stic(self, stic_mode)   # the STIC (tools/stic.py)
@@ -489,9 +490,47 @@ class SystemBus:
         self.iab_reset = False
         return v
 
+    # 1.0.6, Tape speed Instant (docs/ECS_NOTES.md 5; tools/ecs_tape.py): the tape routine in the
+    # ECS ROM ($7E70) is called once a frame while $015E bit 3 is set (by the ECS interrupt handler,
+    # $7274, for ECS BASIC; by the game's own code for Game Factory, $5295, and WSMLB, $5552) and
+    # moves at most one byte a call. With Instant, the fetch that returns from such a call (the
+    # first one outside the routine, $7E1C-$7F77 and its status helper $70B0-$70B9, after the fetch
+    # of $7E70) reads as B to the 3-word JSR just before it ($0220, $0004) while the transfer is busy,
+    # the tape ready (a byte under the head, or recording) and the frame's cycle below TP_LIMIT: the
+    # routine is called again at once. Every byte, timer, control-block word, flag and error path is
+    # still the ROM's own; only the frames differ. The limit keeps the caller inside its frame (a
+    # loop across the next frame's interrupt let it nest into the routine: 2026-11-10's first model
+    # run read a byte too many): about 40-60 bytes a frame.
+    TP_LOOP, TP_LIMIT = (0x0220, 0x0004), FRAME - 2000
+
+    @staticmethod
+    def _tape_routine(a):
+        return 0x7E1C <= a <= 0x7F77 or 0x70B0 <= a <= 0x70B9
+
+    def _tape_patch(self, a, kind, c):
+        if kind == "fetch":
+            ret = self.tp_step and not self._tape_routine(a)
+            if a == 0x7E70:
+                self.tp_step = True
+            elif not self._tape_routine(a):
+                self.tp_step = False
+            if (ret and self.ecs.instant and self.ecs.on and self.ecs.rom_word(0x7E70) is not None
+                    and self.scratch[0x5E] & 8 and self.ecs.tape.more() and c % FRAME < self.TP_LIMIT):
+                self.tp_opnd = True
+                return self.TP_LOOP[0]
+            return None
+        if self.tp_opnd:                        # the branch's displacement
+            self.tp_opnd = False
+            return self.TP_LOOP[1]
+        return None
+
     def read(self, addr, cycle, kind="data"):
         v = 0xFFFF
         a = addr & 0xFFFF
+        if self.ecs is not None:
+            p = self._tape_patch(a, kind, self._t(cycle))
+            if p is not None:
+                return p
         self.vid.advance(self._t(cycle))
         if a < 0x40:
             v &= self._stic_read(a, cycle)
@@ -603,11 +642,20 @@ class SystemBus:
                 "ecsram": self.ecs.ram_words() if self.ecs is not None else [0] * 512,
                 "voice": self._voice_words(cycle),
                 # 1.0.5: the ECS cassette's words (tools/ecs_tape.py Tape.state)
-                "tape": (self.ecs.tape.state(self._t(cycle)) if self.ecs is not None
-                         else [0, (1 << 20) - 1]),
+                "tape": self._tape_words(cycle),
                 # step 11: intv_jlp's words 0-26 and 27 {started, cycle mod 2^16}
                 "jlp": (self.jlp.state(self._t(cycle)) + [1 << 16 | (self._t(cycle) & 0xFFFF)]
                         if self.jlp is not None else None)}
+
+    def _tape_words(self, cycle):
+        """intv_tape.sv's words: Tape.state, and in word 1 (1.0.6) [20] inside a call of the ECS ROM's
+        tape routine, [21] the loop's branch answered, its displacement next, [22] $015E bit 3 (the
+        RTL's copy of it, from the CPU's writes)."""
+        if self.ecs is None:
+            return [0, (1 << 20) - 1]
+        w = self.ecs.tape.state(self._t(cycle))
+        w[1] |= self.tp_step << 20 | self.tp_opnd << 21 | (self.scratch[0x5E] >> 3 & 1) << 22
+        return w
 
     def _voice_words(self, cycle):
         """intv_voice.sv's words 20-22 at the start of cycle `cycle` (step 10)."""

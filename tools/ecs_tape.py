@@ -166,6 +166,11 @@ class Tape:
     def recording(self):
         return bool(self.mode & MODE_MOTOR and self.mode & MODE_REC)
 
+    def more(self):
+        """The tape can take or give a byte now (Tape speed Instant's condition): recording, or
+        playing with a byte under the head."""
+        return bool(self.recording or (self.playing and self.head < self.tape_len))
+
     def read(self, a, cycle):
         if a == 0x00E0:
             return 0x0002 | (1 if self.playing and self.head < self.tape_len else 0)

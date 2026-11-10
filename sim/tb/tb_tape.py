@@ -115,7 +115,8 @@ class Script:
         self.c += ROOM
 
     # -- as the ECS ROM does it
-    def save(self, name, data, sync=9, stop_after=None, quick=False, hold_motor=False, session=False):
+    def save(self, name, data, sync=9, stop_after=None, quick=False, hold_motor=False, session=False,
+             pace=None):
         """A save as the ECS ROM writes it. session: right after the previous save (the motor off
         for a moment, no rewind: Game Factory's second block); else after more than 1 s, so the
         record start rewinds (ECS BASIC's prompts)."""
@@ -127,8 +128,11 @@ class Script:
             if stop_after is not None and j == stop_after:
                 break
             self.r(0xE0, 3)                 # the ROM waits for the transmitter
-            self.w(0xE1, b, 3)
-            if j == sync + (3 if quick else 2):
+            # pace: the data bytes this many CPU cycles apart from the length on, without waiting
+            # for the tape to move (Tape speed Instant: the ROM's routine back to back, about 200
+            # cycles a byte; the bytes queue in intv_tape's FIFO)
+            self.w(0xE1, b, pace if pace and j > sync else 3)
+            if j == sync + (3 if quick else 2) and not pace:
                 self.settle()               # the tape moves up (INSERT); quick: one byte queues first
         if not hold_motor:
             self.w(0xE2, 0x00, 20)
@@ -196,6 +200,8 @@ def spec_scripts():
     s.save(None, b'z' * 20000)                    # too long: not recorded
     s.dump()
     s.save('Q', b'pend', quick=True)              # a data byte while the tape moves up
+    s.dump()
+    s.save('FAST', bytes(range(200)), pace=1100)   # Instant's pace (the bench's CPU cycle is 8 clocks, the core's 48): bytes queue while it moves
     s.dump()
     # junk inside the sync: the count starts again (k = 2 here)
     s.save_raw([0xAA, 0xAA, 0x55, 0xAA, 0xAA, 0x00, 0xFC, 0xFF] + list(b'JUNK'))
@@ -411,7 +417,9 @@ PLANTS = [
     ('clr_ignored', 'intv_tape.sv', "        if (clr)  q_clr  <= 1'b1;", "        if (1'b0) q_clr  <= 1'b1;"),
     ('walk_ignored', 'intv_tape.sv', "        if (walk) q_walk <= 1'b1;", "        if (1'b0) q_walk <= 1'b1;"),
     ('too_long_recorded', 'intv_tape.sv', "> 17'(TSIZE))\n                            rph <= R_SKIP;", "> 17'(TSIZE) + 17'd70000)\n                            rph <= R_SKIP;"),
-    ('pend_lost', 'intv_tape.sv', "                    st <= E_DATA;\n", "                    pend <= 1'b0;\n"),
+    ('pend_lost', 'intv_tape.sv', "                    st <= E_DATA;\n", "                    st <= E_IDLE;\n"),
+    ('fifo_one', 'intv_tape.sv', "            if (f_push) begin fq[fw] <= wdata[7:0]; fw <= fw + 4'd1; end",
+     "            if (f_push && fc == 5'd0) begin fq[fw] <= wdata[7:0]; fw <= fw + 4'd1; end"),
     ('ss_head_lost', 'intv_tape.sv', "            head <= ss_wdata[14:0];\n", "            head <= 15'd0;\n"),
     ('ss_offc_lost', 'intv_tape.sv', "            offc <= ss_wdata[19:0];", "            offc <= 20'd0;"),
     ('ss_save_kept', 'intv_tape.sv', "            if (rph == R_DATA) q_abt <= 1'b1;   // a state load during a save: taken out\n",

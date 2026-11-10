@@ -40,6 +40,7 @@ module tb_tape;
 `endif
     intv_tape #(.SS_ID(8'h22), .IDLE(`TB_IDLE)) dut (
         .clk, .mreset, .ce, .on(1'b1), .a, .rd, .wr, .wdata, .q, .clr, .walk, .busy,
+        .fetch(1'b0), .hcnt(9'd0), .vcnt(9'd0), .instant(1'b0), .rom_ok(1'b0), .ovr_hit(), .ovr_q(),
         .nv_addr, .nv_we, .nv_wdata, .nv_q, .ss_addr, .ss_we, .ss_wdata, .ss_rdata);
 
     // ce: one clock in CE; cyc: the CPU cycles done

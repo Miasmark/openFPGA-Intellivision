@@ -523,6 +523,56 @@ def _tape_basic():
     return ','.join(out), t
 
 
+def _tape_instant(short=False):
+    """1.0.6, Tape speed Instant: ECS BASIC as _tape_basic, but each transfer done in a few frames
+    (the ECS ROM's tape routine run back to back: intv_tape, intv_system._tape_patch): CSAV AAA,
+    NEW, 10 PRIN 22, CSAV BBB, NEW, CLOD AAA (past BBB), RUN (1.00), CVER BBB, then CLOD ZZZ (no
+    such name: both blocks read, then the routine waits at the tape's end, busy, with nothing to
+    read, so the loop is off). short (the planted faults' run): CSAV A, then CLOD Z.
+    -> (presses, frames, rt): rt a cycle inside the first save's loop (2 frames after its GO, 6,000
+    cycles in), for a round trip (a state saved and restored there)."""
+    sys.path.insert(0, os.path.join(ROOT, 'tools'))
+    import ecs as ecsm
+    out, t = ['300-306:Enter,420-426:1,500-506:Enter'], 800
+
+    def typ(text, after=30):
+        nonlocal t
+        p, end = ecsm.type_presses(t, text)
+        out.append(p)
+        t = end + after
+
+    def key(after=20):
+        nonlocal t
+        out.append('%d-%d:Enter' % (t, t + 6))
+        t += 6 + after
+    if short:
+        typ('CSAV A\n', 60)
+        key()
+        rt = (t + 2) * FRAME + 6000
+        key(40)
+        typ('CLOD Z\n', 60)
+        key()
+        key(60)
+        return ','.join(out), t, rt
+    typ('10 PRIN 1\nCSAV AAA\n', 60)
+    key()
+    rt = (t + 2) * FRAME + 6000
+    key(40)
+    typ('NEW\n10 PRIN 22\nCSAV BBB\n', 60)
+    key()
+    key(40)
+    typ('NEW\nCLOD AAA\n', 60)
+    key()
+    key(40)
+    typ('RUN\nCVER BBB\n', 60)
+    key()
+    key(40)
+    typ('CLOD ZZZ\n', 60)
+    key()
+    key(60)
+    return ','.join(out), t, rt
+
+
 ECS_PLAY = [
     ('ecsbasic', None, 1200, '300-306:Enter,420-426:1,500-506:Enter,' + _typed(800, '10 PRINT 2*3\nRUN\n'),
      dict(ovr='auto')),
@@ -550,6 +600,7 @@ ECS_PLAY = [
     # M=0, O=0) and RUN; MOB 0 then shows GRAM card 62 = the cartridge's $53F5 picture (the boat).
     # MAME's intvecs agrees instruction by instruction and on 4 snapshots (ecs_ref_compare, 2026-10-29).
     ('ecstape', None, _tape_basic()[1], _tape_basic()[0], dict(ovr='auto')),
+    ('ecstape_fast', None, _tape_instant()[1], _tape_instant()[0], dict(ovr='auto', instant=True, rt=_tape_instant()[2])),
     ('grab', 'Advanced Dungeons & Dragons (USA, Europe).zip', 2056,
      '300-306:Enter,420-426:1,500-506:Enter,'
      + _typed(800, '140 D=0\n150 N=7\n160 M=0\n170 O=0\n180 CALL GRAB\n190 CO(0)=11\n200 XS(0)=1\n210 GOTO 210\nRUN\n'),
@@ -629,6 +680,7 @@ def ecs_device(cart, ecs):
         return None
     dev = isys.make_ecs(cart[0] if cart else None, (ecs['ovr'], '' if ecs.get('norom') else None))
     dev.synth = bool(ecs.get('synth'))
+    dev.instant = bool(ecs.get('instant'))      # Tape speed Instant (1.0.6)
     return dev
 
 
@@ -1242,7 +1294,10 @@ def compare(name, run, got, exp):
         if st.get('jlp') is not None:
             checks += [('jlp word %d' % i, d[(SS['jlp'], i)], st['jlp'][i]) for i in range(28)]
         # 1.0.5: the ECS cassette's words (the head and mode, the motor-off count)
-        checks += [('tape word %d' % i, d[(SS['tape'], i)], st['tape'][i]) for i in range(2)]
+        # (word 1's bits 26:23 hold an opcode fetch between its BAR and DTB: the model has no such
+        # moment between instructions, so they are left out)
+        checks += [('tape word %d' % i, d[(SS['tape'], i)] & (0xFFFFFFFF if i == 0 else 0x7FFFFF),
+                    st['tape'][i]) for i in range(2)]
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (
@@ -1326,6 +1381,8 @@ def ecs_args(work, tag, ecs, nframes):
         args.append('+ecsrom=' + rom)
     if ecs.get('synth'):
         args.append('+synth=1')
+    if ecs.get('instant'):
+        args.append('+instant=1')
     if ecs.get('level', 2) != 2:
         args.append('+elevel=%d' % ecs['level'])
     if ecs.get('presses'):
@@ -1525,6 +1582,8 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
         with open(kf, 'w') as f:
             f.writelines(key_lines(presses, npics))
         cmd.append('+keys=' + kf)
+    if ecs and ecs.get('rt'):           # 1.0.6: a round trip (a state saved and restored) there
+        cmd += ['+rt=1', '+rtcyc=%d' % ecs['rt'], '+rtsub=17']
     if ecs:                             # step 9: the ECS keys come with the same presses
         e2 = dict(ecs, presses=None)
         cmd += ecs_args(work, 'screen_' + name, e2, npics)
@@ -2431,10 +2490,68 @@ def screens_main(a, verilator, work, lib, exec_path, grom_path):
     return 1 if fails else 0
 
 
+# 1.0.6, Tape speed Instant's planted faults (--ecs-play --plants-only / --plant): each runs the
+# short Instant script (_tape_instant(short=True): CSAV A, CLOD Z, with a round trip inside the
+# save's loop) and must make it differ from the model: (name, file, [(from, to)]). The busy
+# condition has no plant: the routine is called only while busy, and the call that clears it
+# also stops the motor (so the tape is not ready either), except on the error path at a buffer's
+# end, which no script reaches.
+ECS_PLAY_PLANTS = [
+    ('tape_loop_never', 'intv_tape.sv', [("        if (fpend && pt_now) ovr_hit = 1'b1;", "        if (1'b0) ovr_hit = 1'b1;")]),
+    ('tape_loop_no_limit', 'intv_tape.sv', [("&& more && slot < 16'(LIMIT);", "&& more;")]),
+    ('tape_loop_no_more', 'intv_tape.sv', [("&& busy_cp && more && slot", "&& busy_cp && slot")]),
+    ('tape_loop_operand', 'intv_tape.sv', [("ovr_hit = 1'b1; ovr_q = 16'h0004; end", "ovr_hit = 1'b1; ovr_q = 16'h0005; end")]),
+    ('tape_loop_helper_out', 'intv_tape.sv', [("|| (wdata >= 16'h70B0 && wdata <= 16'h70B9);", ";")]),
+    ('tape_ovr_anded', 'intv_bus.sv', [("            if (ovr_hit)  din = ovr_q;", "            if (ovr_hit)  din &= ovr_q;")]),
+    ('tape_ss_loop_lost', 'intv_tape.sv', [("            {fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];", "")]),
+]
+
+
+def ecs_play_plants(a, verilator, work, exec_path, grom_path):
+    names = a.plant.split(',') if a.plant else None
+    presses, nframes, rt = _tape_instant(short=True)
+    ecs = dict(ovr='auto', instant=True, rt=rt)
+    fails = []
+    for name, fn, subs in ECS_PLAY_PLANTS:
+        if names and name not in names:
+            continue
+        d = os.path.join(work, 'plant_' + name)
+        shutil.rmtree(d, ignore_errors=True)
+        rtl = os.path.join(d, 'rtl')
+        shutil.copytree(CORE, rtl)
+        p = os.path.join(rtl, fn)
+        src = open(p).read()
+        bad = [x for x, _ in subs if src.count(x) != 1]
+        if bad:
+            print('PLANT %s: pattern not found' % name, flush=True)
+            fails.append(name)
+            continue
+        for x, y in subs:
+            src = src.replace(x, y)
+        open(p, 'w').write(src)
+        binary = build(d, rtl, verilator, strict=False)
+        if not binary:
+            print('PLANT %s: build failed' % name, flush=True)
+            fails.append(name)
+            continue
+        pr = check_screen(binary, d, 'tape_plant', None, exec_path, grom_path, nframes,
+                          presses=isys.parse_presses(presses), ecs=ecs)
+        if pr:
+            print('PLANT %s: caught: %s' % (name, pr[0][:100]), flush=True)
+        else:
+            print('PLANT %s: not caught' % name, flush=True)
+            fails.append(name)
+        shutil.rmtree(os.path.join(d, 'obj'), ignore_errors=True)
+    print('TB_ECS_PLAY_PLANTS %s' % ('pass' if not fails else 'FAIL (%s)' % ', '.join(fails)))
+    return 1 if fails else 0
+
+
 def ecs_play_main(a, verilator, work, lib, exec_path, grom_path):
     """The step-9 ECS runs (--ecs-play, ECS_PLAY): RTL = model (mode stic) frame by frame, PSG #2
     and the mixed sound included (E lines); the model's ECS mode must be the Auto rule's."""
     import ecs as ecsm
+    if a.plants_only or a.plant:
+        return ecs_play_plants(a, verilator, work, exec_path, grom_path)
     sel = ECS_PLAY
     if a.only:
         sel = [x for x in ECS_PLAY if x[0] in a.only.split(',')]

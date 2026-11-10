@@ -422,6 +422,7 @@ localparam [31:0] SS_SIZE = 32'd153600;
     reg     [2:0]   set_vlevel = 3'd4;      // Voice level: 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: speech peak near a PSG's)
     reg             set_vdac = 1'b0;        // Voice sound: 0 clean (14 bits), 1 the chip's 7-bit DAC
     reg     [2:0]   set_elevel = 3'd2;      // ECS level: PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: as 0.0.9; the ECS has its own knob)
+    reg             set_tfast = 1'b0;       // Tape speed: 0 Normal, 1 Instant (1.0.6; intv_tape)
     reg     [7:0]   menu_reset_cnt = 8'd0;
     reg             tape_erase_t = 1'b0;    // the menu's Erase ECS tape: a toggle into clk_sys
 
@@ -443,6 +444,7 @@ always @(posedge clk_74a) begin
             12'h224: set_vdac       <= bridge_wr_data[0];
             12'h228: set_elevel     <= bridge_wr_data[2:0];
             12'h22C: tape_erase_t   <= ~tape_erase_t;
+            12'h230: set_tfast      <= bridge_wr_data[0];
             default: ;
         endcase
     end
@@ -775,6 +777,7 @@ data_loader #(
     reg     [2:0]   elevel_s0 = 3'd2, elevel_s1 = 3'd2;     // the ECS level (any time)
     reg     [1:0]   vdac_s = 2'b00;
     reg     [2:0]   terase_s = 3'd0;        // the tape erase toggle
+    reg     [1:0]   tfast_s = 2'b00;        // Tape speed (any time)
     reg             timing_reset = 1'b1;
 
 always @(posedge clk_sys) begin
@@ -787,6 +790,7 @@ always @(posedge clk_sys) begin
     elevel_s0 <= set_elevel; elevel_s1 <= elevel_s0;
     vdac_s   <= {vdac_s[0], set_vdac};
     terase_s <= {terase_s[1:0], tape_erase_t};
+    tfast_s  <= {tfast_s[0], set_tfast};
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
     timing_reset  <= ~lock_s[2];
@@ -888,6 +892,7 @@ intv_core machine_side (
     .ecs_override       ( ecs_ovr ),
     .ecs_keys           ( ecs_keys ),
     .ecs_synth          ( ecs_synth ),
+    .tape_instant       ( tfast_s[1] ),
     .ecs_full           ( ecs_full ),
     .voice_override     ( voice_s1 ),
     .voice_dac7         ( vdac_s[1] ),

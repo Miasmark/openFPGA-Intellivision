@@ -220,7 +220,7 @@ module tb_savestate;
         .cart_len(cart_len), .len_chk(2'd0), .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
         .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .cart_crc_o(), .cart_ready_o(), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
-        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .ecs_full(ecs_full),
+        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(1'b0), .ecs_full(ecs_full),
         .voice_override(voice_ovr), .voice_dac7(1'b0), .voice_level(3'd4), .voice_on(voice_on), .ecs_level(3'd2),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),

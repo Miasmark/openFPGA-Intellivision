@@ -101,6 +101,7 @@ module intv_machine #(
     input  wire logic [1:0]  ecs_mode,        // 0 off, 1 on, 2 attached (taken at reset)
     input  wire logic [63:0] ecs_keys,        // the ECS keyboard's pressed switches
     input  wire logic        ecs_synth,       // the synthesizer instead of the keyboard
+    input  wire logic        tape_instant,    // Tape speed: Instant (1.0.6; intv_tape)
     output logic             ecs_on,          // to intv_media: the ECS ROMs
     output logic             ecs_full,        // the ECS fully on (mode on): intv_input's key routing
     output logic [11:0]      ecs_pg,
@@ -195,7 +196,8 @@ module intv_machine #(
     logic [15:0] stic_q, sys_q;
     logic [7:0]  scr_q, psg_q, gram_q;
     logic [31:0] ssr_cpu, ssr_bus, ssr_stic, ssr_psg, ssr_scr, ssr_sys, ssr_gram, ssr_ecs, ssr_voice, ssr_jlp, ssr_tape;
-    logic [15:0] uart_q;
+    logic [15:0] uart_q, tovr_q;
+    logic        tovr_hit;
     logic        ecs_hit, v_hit, j_hit;
     logic [15:0] ecs_q, v_q, j_q, audio1, audio2;
     logic signed [15:0] v_out;
@@ -217,7 +219,7 @@ module intv_machine #(
         .phase, .dout, .din, .intrm,
         .a(addr), .rd, .wr, .vb, .scr_we, .psg_we, .sys_we, .gram_we, .stic_we,
         .stic_open, .stic_q, .scr_q, .psg_q, .sys_q, .exec_q, .grom_q, .gram_q,
-        .cart_req, .cart_we, .cart_wdata, .cart_ack, .cart_rdata,
+        .cart_req, .cart_we, .cart_wdata, .cart_ack, .cart_rdata, .ovr_hit(tovr_hit), .ovr_q(tovr_q),
         .cart_hit_in(cart_hit), .ecs_hit(ecs_hit || v_hit || j_hit),
         .ecs_q((ecs_hit ? ecs_q : 16'hFFFF) & (v_hit ? v_q : 16'hFFFF) & (j_hit ? j_q : 16'hFFFF)),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_bus));
@@ -251,6 +253,8 @@ module intv_machine #(
     // the ECS cassette: the UART's tape side ($00E0-$00E3, answered through intv_ecs)
     intv_tape #(.SS_ID(SS_TAPE)) tape (
         .clk, .mreset, .ce, .on(ecs_on), .a(addr), .rd, .wr, .wdata(dout), .q(uart_q),
+        .fetch(ce && fetch), .hcnt, .vcnt, .instant(tape_instant), .rom_ok(ecs_on && ecs_pg[7:4] == 4'd0),
+        .ovr_hit(tovr_hit), .ovr_q(tovr_q),
         .clr(tape_clr), .walk(tape_walk), .busy(tape_busy),
         .nv_addr(tape_nv_addr), .nv_we(tape_nv_we), .nv_wdata(tape_nv_wdata), .nv_q(tape_nv_q),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_tape));

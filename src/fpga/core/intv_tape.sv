@@ -26,11 +26,26 @@
 //           moves back down by the block's length, the top is zeroed; END
 // A move is 3 clocks a byte (at most 16,384 bytes: 1.2 ms), so the engine is done long before
 // the ECS ROM's next tape access (one a frame at most; the save's data bytes queue behind an
-// INSERT in pend). The rewind: the head goes to 0 at a machine reset and when the motor starts
+// INSERT in a 16-byte FIFO: at Tape speed Instant the ROM writes one every few hundred CPU cycles,
+// faster than a move; the FIFO holds what one move lets in). The rewind: the head goes to 0 at a machine reset and when the motor starts
 // after IDLE CPU cycles (1 s) or more with it off (offc counts them).
 //
+// Tape speed Instant (1.0.6; tools/intv_system.py _tape_patch is the model): the ECS ROM's tape
+// routine ($7E70) is called once a frame while $015E bit 3 is set (by the ECS interrupt handler for
+// ECS BASIC, by the game's own code for Game Factory and WSMLB) and moves one byte a call. With
+// Instant, the opcode fetch that returns from such a call (the first fetch outside the routine,
+// $7E1C-$7F77 and its helper $70B0-$70B9, after the fetch of $7E70) reads as B to the 3-word JSR
+// just before it (ovr: $0220, then $0004 for the next read, for intv_bus) while the transfer is busy
+// (busy_cp: bit 3 of the CPU's last write to $015E), the tape ready (more: recording, or playing
+// with a byte under the head) and the frame's cycle (slot, at that fetch's DTB) below LIMIT: the
+// routine is called again at once, up to about 40-60 bytes a frame, and every byte, timer, control
+// word, flag and error path is the ROM's own. LIMIT keeps the caller inside its frame (a loop
+// across the next frame's interrupt let it nest into the routine).
+//
 // Save state (SS_ID, 2 words): [0] head (14:0), mode (23:16); [1] the motor-off count (19:0, all
-// ones: off since the reset). A load of word 0 abandons a save in progress (ABORT). The tape
+// ones: off since the reset), [20] inside a call of the routine, [21] the loop's branch answered
+// (its displacement next), [22] the $015E bit 3 copy, [26:23] an opcode fetch between its BAR and
+// DTB (pending; $7E70; inside the routine; a return from it). A load of word 0 abandons a save in progress (ABORT). The tape
 // itself is not in the state.
 //
 // SPDX-License-Identifier: MIT
@@ -39,7 +54,9 @@
 
 module intv_tape #(
     parameter logic [7:0] SS_ID = 8'h22,
-    parameter int         IDLE  = 896040        // 60 frames of 14,934 CPU cycles
+    parameter int         IDLE  = 896040,       // 60 frames of 14,934 CPU cycles
+    parameter int         CPL   = 57,           // CPU cycles a line (intv_bus's slot)
+    parameter int         LIMIT = 12934         // Instant: the loop's last frame cycle + 1 (FRAME - 2000)
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
@@ -50,6 +67,15 @@ module intv_tape #(
     input  wire logic [15:0] a,
     input  wire logic        rd,                // ce of a read phase
     input  wire logic        wr,                // ce of DW
+    input  wire logic        fetch,             // ce: an opcode fetch's BAR (its address on wdata)
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  wire logic [8:0]  hcnt,              // the machine's position (intv_bus's slot)
+    /* verilator lint_on UNUSEDSIGNAL */
+    input  wire logic [8:0]  vcnt,
+    input  wire logic        instant,           // Tape speed: Instant
+    input  wire logic        rom_ok,            // the ECS ROM answers at $7000 (on, latch $7 = 0)
+    output logic             ovr_hit,           // intv_bus: din is ovr_q (the loop's branch)
+    output logic [15:0]      ovr_q,
     /* verilator lint_off UNUSEDSIGNAL */
     input  wire logic [15:0] wdata,           // the low byte
     /* verilator lint_on UNUSEDSIGNAL */
@@ -115,7 +141,24 @@ module intv_tape #(
 
     wire logic ss_hit0 = ss_addr == {SS_ID, 8'd0};
     wire logic ss_hit1 = ss_addr == {SS_ID, 8'd1};
-    assign ss_rdata = ss_hit0 ? {8'd0, mode, 1'b0, head} : ss_hit1 ? {12'd0, offc} : 32'd0;
+
+    // ------------------------------------------------------------ Tape speed Instant
+    logic        fpend = 1'b0;                  // an opcode fetch's BAR seen, its DTB not yet
+    logic        f_ret = 1'b0, f_rtn = 1'b0;    // that fetch: a return from the routine; inside it
+    logic        f_ent = 1'b0;                  // that fetch is $7E70
+    logic        step = 1'b0, opnd = 1'b0, busy_cp = 1'b0;
+    wire  logic [15:0] slot = 16'(vcnt) * 16'(CPL) + 16'(hcnt[8:2]);
+    wire  logic  more = recording || (playing && head < tlen);
+    wire  logic  in_rtn = (wdata >= 16'h7E1C && wdata <= 16'h7F77) || (wdata >= 16'h70B0 && wdata <= 16'h70B9);
+    wire  logic  pt_now = f_ret && instant && rom_ok && busy_cp && more && slot < 16'(LIMIT);
+    always_comb begin
+        ovr_hit = 1'b0;
+        ovr_q = 16'h0220;                       // B (back) to the JSR: $0220, $0004
+        if (fpend && pt_now) ovr_hit = 1'b1;
+        else if (opnd && !fpend) begin ovr_hit = 1'b1; ovr_q = 16'h0004; end
+    end
+    assign ss_rdata = ss_hit0 ? {8'd0, mode, 1'b0, head}
+                    : ss_hit1 ? {5'd0, fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step, offc} : 32'd0;
 
     // ------------------------------------------------------------ the engine
     typedef enum logic [5:0] {
@@ -144,9 +187,13 @@ module intv_tape #(
     logic [1:0]  wj = 2'd0;
     logic [14:0] hj = 15'd0;                    // the header's byte
     logic [13:0] pf_a = 14'd0;
-    logic        pend = 1'b0;                   // a data byte waits (behind an INSERT)
-    logic [7:0]  pv = 8'd0;
-    logic [15:0] pi = 16'd0;                    // its index in the data
+    // the save's data bytes wait here for port A (behind an INSERT): a 16-byte FIFO; dn counts
+    // the bytes written to the tape
+    logic [7:0]  fq [16];
+    logic [3:0]  fw = 4'd0, fr = 4'd0;
+    logic [4:0]  fc = 5'd0;                     // bytes in the FIFO
+    logic [15:0] dn = 16'd0;
+    wire  logic  pend = fc != 5'd0;
     // requests (taken by E_IDLE)
     logic        q_clr = 1'b0, q_walk = 1'b0, q_ins = 1'b0, q_com = 1'b0, q_abt = 1'b0, q_flr = 1'b0;
     assign busy = st != E_IDLE && st != E_PF1 && st != E_PF2;
@@ -173,6 +220,8 @@ module intv_tape #(
                        || (wr && sel && a[1:0] == 2'd2 && wdata[4] && !motor);
 
     always_ff @(posedge clk) begin
+        logic f_push, f_pop, f_clr;                // the FIFO's moves this clock
+        f_push = 1'b0; f_pop = 1'b0; f_clr = 1'b0;
         a_we <= 1'b0;
         if (a_we || nv_we) hb_ok <= 1'b0;
 
@@ -192,8 +241,21 @@ module intv_tape #(
             rph <= R_NONE;
         end else if (ss_we && ss_hit1) begin
             offc <= ss_wdata[19:0];
+            {fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];
         end else begin
             if (ce && !motor && offc != 20'hFFFFF) offc <= offc + 20'd1;
+            if (fetch) begin                    // an opcode fetch's BAR: its address on wdata
+                fpend <= 1'b1;
+                f_ret <= step && !in_rtn;
+                f_rtn <= in_rtn;
+                f_ent <= wdata == 16'h7E70;
+            end else if (rd && fpend) begin     // its DTB: the model's fetch read
+                fpend <= 1'b0;
+                opnd  <= pt_now;
+                step  <= f_ent || (f_rtn && step);
+            end else if (rd && opnd)            // the branch's displacement
+                opnd <= 1'b0;
+            if (wr && a == 16'h015E) busy_cp <= wdata[3];
             if (rd && sel && a[1:0] == 2'd1 && playing && head < tlen) begin
                 head <= head + 15'd1;
                 hb_ok <= 1'b0;
@@ -216,9 +278,7 @@ module intv_tape #(
                         end
                     end
                     R_DATA: if (rgot < rn) begin
-                        pend <= 1'b1;
-                        pv   <= wdata[7:0];
-                        pi   <= rgot;
+                        f_push = 1'b1;
                         if (rgot < 16'd4) rname[8 * (3 - 32'(rgot[1:0])) +: 8] <= wdata[7:0];
                         rgot <= rgot + 16'd1;
                     end
@@ -240,7 +300,7 @@ module intv_tape #(
                     rph <= R_NONE;
                 end
                 if (wdata[4] && wdata[5] && !recording) begin     // record starts
-                    rph <= R_SYNC; rk <= 15'd0; rgot <= 16'd0; rname <= 32'd0;
+                    rph <= R_SYNC; rk <= 15'd0; rgot <= 16'd0; rname <= 32'd0; dn <= 16'd0;
                     q_flr <= 1'b1;
                 end
             end
@@ -271,7 +331,7 @@ module intv_tape #(
                 end else if (pend) begin                // a data byte before an end of the save
                     st <= E_DATA;
                 end else if (q_abt) begin
-                    q_abt <= 1'b0; pend <= 1'b0;
+                    q_abt <= 1'b0; f_clr = 1'b1;
                     // down by rlen from rins: t[i] = t[i + rlen], then zeros from the top's rlen
                     ms <= 14'(rins + rlen); md <= 14'(rins); mc <= TSIZE - rins - rlen; mup <= 1'b0;
                     mret <= J_ABORTZ;
@@ -295,8 +355,9 @@ module intv_tape #(
                 st <= E_IDLE;
             end
             E_DATA: begin
-                pend <= 1'b0;
-                a_addr <= 14'(17'(rins) + 17'(rk) + 17'd3 + 17'(pi)); a_d <= pv; a_we <= 1'b1;
+                f_pop = 1'b1;
+                a_addr <= 14'(17'(rins) + 17'(rk) + 17'd3 + 17'(dn)); a_d <= fq[fr]; a_we <= 1'b1;
+                dn <= dn + 16'd1;
                 st <= E_IDLE;
             end
 
@@ -387,6 +448,15 @@ module intv_tape #(
             end
             default: st <= E_IDLE;
         endcase
+
+        // the FIFO
+        if (f_clr) begin
+            fw <= 4'd0; fr <= 4'd0; fc <= 5'd0;
+        end else begin
+            if (f_push) begin fq[fw] <= wdata[7:0]; fw <= fw + 4'd1; end
+            if (f_pop) fr <= fr + 4'd1;
+            fc <= fc + 5'(f_push) - 5'(f_pop);
+        end
     end
 
 endmodule

@@ -238,6 +238,7 @@ class Ecs:
         self.synth = False                      # the synthesizer is plugged in
         self.keys_at = None                     # f(frame) -> keys (scripted presses)
         self.tape = ecs_tape.Tape()             # the cassette (1.0.5): GAME.ecs, ecs_tape.py
+        self.instant = False                    # Tape speed: Instant (1.0.6; intv_system._tape_patch)
         self.reset()
 
     def reset(self):

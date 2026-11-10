@@ -124,6 +124,8 @@ module intv_bus #(
     input  wire logic        cart_ack,
     input  wire logic [15:0] cart_rdata,
     input  wire logic        cart_hit_in,
+    input  wire logic        ovr_hit,         // the tape's Instant loop (intv_tape): din is ovr_q
+    input  wire logic [15:0] ovr_q,
 
     // the ECS (intv_ecs, build step 9): UART, PSG #2, RAM
     input  wire logic        ecs_hit,
@@ -191,6 +193,7 @@ module intv_bus #(
             if (sel_gram) din &= stic_open ? {8'h00, gram_q} : 16'd0;   // closed: $0000 (TIMING_FIT)
             if (cart_hit) din &= cart_q;
             if (ecs_hit)  din &= ecs_q;
+            if (ovr_hit)  din = ovr_q;
         end
     end
 

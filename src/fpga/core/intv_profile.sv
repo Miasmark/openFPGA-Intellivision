@@ -25,8 +25,8 @@ module intv_profile #(
     output logic     [107:0] labels         // cell n's label index at [9n +: 9], 0 = none
 );
 
-    logic [39:0]  crc_rom [128];
-    logic [115:0] prof_rom [128];
+    (* ramstyle = "M10K" *) logic [39:0]  crc_rom [128];      // (1.0.7: block RAM, not logic)
+    (* ramstyle = "M10K" *) logic [115:0] prof_rom [128];
     initial begin
         $readmemh(CRC_HEX, crc_rom);
         $readmemh(PROF_HEX, prof_rom);

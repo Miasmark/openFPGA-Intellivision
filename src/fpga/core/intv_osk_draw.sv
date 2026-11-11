@@ -53,7 +53,7 @@ module intv_osk_draw #(
 
     logic [7:0] font_rom [512];
     logic [5:0] label_rom [8192];           // 512 labels of 16 (64 until 1.0.6)
-    logic [3:0] llen_rom [512];
+    (* ramstyle = "M10K" *) logic [3:0] llen_rom [512];
     /* verilator lint_off UNUSEDSIGNAL */
     logic [35:0] kbd_rom [64];              // a key's text: 5 characters at 29:0 (35:30 intv_input's)
     /* verilator lint_on UNUSEDSIGNAL */
@@ -74,7 +74,13 @@ module intv_osk_draw #(
     wire logic [3:0] cur0 = osk_cur[3:0], cur1 = osk_cur[7:4];
     wire logic [8:0] li0 = prof_ok && cur0 < 4'd12 ? labels[9 * cur0 +: 9] : 9'd0;
     wire logic [8:0] li1 = prof_ok && cur1 < 4'd12 ? labels[9 * cur1 +: 9] : 9'd0;
-    wire logic [3:0] ln0 = llen_rom[li0], ln1 = llen_rom[li1];
+    // their lengths, one clock behind (the cursor moves once a frame, at its start; 1.0.7: a
+    // block RAM read, 512 labels)
+    logic [3:0] ln0, ln1;
+    always_ff @(posedge clk) begin
+        ln0 <= llen_rom[li0];
+        ln1 <= llen_rom[li1];
+    end
 
     logic       w_grid, w_lab, w_pl;
     logic [6:0] w_dx;           // grid: x from the grid's left edge (0-36); label: from its start (0-111)

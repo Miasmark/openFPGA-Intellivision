@@ -1100,9 +1100,12 @@ def main():
         order = [i[0] for i in imgs]
 
         def other_blob(name, saves):
-            # the next image's first blob (its S run is in this set)
+            # the next image's first blob (its S run is in this set), from another game: an image
+            # with the same cartridge and CFG (ecsbasic, ecstape: ECS BASIC, no cartridge) is the
+            # same game to the core, whose state it rightly takes
             cands = [n for n in order[order.index(name) + 1:] + order[:order.index(name)]
-                     if saves.get(n) and isinstance(saves[n][0], tuple) and len(saves[n][0]) == 3]
+                     if saves.get(n) and isinstance(saves[n][0], tuple) and len(saves[n][0]) == 3
+                     and allimgs[n][1:3] != allimgs[name][1:3]]
             return saves[cands[0]][0][0] if cands else None
 
         saves = {}

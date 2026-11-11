@@ -261,7 +261,11 @@ module intv_loader #(
     logic        wbit [65536];
     logic [15:0] wb_a;
     logic        wb_we, wb_wd, wb_q;
+    // all 0 at power-up (block RAM without an init file); the loop is for simulation only
+    // (Quartus stops a loop at 5,000 iterations)
+    // synthesis translate_off
     initial for (int i = 0; i < 65536; i++) wbit[i] = 1'b0;
+    // synthesis translate_on
     always_ff @(posedge clk) begin
         if (wb_we) wbit[wb_a] <= wb_wd;
         wb_q <= wbit[wb_a];

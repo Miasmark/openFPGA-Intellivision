@@ -270,6 +270,13 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   SHIFT+K, RTN: one 1,792-byte block of its ECS RAM `$4100-$47FF`, 1,988 frames) and, in a fresh
   game with that tape, Old Game (RTN, 1, C, SHIFT+O, RTN: 1,805 frames): every byte back, both end
   on "Done". Game Factory's two-block save is covered by its rule in tb_tape's session script.
+- Tape speed (1.0.6): `sim/check/ecs_tape_check.py --basic --wsmlb --gf` runs every case at Normal
+  and at Instant and compares the tape, head, mode, ECS RAM (with the routine's control block),
+  `$015E / $015F` and Game Factory's cartridge RAM exactly (ECS BASIC with CVER and a CLOD waiting
+  at the tape's end; WSMLB; Game Factory driven through its menu: 4, STORE / LOAD); `tb_system
+  --ecs-play` ecstape_fast (ECS BASIC at Instant, RTL = model frame by frame) and its planted
+  faults (`--ecs-play --plants-only`, a short script: CSAV A, CLOD Z); `tb_savestate` ecstape (saves
+  inside the loop, plant ss_tape_loop_lost); `tb_tape` the FIFO at Instant's pace (plant fifo_one).
 - `tools/refs/ecs_ref_compare.py`: the model (MAME mode: MAME's ECS) against MAME intvecs traces
   and snapshots (`tools/refs/mame_ecs_trace.sh`): ECS BASIC typing, Mind Strike to its board,
   WSMLB to the field and pitching (its `$EA50` and `$FA50`/`$FA51`), Melody Blaster on the

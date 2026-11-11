@@ -123,6 +123,13 @@ SS_IMAGES = [
     ('ecsbasic', None, None, (0xFF, 0xFF), 520,
      '100-106:Enter,160-166:1,220-226:Enter',
      [(330, 'midinst'), (370, 'any'), (410, 'busrq'), (440, 'any')], (460, 10), 480),
+    # 1.0.6 (Tape speed Instant): ECS BASIC's CSAV A at Instant, the ECS ROM's tape routine called
+    # again at once (intv_tape): saves inside the loop (frames 432-435 run it, 45-64 calls each), so
+    # the loop's bits (a call running, the branch's displacement next, the $015E copy, an opcode
+    # fetch between its BAR and DTB) come back in the state
+    ('ecstape', None, None, (0xFF, 0xFF), 520,
+     '100-106:Enter,160-166:1,220-226:Enter,400-406:Enter,430-436:Enter',
+     [(432, 'any'), (433, 'midinst'), (434, 'any'), (435, 'midinst')], (460, 10), 480),
     ('ecssound', ('step9', 'ecssound'), None, (0xFF, 0xFF), 100, None,
      [(40, 'sound'), (55, 'midinst'), (70, 'sound'), (78, 'any')], (82, 6), 86),
     ('ecsavail', ('step9', 'ecsavail'), None, (0xFF, 0xFF), 60, None,
@@ -151,6 +158,9 @@ SS_ECS = {
                                          '336-342:ecs:P,348-354:ecs:R,360-366:ecs:I,372-378:ecs:N,'
                                          '384-390:ecs:T,396-402:ecs:SPACE,408-414:ecs:7,420-426:ecs:RTN,'
                                          '432-438:ecs:R,444-450:ecs:U,456-462:ecs:N,468-474:ecs:RTN'),
+    'ecstape': dict(ovr=0, mode=1, instant=True,
+                    presses='300-306:ecs:C,312-318:ecs:S,324-330:ecs:A,336-342:ecs:V,348-354:ecs:SPACE,'
+                            '360-366:ecs:A,372-378:ecs:RTN'),
     'ecssound': dict(ovr=0, mode=1),
     'ecsavail': dict(ovr=0, mode=2),
     'atlantis': dict(ovr=0, mode=2),       # Auto: attached (the hardware's default for it)
@@ -302,7 +312,7 @@ def prepare(work, img, lib, bdir):
     flags, ecrc, eargs = 0, 0, ['+ecs=2']
     if e:
         rom = [os.path.join(bdir, n) for n in ('ECS.bin', 'ecs.bin') if os.path.exists(os.path.join(bdir, n))][0]
-        eargs = ['+ecs=%d' % e['ovr'], '+ecsrom=' + rom]
+        eargs = ['+ecs=%d' % e['ovr'], '+ecsrom=' + rom] + (['+instant=1'] if e.get('instant') else [])
         if e['mode']:
             flags, ecrc = ss.FLAG_ECS, ss.crc32(open(rom, 'rb').read())
         if e.get('presses'):
@@ -937,6 +947,10 @@ PLANTS = [
     ('ss_ecsram_lost', 'intv_ecs.sv',
      [("rwe  = ss_en ? ss_we && ss_rhit : wr && sel_ram && on;", "rwe  = ss_en ? 1'b0 : wr && sel_ram && on;")],
      'ecsbasic', 'psgtest', AFTER),
+    # 1.0.6: a state made inside Tape speed Instant's loop: its bits not restored
+    ('ss_tape_loop_lost', 'intv_tape.sv',
+     [("            {fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];\n", "\n")],
+     'ecstape', 'psgtest', AFTER),
     # build step 10: the header's voice flag not checked (a state with the Intellivoice loads into a
     # core with it off: the V run, or the S run's blob check first); the sample enable's
     # accumulator not restored (the voice's samples after a load move); the quiet point not

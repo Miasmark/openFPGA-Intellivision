@@ -174,6 +174,7 @@ module tb_savestate;
     logic [1:0]  ecs_ovr = 2'd2;          // +ecs (step 9): the menu's ECS override; Off by default
     logic [1:0]  voice_ovr = 2'd2;        // +voice (step 10): the menu's Intellivoice; Off by default
     logic        synth = 1'b0;
+    logic        instant = 1'b0;          // +instant=1: Tape speed Instant (1.0.6)
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic        ecs_full;
     wire logic [11:0] slot_st;
@@ -220,7 +221,7 @@ module tb_savestate;
         .cart_len(cart_len), .len_chk(2'd0), .cfg_len(cfg_len), .cfg_inlist(cfg_inlist),
         .slot_st(slot_st), .len_st(len_st),
         .machine_reset(mreset), .cart_crc_o(), .cart_ready_o(), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
-        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(1'b0), .ecs_full(ecs_full),
+        .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(instant), .ecs_full(ecs_full),
         .voice_override(voice_ovr), .voice_dac7(1'b0), .voice_level(3'd4), .voice_on(voice_on), .ecs_level(3'd2),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
@@ -775,6 +776,7 @@ module tb_savestate;
             end
             if ($value$plusargs("ecs=%d", p)) ecs_ovr = 2'(p);
             if ($value$plusargs("synth=%d", p)) synth = p != 0;
+            if ($value$plusargs("instant=%d", p)) instant = p != 0;
             if ($value$plusargs("voice=%d", p)) voice_ovr = 2'(p);
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))

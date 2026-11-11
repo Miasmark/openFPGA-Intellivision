@@ -529,8 +529,8 @@ def _tape_instant(short=False):
     NEW, 10 PRIN 22, CSAV BBB, NEW, CLOD AAA (past BBB), RUN (1.00), CVER BBB, then CLOD ZZZ (no
     such name: both blocks read, then the routine waits at the tape's end, busy, with nothing to
     read, so the loop is off). short (the planted faults' run): CSAV A, then CLOD Z.
-    -> (presses, frames, rt): rt a cycle inside the first save's loop (2 frames after its GO, 6,000
-    cycles in), for a round trip (a state saved and restored there)."""
+    -> (presses, frames). (A state made inside the loop: tb_savestate's ecstape image; the frame
+    gate's +bushash runs take no round trip.)"""
     sys.path.insert(0, os.path.join(ROOT, 'tools'))
     import ecs as ecsm
     out, t = ['300-306:Enter,420-426:1,500-506:Enter'], 800
@@ -548,15 +548,13 @@ def _tape_instant(short=False):
     if short:
         typ('CSAV A\n', 60)
         key()
-        rt = (t + 2) * FRAME + 6000
         key(40)
         typ('CLOD Z\n', 60)
         key()
         key(60)
-        return ','.join(out), t, rt
+        return ','.join(out), t
     typ('10 PRIN 1\nCSAV AAA\n', 60)
     key()
-    rt = (t + 2) * FRAME + 6000
     key(40)
     typ('NEW\n10 PRIN 22\nCSAV BBB\n', 60)
     key()
@@ -570,7 +568,7 @@ def _tape_instant(short=False):
     typ('CLOD ZZZ\n', 60)
     key()
     key(60)
-    return ','.join(out), t, rt
+    return ','.join(out), t
 
 
 ECS_PLAY = [
@@ -600,7 +598,7 @@ ECS_PLAY = [
     # M=0, O=0) and RUN; MOB 0 then shows GRAM card 62 = the cartridge's $53F5 picture (the boat).
     # MAME's intvecs agrees instruction by instruction and on 4 snapshots (ecs_ref_compare, 2026-10-29).
     ('ecstape', None, _tape_basic()[1], _tape_basic()[0], dict(ovr='auto')),
-    ('ecstape_fast', None, _tape_instant()[1], _tape_instant()[0], dict(ovr='auto', instant=True, rt=_tape_instant()[2])),
+    ('ecstape_fast', None, _tape_instant()[1], _tape_instant()[0], dict(ovr='auto', instant=True)),
     ('grab', 'Advanced Dungeons & Dragons (USA, Europe).zip', 2056,
      '300-306:Enter,420-426:1,500-506:Enter,'
      + _typed(800, '140 D=0\n150 N=7\n160 M=0\n170 O=0\n180 CALL GRAB\n190 CO(0)=11\n200 XS(0)=1\n210 GOTO 210\nRUN\n'),
@@ -1582,8 +1580,6 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
         with open(kf, 'w') as f:
             f.writelines(key_lines(presses, npics))
         cmd.append('+keys=' + kf)
-    if ecs and ecs.get('rt'):           # 1.0.6: a round trip (a state saved and restored) there
-        cmd += ['+rt=1', '+rtcyc=%d' % ecs['rt'], '+rtsub=17']
     if ecs:                             # step 9: the ECS keys come with the same presses
         e2 = dict(ecs, presses=None)
         cmd += ecs_args(work, 'screen_' + name, e2, npics)
@@ -2491,8 +2487,7 @@ def screens_main(a, verilator, work, lib, exec_path, grom_path):
 
 
 # 1.0.6, Tape speed Instant's planted faults (--ecs-play --plants-only / --plant): each runs the
-# short Instant script (_tape_instant(short=True): CSAV A, CLOD Z, with a round trip inside the
-# save's loop) and must make it differ from the model: (name, file, [(from, to)]). The busy
+# short Instant script (_tape_instant(short=True): CSAV A, CLOD Z) and must make it differ from the model: (name, file, [(from, to)]). The busy
 # condition has no plant: the routine is called only while busy, and the call that clears it
 # also stops the motor (so the tape is not ready either), except on the error path at a buffer's
 # end, which no script reaches.
@@ -2503,14 +2498,13 @@ ECS_PLAY_PLANTS = [
     ('tape_loop_operand', 'intv_tape.sv', [("ovr_hit = 1'b1; ovr_q = 16'h0004; end", "ovr_hit = 1'b1; ovr_q = 16'h0005; end")]),
     ('tape_loop_helper_out', 'intv_tape.sv', [("|| (wdata >= 16'h70B0 && wdata <= 16'h70B9);", ";")]),
     ('tape_ovr_anded', 'intv_bus.sv', [("            if (ovr_hit)  din = ovr_q;", "            if (ovr_hit)  din &= ovr_q;")]),
-    ('tape_ss_loop_lost', 'intv_tape.sv', [("            {fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];", "")]),
 ]
 
 
 def ecs_play_plants(a, verilator, work, exec_path, grom_path):
     names = a.plant.split(',') if a.plant else None
-    presses, nframes, rt = _tape_instant(short=True)
-    ecs = dict(ovr='auto', instant=True, rt=rt)
+    presses, nframes = _tape_instant(short=True)
+    ecs = dict(ovr='auto', instant=True)
     fails = []
     for name, fn, subs in ECS_PLAY_PLANTS:
         if names and name not in names:

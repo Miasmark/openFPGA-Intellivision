@@ -1061,7 +1061,7 @@ module intv_loader #(
                     ai <= ai + 7'd1;
                     st <= F_ASM;
                 end else
-                    st <= asm_q[30:29] == A_POOL ? F_FILL : asm_q[30:29][1] ? F_CP_RQ : F_SCAN;
+                    st <= asm_q[30:29] == A_POOL ? F_FILL : asm_q[30] ? F_CP_RQ : F_SCAN;
             end
             F_FILL: if (f_push) begin
                 wcnt <= wcnt + 9'd1;

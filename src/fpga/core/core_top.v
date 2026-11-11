@@ -976,7 +976,7 @@ test_pattern pattern (
 // Build step 13: the game profile (by the cartridge's CRC) and the
 // on-screen keypads and (1.0.4) ECS keyboard drawn over the playfield
 // (tools/osk.py; intv_input steps them at each frame's start).
-    wire    [71:0]  prof_labels;
+    wire    [107:0] prof_labels;
     wire    [1:0]   osk_ovl;
     assign osk_frame = ce_pix && hcnt == 9'd0 && vline == 9'd0;
 

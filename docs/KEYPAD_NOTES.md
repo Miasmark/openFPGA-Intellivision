@@ -70,18 +70,39 @@ ring, Right stick) ignore the profile's mode and sides, but the labels are still
 | TRON Deadly Discs | Face-button ring | as usual | throws in 8 directions, 5 = block |
 | AD&D Cloudy Mountain (two CRCs) | Layer | as usual | 8 arrow directions, Clear / 0 / Enter |
 
+**1.0.7: 63 more games** (`tools/osk_profiles.py`; the owner, 2026-11-11: "you have the overlay
+scans already"). Their labels are typed from the owner's 97 overlay scans, matched to the games
+by CRC (`research/test-assets/overlay_index.csv`, outside the repository): what each key's cell
+of the overlay says, in our words and at most 14 characters. The scans are never in the
+repository or a release; only the short labels are. All take Layer and the usual side actions:
+no overlay asks for another mode (a mode or side remap is proposed to the owner, not guessed).
+The scans with no profile, and why:
+
+| Overlay | Why no profile |
+|---|---|
+| Beauty & the Beast, Buzz Bombers, The Jetsons' Ways With Words, Night Stalker, Scooby Doo's Maze Chase | a picture, no key functions |
+| Bump 'n' Jump, BurgerTime, Kool-Aid Man, Lock 'N' Chase, Mission X, Vectron, Masters of the Universe | only digits (and Enter) on the keys |
+| Championship Tennis, Motocross, SNAFU, U.S. Ski Team Skiing, World Cup Soccer, Las Vegas Roulette, Demon Attack, Pitfall! | only digits, game numbers, Clear and Enter |
+| Major League Baseball | a field picture: which player is which key is not printed |
+
+Second scans of a game (`auto-101`, `bump-100`, `buzz-100`, `hrac-100`, `mlbb-100`, `moto-100`,
+`pinb-100`) and two duplicate files read the same as the first. 67 profiles, 70 CRCs, 349 labels.
+
 `python3 -I tools/osk.py gen` writes the RTL's tables (`src/fpga/core/tables/osk_*.hex`):
 
 | File | Holds |
 |---|---|
-| `osk_crc.hex` | 64 entries of valid, CRC, profile |
-| `osk_prof.hex` | mode, sides and 12 label indices per profile |
-| `osk_label.hex` | 64 labels of 16 bytes (length, then character codes) |
+| `osk_crc.hex` | 128 entries of valid, CRC, profile (64 until 1.0.6) |
+| `osk_prof.hex` | mode, sides and 12 label indices (9 bits each; 6 until 1.0.6) per profile, 128 profiles |
+| `osk_label.hex` | 512 labels of 16 bytes (length, then character codes; 64 until 1.0.6) |
 | `osk_llen.hex` | the labels' lengths |
 | `osk_font.hex` | 64 glyphs of 8 rows |
 
 `intv_profile` scans the CRC table one entry a clk, round and round, and takes the result at the
-end of each round of 64.
+end of each round of 128 (64 until 1.0.6). The label pool is 8,192 x 6 bits of block RAM. tb_osk's
+spec frames step every cell of seven profiles (the first four, the one with the pool's last label,
+the one in the CRC table's last entry, the one with the most 14-character labels); its random
+frames choose among all 70 CRCs; the tables are the model's (`osk.py gen --check`).
 
 ## 4 Gates
 

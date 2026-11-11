@@ -334,8 +334,14 @@ PROFILES = [
                  6: "SHOOT RIGHT", 7: "SHOOT DN-LEFT", 8: "SHOOT DOWN", 9: "SHOOT DN-RIGHT",
                  "C": "PICK UP", 0: "COUNT ARROWS", "E": "EXIT"}),
 ]
-MAX_PROFILES = 64                   # the CRC table's entries (osk_crc.hex)
-MAX_LABELS = 64                     # the label pool (osk_label.hex: 16 bytes each, 0 = none)
+# 1.0.7: the overlays' key functions for 63 more games (tools/osk_profiles.py), Layer mode and the
+# usual side actions
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+from osk_profiles import PROFILES_107                                      # noqa: E402
+PROFILES += [dict(p, mode=0, sides=SIDES) for p in PROFILES_107]
+MAX_PROFILES = 128                  # the CRC table's entries (osk_crc.hex; 64 until 1.0.6)
+MAX_LABELS = 512                    # the label pool (osk_label.hex: 16 bytes each, 0 = none; 64 until 1.0.6)
+LBITS = 9                           # a label index's bits (6 until 1.0.6)
 
 
 def profile_for(crc):
@@ -443,7 +449,7 @@ def draw(players, prof, kb=None):
 
 # ---------------------------------------------------------------------- the RTL's tables
 def crc_hex():
-    """osk_crc.hex: 64 entries of 40 bits: valid, CRC-32, profile index (7 bits)."""
+    """osk_crc.hex: 128 entries of 40 bits: valid, CRC-32, profile index (7 bits)."""
     ent = []
     for i, p in enumerate(PROFILES):
         for c in p["crcs"]:
@@ -453,23 +459,23 @@ def crc_hex():
 
 
 def prof_hex():
-    """osk_prof.hex: 64 records of 80 bits: mode (2), sides (A, B, X: 2 bits each, 0 lr, 1 ll,
-    2 top), 12 label indices (6 bits each, cell 0 at the low end; 0 = none)."""
+    """osk_prof.hex: 128 records of 116 bits: mode (2), sides (A, B, X: 2 bits each, 0 lr, 1 ll,
+    2 top), 12 label indices (LBITS = 9 bits each, cell 0 at the low end; 0 = none)."""
     pool = label_pool()
-    assert len(pool) < MAX_LABELS
+    assert len(pool) < MAX_LABELS and len(PROFILES) <= MAX_PROFILES
     recs = []
     for p in PROFILES:
         v = 0
         for cell in range(NCELL):
             t = label(p, cell)
-            v |= (pool.index(t) + 1 if t else 0) << (6 * cell)
+            v |= (pool.index(t) + 1 if t else 0) << (LBITS * cell)
         sides = sum(SIDES.index(s) << (2 * i) for i, s in enumerate(p["sides"]))
-        recs.append((p["mode"] << 78) | (sides << 72) | v)
+        recs.append((p["mode"] << (12 * LBITS + 6)) | (sides << (12 * LBITS)) | v)
     return recs + [0] * (MAX_PROFILES - len(recs))
 
 
 def label_hex():
-    """osk_label.hex: 64 labels x 16 bytes (byte 0: length, then the character codes)."""
+    """osk_label.hex: 512 labels x 16 bytes (byte 0: length, then the character codes)."""
     pool = label_pool()
     out = [0] * (16 * MAX_LABELS)
     for i, t in enumerate(pool):
@@ -482,7 +488,7 @@ def label_hex():
 
 
 def llen_hex():
-    """osk_llen.hex: the 64 labels' lengths (the drawing places player 2's label by it)."""
+    """osk_llen.hex: the 512 labels' lengths (the drawing places player 2's label by it)."""
     lab = label_hex()
     return [lab[16 * i] for i in range(MAX_LABELS)]
 
@@ -509,7 +515,7 @@ def font_hex():
 
 def tables():
     return {"osk_crc.hex": ["%010x" % e for e in crc_hex()],
-            "osk_prof.hex": ["%020x" % e for e in prof_hex()],
+            "osk_prof.hex": ["%029x" % e for e in prof_hex()],
             "osk_label.hex": ["%02x" % e for e in label_hex()],
             "osk_llen.hex": ["%x" % e for e in llen_hex()],
             "osk_font.hex": ["%02x" % e for e in font_hex()],

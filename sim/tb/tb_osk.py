@@ -50,6 +50,24 @@ TB = os.path.join(ROOT, 'sim', 'tb', 'tb_osk.sv')
 T1, T2, T3 = 1 << 28, 2 << 28, 3 << 28
 CENTRE = 0x80808080
 CRCS = [c for p in osk.PROFILES for c in p['crcs']]
+# the spec frames' profiles (1.0.7: 67 profiles, 70 CRCs; every one in the spec would triple the
+# bench): the first four (build step 13), the one with the pool's last label (the label index's top
+# bits), the one in the CRC table's last used entry (the scan's top index bits), and the one with the
+# most 14-character labels (player 2's right-aligned label at full length). The random frames choose
+# from all of CRCS; the tables themselves are the model's (osk.py gen --check).
+def _spec_crcs():
+    pool = osk.label_pool()
+    last_label = next(p for p in osk.PROFILES if pool[-1] in p['labels'].values())
+    longest = max(osk.PROFILES, key=lambda p: sum(len(t) == osk.LABEL_MAX for t in p['labels'].values()))
+    out = []
+    for p in osk.PROFILES[:4] + [last_label, osk.PROFILES[-1], longest]:
+        for c in p['crcs']:
+            if c not in out:
+                out.append(c)
+    return out
+
+
+SPEC_CRCS = _spec_crcs()
 NOPROF = 0x12345678
 
 
@@ -93,7 +111,7 @@ def spec_frames():
     fr += [frame(k1=0)] * 2                                 # no controller: closed
     fr += [frame(k1=T1)]
     # both players, every profile, every cell (labels), Auto
-    for crc in CRCS + [NOPROF]:
+    for crc in SPEC_CRCS + [NOPROF]:
         fr.append(frame(k1=T1 | btn('sel'), k2=T2 | btn('sel'), mode=3, crc=crc))
         fr.append(frame(k1=T1, k2=T2, mode=3, crc=crc))
         for i in range(12):
@@ -334,14 +352,14 @@ PLANTS = [
     ('auto_mode_ignored', 'intv_input.sv', "wire logic [1:0] pmd  = auto ? (prof_ok ? prof_mode : 2'd0) : md;",
      "wire logic [1:0] pmd  = auto ? 2'd0 : md;"),
     ('prof_first_entry_lost', 'intv_profile.sv', "end else if (e[39] && e[38:7] == crc) begin",
-     "end else if (e[39] && e[38:7] == crc && ie != 6'd0) begin"),
+     "end else if (e[39] && e[38:7] == crc && ie != 7'd0) begin"),
     ('draw_no_shadow', 'intv_osk_draw.sv', ": (sh && !q_press) ? DARK\n                     : (q_press && q_ox",
      ": 1'b0 ? DARK\n                     : (q_press && q_ox"),
     ('draw_p2_label_row', 'intv_osk_draw.sv', "ly1 = osk_open[0] ? 8'(LY - 20) : 8'(LY);", "ly1 = 8'(LY);"),
     ('draw_cursor_box', 'intv_osk_draw.sv', "|| by < 7'd2 || by >= 7'd20);", "|| by < 7'd2 || by >= 7'd21);"),
     ('draw_shadow_row', 'intv_osk_draw.sv', "ph == 4'd1 ? grow : grow - 3'd1", "grow"),
     ('draw_press_fill', 'intv_osk_draw.sv', "(q_press && q_ox >= 4'd1 && q_oy >= 5'd2)", "(q_press && q_ox >= 4'd1 && q_oy >= 5'd1)"),
-    ('draw_label_char', 'intv_osk_draw.sv', "{w_li, 4'd0} + 10'd1 + 10'(w_dx[6:3])", "{w_li, 4'd0} + 10'(w_dx[6:3])"),
+    ('draw_label_char', 'intv_osk_draw.sv', "{w_li, 4'd0} + 13'd1 + 13'(w_dx[6:3])", "{w_li, 4'd0} + 13'(w_dx[6:3])"),
     # the ECS keyboard (1.0.4)
     ('kb_no_wrap', 'intv_input.sv', "if (rise[0]) r = r == 3'd0 ? 3'd4 : r - 3'd1;",
      "if (rise[0]) r = r == 3'd0 ? 3'd0 : r - 3'd1;"),

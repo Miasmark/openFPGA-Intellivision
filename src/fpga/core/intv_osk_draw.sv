@@ -44,7 +44,7 @@ module intv_osk_draw #(
     input  wire logic [5:0]  kb_held,
     input  wire logic [1:0]  kb_mods,
     input  wire logic        prof_ok,       // intv_profile
-    input  wire logic [71:0] labels,
+    input  wire logic [107:0] labels,
     output logic      [1:0]  ovl            // 0 none, 1 white, 2 dark, 3 yellow
 );
 
@@ -52,8 +52,8 @@ module intv_osk_draw #(
     localparam int GX0 = 2, GX1 = 121, GY = 108, GW = 37, GH = 82, LY = 90;
 
     logic [7:0] font_rom [512];
-    logic [5:0] label_rom [1024];
-    logic [3:0] llen_rom [64];
+    logic [5:0] label_rom [8192];           // 512 labels of 16 (64 until 1.0.6)
+    logic [3:0] llen_rom [512];
     /* verilator lint_off UNUSEDSIGNAL */
     logic [35:0] kbd_rom [64];              // a key's text: 5 characters at 29:0 (35:30 intv_input's)
     /* verilator lint_on UNUSEDSIGNAL */
@@ -72,18 +72,18 @@ module intv_osk_draw #(
     // ------------------------------------------------------------------ ph 0: where
     // the cursor key's label of each player: pool index and length
     wire logic [3:0] cur0 = osk_cur[3:0], cur1 = osk_cur[7:4];
-    wire logic [5:0] li0 = prof_ok && cur0 < 4'd12 ? labels[6 * cur0 +: 6] : 6'd0;
-    wire logic [5:0] li1 = prof_ok && cur1 < 4'd12 ? labels[6 * cur1 +: 6] : 6'd0;
+    wire logic [8:0] li0 = prof_ok && cur0 < 4'd12 ? labels[9 * cur0 +: 9] : 9'd0;
+    wire logic [8:0] li1 = prof_ok && cur1 < 4'd12 ? labels[9 * cur1 +: 9] : 9'd0;
     wire logic [3:0] ln0 = llen_rom[li0], ln1 = llen_rom[li1];
 
     logic       w_grid, w_lab, w_pl;
     logic [6:0] w_dx;           // grid: x from the grid's left edge (0-36); label: from its start (0-111)
     logic [6:0] w_dy;           // grid: y from its top (0-81); label: from its first line (0-15)
-    logic [5:0] w_li;
+    logic [8:0] w_li;
     always_comb begin
         logic [7:0] lx1;
         logic [7:0] ly1;
-        w_grid = 1'b0; w_lab = 1'b0; w_pl = 1'b0; w_dx = 7'd0; w_dy = 7'd0; w_li = 6'd0;
+        w_grid = 1'b0; w_lab = 1'b0; w_pl = 1'b0; w_dx = 7'd0; w_dy = 7'd0; w_li = 9'd0;
         lx1 = 8'(GX1 + GW) - {1'b0, ln1, 3'd0};
         ly1 = osk_open[0] ? 8'(LY - 20) : 8'(LY);
         if (pf_y >= 8'(GY) && pf_y < 8'(GY + GH)) begin
@@ -93,10 +93,10 @@ module intv_osk_draw #(
                 w_grid = 1'b1; w_pl = 1'b1; w_dx = 7'(pf_x - 8'(GX1)); w_dy = 7'(pf_y - 8'(GY));
             end
         end
-        if (osk_open[0] && li0 != 6'd0 && pf_y >= 8'(LY) && pf_y < 8'(LY + 16)
+        if (osk_open[0] && li0 != 9'd0 && pf_y >= 8'(LY) && pf_y < 8'(LY + 16)
             && pf_x >= 8'(GX0) && pf_x < 8'(GX0) + {1'b0, ln0, 3'd0}) begin
             w_lab = 1'b1; w_dx = 7'(pf_x - 8'(GX0)); w_dy = 7'(pf_y - 8'(LY)); w_li = li0;
-        end else if (osk_open[1] && li1 != 6'd0 && pf_y >= ly1 && pf_y < ly1 + 8'd16
+        end else if (osk_open[1] && li1 != 9'd0 && pf_y >= ly1 && pf_y < ly1 + 8'd16
                      && pf_x >= lx1 && pf_x < 8'(GX1 + GW)) begin
             w_lab = 1'b1; w_pl = 1'b1; w_dx = 7'(pf_x - lx1); w_dy = 7'(pf_y - ly1); w_li = li1;
         end
@@ -284,7 +284,7 @@ module intv_osk_draw #(
 
     // ------------------------------------------------------------------ ph 1: the character
     // the label's character: the pool read with ph 0's address, so it is there in ph 1
-    wire  logic [9:0] w_la = {w_li, 4'd0} + 10'd1 + 10'(w_dx[6:3]);
+    wire  logic [12:0] w_la = {w_li, 4'd0} + 13'd1 + 13'(w_dx[6:3]);
     logic [5:0] lab_q;
     always_ff @(posedge clk)
         lab_q <= label_rom[w_la];

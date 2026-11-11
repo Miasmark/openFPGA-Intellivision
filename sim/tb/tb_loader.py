@@ -52,7 +52,7 @@ sys.path.insert(0, HERE)
 import tbcommon           # noqa: E402
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
-RTL = ['intv_jlp_pkg.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
+RTL = ['intv_jlp_pkg.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv', 'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_luiparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
        'apf_datatable.sv', 'apf_cfgfetch.sv']
 OTHER = [os.path.join(CORE, 'core_bridge_cmd.v'),
          os.path.join(ROOT, 'src', 'fpga', 'apf', 'common.v'),
@@ -534,7 +534,7 @@ PLANTS = [
      "s_d = {2'b11, off[17:1], ld_data, hb};", 'little-endian words'),
     ('pt_off_by_one', 'intv_loader.sv', "assign lay_ra = {lid[4:0], r, b[3]};",
      "assign lay_ra = {lid[4:0], r, b[3]} + 10'd1;", 'layout entry read one entry off'),
-    ('odd_low_byte', 'intv_loader.sv', "F_FIX: if (len[0] && {1'b0, len[31:1]} < 32'h10000 && !rom_mode) begin",
+    ('odd_low_byte', 'intv_loader.sv', "F_FIX: if (len[0] && {1'b0, len[31:1]} < 32'h10000 && !big_mode) begin",
      "F_FIX: if (1'b0) begin", 'odd length: pad byte left in the last word'),
     ('default_uncut', 'intv_loader.sv',
      "if (lay_q[15:14] == 2'd1 && !(lid == 8'd1 && {1'b0, lay_q[8:0]} >= {4'd0, units})) begin",
@@ -583,7 +583,7 @@ PLANTS = [
      "st <= asm_q[30:29] == A_POOL ? F_SCAN :", 'pool blocks not filled ($FFFF gaps)'),
     ('rom_tabcrc_off', 'intv_romparse.sv', "                    if ({got, in_c} != crc) begin\n                        err <= 8'h23;",
      "                    if (1'b0) begin\n                        err <= 8'h23;", '.rom table CRC not checked'),
-    ('rom_no_clear', 'intv_loader.sv', "st <= (src == 2'd3 && !cov_q) ? F_COV_Z : F_COV_N;",
+    ('rom_no_clear', 'intv_loader.sv', "st <= (src == 3'd3 && !cov_q) ? F_COV_Z : F_COV_N;",
      "st <= F_COV_N;", '.rom: blocks no segment wrote not cleared'),
     ('rom_fine_off', 'intv_loader.sv', "if (!(rp_tq[6:4] <= b[2:0] && b[2:0] <= rp_tq[2:0]))",
      "if (!(rp_tq[6:4] <= b[2:0] && b[2:0] < rp_tq[2:0]))", '.rom fine range one block short'),
@@ -674,6 +674,35 @@ PLANTS = [
      "end else if (1'b1) begin", 'the CFG fetch before Ready to run\'s ok (or its give-up)'),
     ('dt_cfg_as_cart', 'apf_datatable.sv', "end else if (!is_cfg && !got_cart && !rescan) begin",
      "end else if (!got_cart && !rescan) begin", 'the CFG entry taken for the cartridge without a cartridge entry'),
+    # LUIGI (1.0.7; docs/CARTFORMATS.md 8)
+    ('lui_hdr_crc_off', 'intv_luiparse.sv', "if (in_c != hcrc) begin err <= E_HDR;", "if (1'b0) begin err <= E_HDR;",
+     'LUIGI: the header DOWCRC not checked'),
+    ('lui_pcrc_off', 'intv_luiparse.sv', "if (c2 != pc) begin err <= E_PCRC;", "if (1'b0) begin err <= E_PCRC;",
+     'LUIGI: a payload CRC32/4 not checked'),
+    ('lui_10bit_msb', 'intv_luiparse.sv', "j == 3'd0 ? top[7:6] : j == 3'd1 ? top[5:4]",
+     "j == 3'd0 ? top[5:4] : j == 3'd1 ? top[7:6]", 'LUIGI: 10-bit blocks\' top bits swapped'),
+    ('lui_8bit_close', 'intv_luiparse.sv', "if (n == 7'd1) h <= H_W0;", "if (n == 7'd1) h <= H_S;",
+     'LUIGI: an 8-bit block without its closing word'),
+    ('lui_high_lowest', 'intv_luiparse.sv', "            if (free[k]) fpp = 4'(k);",
+     "            if (free[15 - k]) fpp = 4'(15 - k);", 'LUIGI: data above $10000 on the lowest free page'),
+    ('lui_used_flip', 'intv_luiparse.sv', "if (lo[1:0] != 2'd0 && in_c[2:0] == 3'd0) used[lo[7:4]] <= 1'b1;", ";",
+     'LUIGI: pages a page flip uses taken as free'),
+    ('lui_jlp_kept', 'intv_luiparse.sv', "end else if (jlp && w2_a < 19'h12000) begin", "end else if (1'b0) begin",
+     'LUIGI: Locutus JLP RAM data not dropped'),
+    ('lui_no_zero', 'intv_loader.sv', "F_LW2:   if (src == 3'd4 && !wb_q) begin", "F_LW2:   if (1'b0) begin",
+     'LUIGI: unwritten plane-1 words not cleared'),
+    ('lui_flip_page0', 'intv_loader.sv', "uf = paged[r] && y != 4'd0;",
+     "uf = paged[r];", 'LUIGI: page 0 from the page flips, not the reset map'),
+    ('lui_4800_all', 'intv_loader.sv', "if (y != 4'd0 && (!paged[r] || (r == 4'd4 && !b[3]))) begin",
+     "if (y != 4'd0 && !paged[r]) begin", 'LUIGI: a $4xxx flip moves $4000-$47FF too'),
+    ('lui_b_own', 'intv_loader.sv', "bb = !l_fl && lp_perm[3];", "bb = !l_fl && l_pm[3];",
+     'LUIGI: B of the paragraph, not of its half-page\'s first'),
+    ('lui_narrow_rom', 'intv_loader.sv', "l_pm[2] && l_pm[1], bb, base};", "l_pm[2], bb, base};",
+     'LUIGI: NARROW without WRITE makes reads 8-bit'),
+    ('lui_noread_open', 'intv_loader.sv', "rr = l_pm[0] && !((r == 4'd0 && b < 4'd5) || r == 4'd1 || r == 4'd3);",
+     "rr = l_pm[0];", 'LUIGI: reads answered where Locutus answers none'),
+    ('lui_ram_src', 'intv_loader.sv', "c_src  <= asm_q[30:29] == A_LUI ? asm_sq[16:0] :",
+     "c_src  <= asm_q[30:29] == 2'd0 ? asm_sq[16:0] :", 'LUIGI: RAM preloaded from its own address, not its Locutus one'),
 ]
 PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', 'REQ0', 'NOTAB1',
                 'RELOAD0', 'RELOAD1', 'cfgmap', 'rombank', 'zoo2', 'zoo5', 'romfine', 'rom_tabcrc',
@@ -681,7 +710,8 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
                 'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT',
                 'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL',
-                'VOICECFG', 'VOICECMP', 'VOICEROM', 'NOIVOICE')
+                'VOICECFG', 'VOICECMP', 'VOICEROM', 'NOIVOICE',
+                'lui_paged', 'lui_bank', 'lui_jlp', 'lui_hdrcrc', 'lui_pcrc')
 
 
 def main():

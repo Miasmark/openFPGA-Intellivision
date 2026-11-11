@@ -401,8 +401,8 @@ def main():
     # streams and the user never picks: not reloadable, read-only, in the cartridges' folder
     check(int(cfg["parameters"], 16) == 0x8 and cfg.get("deferload") is True and cfg.get("required") is False,
           "config: deferload, read-only, not user-reloadable, common folder (0x8): the core finds NAME.cfg")
-    check(cart["extensions"] == ["int", "bin", "rom", "itv"] and cfg["extensions"] == ["cfg"],
-          "extensions: cartridge int/bin/rom/itv, config cfg (DESIGN.md 5.6)")
+    check(cart["extensions"] == ["int", "bin", "rom", "luigi"] and cfg["extensions"] == ["cfg"],
+          "extensions: cartridge int/bin/rom/luigi (1.0.7: luigi in itv's place, the slot's four), config cfg (DESIGN.md 5.6)")
     jlp = slots[6]
     check(jlp.get("nonvolatile") is True and int(jlp["parameters"], 16) == 0x84 and "filename" not in jlp,
           "JLP flash: nonvolatile, one file per game (0x84)")

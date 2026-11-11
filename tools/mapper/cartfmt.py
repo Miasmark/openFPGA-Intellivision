@@ -51,7 +51,7 @@ BANK0 = [((i & 15) << 4) | (8 if i & 16 else 0) for i in range(32)]
 
 FMT_NONE, FMT_RAW, FMT_CFG, FMT_ROM = 0, 1, 2, 3
 FMT_NAMES = {FMT_NONE: 'none', FMT_RAW: 'raw', FMT_CFG: 'bin+cfg', FMT_ROM: 'rom'}
-LAYOUT_CFG, LAYOUT_ROM = 0xFE, 0xFF
+LAYOUT_CFG, LAYOUT_ROM, LAYOUT_LUI = 0xFE, 0xFF, 0xFD   # 1.0.7: a LUIGI is format .rom, layout $FD
 
 # flags (as tools/mapper/intvcart.py)
 FLAG_ECS, FLAG_VOICE, FLAG_RAM, FLAG_PAGED = 0x01, 0x02, 0x04, 0x08
@@ -73,13 +73,31 @@ ERR_ROM_SHORT = 0x22        # the file ends before the enable tables and their C
 ERR_ROM_TABCRC = 0x23       # the enable tables' CRC-16
 ERR_ROM_LTO = 0x24          # compat tag asks for the LTO mapper
 ERR_ROM_BIG = 0x25          # the file is longer than the loader takes (1 MiB)
+# LUIGI (1.0.7, docs/CARTFORMATS.md 8)
+ERR_LUI_HDR = 0x28          # the header's DOWCRC
+ERR_LUI_BHDR = 0x29         # a block header's DOWCRC
+ERR_LUI_PCRC = 0x2A         # a block payload's CRC32/4
+ERR_LUI_ENC = 0x2B          # an encrypted file (block $00)
+ERR_LUI_TAB = 0x2C          # the tables block missing, twice, or not 1,280 bytes
+ERR_LUI_ORDER = 0x2D        # a data hunk before the tables
+ERR_LUI_HUNK = 0x2E         # a data hunk's packing (a reserved start byte, a block past the payload)
+ERR_LUI_SHORT = 0x2F        # the file ends inside the header or a block
+ERR_LUI_LTO = 0x30          # lto_mapper: the LTO Flash mapper is not documented
+ERR_LUI_FULL = 0x31         # data above Locutus $10000 with no free 4K page of plane 1 (or with bankswitching)
+ERR_LUI_CLASH = 0x32        # data below $10000 on a plane-1 page given to data above it
+ERR_LUI_BSW = 0x33          # bankswitching with a memory map that is not the identity
 ERR_NAMES = {
     ERR_CFG_SYNTAX: 'CFG syntax', ERR_CFG_MANY: 'CFG: too many ranges', ERR_CFG_RANGE: 'CFG: range',
     ERR_CFG_PAGE: 'CFG: PAGE', ERR_CFG_MIX: 'CFG: bankswitch with PAGE', ERR_CFG_LTO: 'CFG: lto_mapper',
     ERR_CFG_SHORT: 'CFG: shorter than its data table length', ERR_RAM_FULL: 'cart RAM over 16K cells',
     ERR_POOL_FULL: 'too many partial blocks', ERR_ROM_RANGE: '.rom: segment range',
     ERR_ROM_SEGCRC: '.rom: segment CRC', ERR_ROM_SHORT: '.rom: truncated', ERR_ROM_TABCRC: '.rom: table CRC',
-    ERR_ROM_LTO: '.rom: LTO mapper', ERR_ROM_BIG: '.rom: too long'}
+    ERR_ROM_LTO: '.rom: LTO mapper', ERR_ROM_BIG: '.rom: too long',
+    ERR_LUI_HDR: 'LUIGI: header CRC', ERR_LUI_BHDR: 'LUIGI: block header CRC', ERR_LUI_PCRC: 'LUIGI: payload CRC',
+    ERR_LUI_ENC: 'LUIGI: encrypted', ERR_LUI_TAB: 'LUIGI: tables block', ERR_LUI_ORDER: 'LUIGI: data before the tables',
+    ERR_LUI_HUNK: 'LUIGI: data packing', ERR_LUI_SHORT: 'LUIGI: truncated', ERR_LUI_LTO: 'LUIGI: LTO mapper',
+    ERR_LUI_FULL: 'LUIGI: no room for data above $10000', ERR_LUI_CLASH: 'LUIGI: data on a page given to paged data',
+    ERR_LUI_BSW: 'LUIGI: bankswitching with a moved map'}
 
 MAXR = 32                   # CFG ranges ([mapping] [preload] [memattr] [bankswitch] lines)
 
@@ -625,6 +643,350 @@ def parse_rom(data):
     return p
 
 
+
+# ---------------------------------------------------------------------------------------
+# LUIGI (1.0.7; docs/CARTFORMATS.md 8; tools/mapper/luigi.py; intv_luiparse.sv)
+# ---------------------------------------------------------------------------------------
+def is_luigi(data):
+    """The loader's test, after byte 3: "LTO" and version 0 or 1."""
+    return len(data) >= 4 and data[:3] == b'LTO' and data[3] <= 1
+
+
+def _dow(crc, c):
+    crc ^= c
+    for _ in range(8):
+        crc = (crc >> 1) ^ (0x98 if crc & 1 else 0)
+    return crc
+
+
+def _c324(crc, c):
+    crc ^= c
+    for _ in range(8):
+        crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
+    return crc
+
+
+(L_HDR, L_BT, L_L0, L_L1, L_HC, L_P0, L_P1, L_P2, L_P3, L_PAY, L_DONE) = range(11)
+(H_A0, H_A1, H_A2, H_S, H_8, H_T, H_L, H_W0, H_W1, H_X0, H_X1) = range(11)
+
+
+class LuiParser:
+    """A LUIGI's bytes from offset 4 on (feed(offset, byte)), as intv_luiparse.sv: the header,
+    the blocks, the tables kept as they stream (and from them the 4K pages of plane 1 the map
+    uses: used), the data hunks unpacked into words, each word's Locutus address put into the
+    SRAM (below $10000: plane 1 at the same address; above: a free 4K page of plane 1, highest
+    first, given to each Locutus 4K page in the order its data comes). .writes: (SRAM address,
+    word); .cover: the plane-1 256-word blocks written."""
+
+    def __init__(self, version):
+        self.ver = version
+        self.hl = 16 if version == 0 else 32
+        self.st = L_HDR
+        self.hcrc = _dow(_dow(_dow(_dow(0, 0x4C), 0x54), 0x4F), version)
+        self.flags = 0                  # header bytes 4-8 (flag bits 39:0)
+        self.err = 0
+        self.err_off = 0
+        self.blk_start = 0
+        self.mmap = [0] * 256
+        self.perm = [0] * 256
+        self.flip = [0] * 256
+        self.tab_seen = False
+        self.used = 0                   # plane-1 4K pages the map uses
+        self.pfe = 0                    # 4K ranges with page flipping
+        self.bsw = False                # a paragraph with B
+        self.nonid = False              # a mapped paragraph whose Locutus address is not its own
+        self.loww = 0                   # plane-1 4K pages data below $10000 wrote
+        self.hiu = 0                    # plane-1 4K pages given to data above $10000
+        self.alloc = {}                 # Locutus 4K page (16-127) -> plane-1 4K page
+        self.writes = []
+        self.cover = set()
+
+    def _fail(self, code, off):
+        self.err = code
+        self.err_off = off
+
+    def _emit(self, w, off):
+        a = self.a
+        self.a = (a + 1) & 0x7FFFF
+        if self.err:
+            return
+        if a < 0x10000:
+            pg = a >> 12
+            if self.hiu >> pg & 1:
+                self._fail(ERR_LUI_CLASH, off)
+                return
+            self.loww |= 1 << pg
+            sa = a
+        elif (self.flags >> 16) & 3 and a < 0x12000:
+            return                      # JLP RAM preload ($10000-$11FFF): the JLP's own
+        else:
+            page = a >> 12
+            if page not in self.alloc:
+                free = ~(self.used | self.loww | self.hiu) & 0xFFFF
+                if self.bsw or not free:
+                    self._fail(ERR_LUI_FULL, off)
+                    return
+                pp = free.bit_length() - 1
+                self.alloc[page] = pp
+                self.hiu |= 1 << pp
+            sa = (self.alloc[page] << 12) | (a & 0xFFF)
+        self.writes.append((sa, w))
+        self.cover.add(sa >> 8)
+
+    def _table(self, i, c):
+        if i < 512:
+            if i & 1:
+                self.mmap[i >> 1] |= c << 8
+            else:
+                self.mmap[i >> 1] = c
+        elif i < 768:
+            p = i - 512
+            self.perm[p] = c
+            m = self.mmap[p]
+            if c & 3 and m & 0x7FF < 0x100:     # (19-bit Locutus addresses: paragraph bits 10:0)
+                self.used |= 1 << ((m >> 4) & 15)
+            if c & 8:
+                self.bsw = True
+            if c & 3 and m != p:
+                self.nonid = True
+        else:
+            k = (i - 768) >> 1
+            if i & 1:
+                f = self.flip[k] | c << 8
+                self.flip[k] = f
+                if f & 8:
+                    self.pfe |= 1 << (k >> 4)
+                if f & 3 and (f >> 4) & 0x7F < 16:
+                    self.used |= 1 << ((f >> 4) & 15)
+            else:
+                self.flip[k] = c
+
+    def _hunk(self, c, off):
+        h = self.h
+        if h == H_A0:
+            self.a = c
+            self.h = H_A1
+        elif h == H_A1:
+            self.a |= c << 8
+            self.h = H_A2
+        elif h == H_A2:
+            self.a = (self.a | c << 16) & 0x7FFFF
+            self.h = H_S
+        elif h == H_S:
+            if 0x01 <= c <= 0x3F:
+                self.n = c - 1
+                self.h = H_8 if self.n else H_W0
+            elif 0x40 <= c <= 0xBF:
+                self.k = c - 0x40
+                self.h = H_T if self.k else H_W0
+            elif 0xC0 <= c <= 0xFD:
+                self.n = c - 0xBF
+                self.h = H_X0
+            else:
+                self._fail(ERR_LUI_HUNK, off)
+        elif h == H_8:
+            self._emit(c, off)
+            self.n -= 1
+            if self.n == 0:
+                self.h = H_W0
+        elif h == H_T:
+            self.top = c
+            self.g = min(4, self.k)
+            self.j = 0
+            self.h = H_L
+        elif h == H_L:
+            self._emit(((self.top >> (6 - 2 * self.j)) & 3) << 8 | c, off)
+            self.j += 1
+            self.k -= 1
+            if self.j == self.g:
+                self.h = H_W0 if self.k == 0 else H_T
+        elif h in (H_W0, H_X0):
+            self.lo = c
+            self.h = H_W1 if h == H_W0 else H_X1
+        elif h == H_W1:
+            self._emit(c << 8 | self.lo, off)
+            self.h = H_S
+        elif h == H_X1:
+            self._emit(c << 8 | self.lo, off)
+            self.n -= 1
+            self.h = H_S if self.n == 0 else H_X0
+
+    def feed(self, off, c):
+        if self.err:
+            return
+        st = self.st
+        if st == L_HDR:
+            if off < 9:
+                self.flags |= c << (8 * (off - 4))
+            if off == self.hl - 1:
+                if c != self.hcrc:
+                    self._fail(ERR_LUI_HDR, off)
+                    return
+                self.st = L_BT
+            else:
+                self.hcrc = _dow(self.hcrc, c)
+        elif st == L_BT:
+            self.blk_start = off
+            if c == 0xFF:
+                self.st = L_DONE
+                return
+            self.t = c
+            self.bh = _dow(0, c)
+            self.st = L_L0
+        elif st == L_L0:
+            self.len = c
+            self.bh = _dow(self.bh, c)
+            self.st = L_L1
+        elif st == L_L1:
+            self.len |= c << 8
+            self.bh = _dow(self.bh, c)
+            self.st = L_HC
+        elif st == L_HC:
+            if c != self.bh:
+                self._fail(ERR_LUI_BHDR, off)
+            elif self.t == 0:
+                self._fail(ERR_LUI_ENC, off)
+            elif self.t == 1 and (self.len != 1280 or self.tab_seen):
+                self._fail(ERR_LUI_TAB, off)
+            elif self.t == 2 and not self.tab_seen:
+                self._fail(ERR_LUI_ORDER, off)
+            else:
+                self.pc = 0
+                self.st = L_P0
+        elif L_P0 <= st <= L_P3:
+            self.pc |= c << (8 * (st - L_P0))
+            if st < L_P3:
+                self.st = st + 1
+            else:
+                self.crc = 0
+                self.i = 0
+                self.h = H_A0
+                if self.len == 0:
+                    if self.pc != 0:
+                        self._fail(ERR_LUI_PCRC, off)
+                    elif self.t == 2:
+                        self._fail(ERR_LUI_HUNK, off)
+                    else:
+                        self.st = L_BT
+                else:
+                    self.st = L_PAY
+        elif st == L_PAY:
+            self.crc = _c324(self.crc, c)
+            if self.t == 1:
+                self._table(self.i, c)
+            elif self.t == 2:
+                self._hunk(c, off)
+                if self.err:
+                    return
+            self.i += 1
+            if self.i == self.len:
+                if self.crc != self.pc:
+                    self._fail(ERR_LUI_PCRC, off)
+                elif self.t == 2 and self.h != H_S:
+                    self._fail(ERR_LUI_HUNK, off)
+                else:
+                    if self.t == 1:
+                        self.tab_seen = True
+                    self.st = L_BT
+        # L_DONE: the bytes after the end-of-data mark are ignored
+
+    def result(self, length):
+        """The refusal code for a file of `length` bytes (0: mapped). The bridge's pad bytes are
+        parsed like the others; what they set is not counted (offsets at or past the length)."""
+        if self.err and self.err_off < length:
+            return self.err
+        if self.st == L_HDR or (self.st not in (L_BT, L_DONE) and not self.err and self.blk_start < length):
+            return ERR_LUI_SHORT
+        if not self.tab_seen:
+            return ERR_LUI_TAB
+        if self.flags >> 32 & 1:
+            return ERR_LUI_LTO
+        if self.bsw and self.nonid:
+            return ERR_LUI_BSW
+        return 0
+
+
+def parse_luigi(data):
+    p = LuiParser(data[3])
+    for off in range(4, len(data)):
+        p.feed(off, data[off])
+    return p
+
+
+def lui_flags(fl):
+    """Header flags -> the core's flags: ecs_compat 11 (requires) ECS, 00 (incompatible)
+    ECS_OFF; voice_compat 10 (enhanced) or 11 VOICE; jlp_accel non-zero JLP."""
+    f = 0
+    ecs, voice = (fl >> 2) & 3, fl & 3
+    if ecs == 3:
+        f |= FLAG_ECS
+    elif ecs == 0:
+        f |= FLAG_ECS_OFF
+    if voice >= 2:
+        f |= FLAG_VOICE
+    if (fl >> 16) & 3:
+        f |= FLAG_JLP
+    return f
+
+
+def build_lui(ld, p):
+    """Map table from a LUIGI's tables (the walk's order: r, b, then the pages y)."""
+    ram_next = 0
+
+    def tr(lp):
+        if lp & 0x7FF < 0x100:
+            return (lp & 0xFF) << 8
+        page = (lp >> 4) & 0x7F
+        return (p.alloc[page] << 12) | (lp & 15) << 8 if page in p.alloc else None
+
+    for r in range(16):
+        pg = p.pfe >> r & 1
+        for b in range(16):
+            for y in range(16):
+                tix = (r << 8) | (y << 4) | b
+                pi = (r << 4) | b
+                if pg and y and r == 4 and b < 8:
+                    # a flip leaves $4000-$47FF alone (the ECS RAM): every page is page 0's
+                    ld.table[tix] = ld.table[(r << 8) | b]
+                    continue
+                if pg and y:
+                    f = p.flip[(r << 4) | y]
+                    perm, bb, lp = f & 7, 0, ((f >> 4) << 4 | b) & 0xFFFF
+                elif y:
+                    ld.table[tix] = 0
+                    continue
+                else:
+                    perm, bb, lp = p.perm[pi], (p.perm[pi & 0xF8] >> 3) & 1, p.mmap[pi]
+                # NARROW only changes writes (LUIGI spec: ignored without WRITE; a read gives all 16
+                # bits): the core's N (8-bit reads and writes) for a writable paragraph only
+                R, W, N = perm & 1, (perm >> 1) & 1, (perm >> 2) & (perm >> 1) & 1
+                if (r == 0 and b < 5) or r in (1, 3):
+                    R = 0                       # Locutus answers no reads there (LUIGI spec)
+                if not (perm & 3) and not bb:
+                    ld.table[tix] = ent(1, 0, 0, 0, 0, (r << 12) | (b << 8)) if y == 0 else 0
+                    continue
+                sb = tr(lp)
+                if W and not bb:
+                    if ram_next < RAM_BLOCKS:
+                        base = RAM_BASE + ram_next * 256
+                        ram_next += 1
+                        ld.asm.append((tix, base, sb))
+                        s = 1
+                    else:
+                        ld.noss = True
+                        base, s = (sb or 0), int(sb is not None)
+                else:
+                    base, s = (sb or 0), int(sb is not None or bool(bb))
+                if W and bb:
+                    ld.noss = True
+                ld.table[tix] = ent(s, R and (s or bb), W, N, bb, base)
+    ld.paged = p.pfe
+    ld.limit = PLANE_WORDS
+    for idx, base, src in ld.asm:
+        if src is not None:
+            for i in range(256):
+                ld.sram[base + i] = ld.sram_rd(src + i)
+
 JLP_MAX_SECTORS = 16                    # the core's flash store (JLP_NOTES 5.3)
 
 
@@ -957,6 +1319,40 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
     for i in range(RAM_BLOCKS * 256):           # the RAM area is cleared at every load
         ld.sram[RAM_BASE + i] = 0
     rom = is_rom(data)
+    lui = not rom and is_luigi(data)
+    if lui:
+        if len(data) > 0x100000:
+            ld.err = ERR_ROM_BIG
+            return _refused(ld)
+        p = parse_luigi(data)
+        # the stream wrote words 0 and 1 before byte 3 decided the format
+        ld.sram[0] = (data[0] << 8) | data[1]
+        ld.sram[1] = (data[2] << 8) | data[3]
+        for a, w in p.writes:
+            ld.sram[a] = w
+        err = p.result(len(data))
+        if err:
+            ld.err = err
+            return _refused(ld)
+        # every plane-1 word no data word wrote reads 0 (the loader's bitmap pass; Locutus'
+        # unwritten words read 0, as jzIntv reads them)
+        wr = set(a for a, _ in p.writes)
+        for a in range(PLANE_WORDS):
+            if a not in wr:
+                ld.sram[a] = 0
+        ld.fmt = FMT_ROM
+        ld.layout = LAYOUT_LUI
+        if cfg:
+            ld.notes.append('CFG ignored: the image is a LUIGI')
+        build_lui(ld, p)
+        ld.flags = lui_flags(p.flags)
+        ld.jlp_mode, ld.jlp_sectors = jlp_config((p.flags >> 16) & 3, (p.flags >> 22) & 0x3FF)
+        if any(e & E_W for e in ld.table):
+            ld.flags |= FLAG_RAM
+        if ld.paged:
+            ld.flags |= FLAG_PAGED
+        ld.flags |= _conflicts(ld.table, ld.flags)
+        return ld
     if not data or (ld.words > 0x10000 and not rom):
         ld.err = -1                             # no cartridge / too long: the loader's err[2:0]
         ld.words, ld.crc = 0, 0

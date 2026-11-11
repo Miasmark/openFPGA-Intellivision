@@ -25,7 +25,7 @@ only):
 
 | Slot | File | Use |
 |---|---|---|
-| 0x100 Cartridge | `.bin` `.int` `.itv` (raw) or `.rom` (Intellicart) | the image; a `.rom` is recognised by its first three bytes, whatever its name |
+| 0x100 Cartridge | `.bin` `.int` (raw), `.rom` (Intellicart) or `.luigi` (LTO Flash, 1.0.7) | the image; a `.rom` is recognised by its first three bytes, a LUIGI by its first four, whatever its name (an `.itv` loads under another of these names: the slot lists four extensions at most, and 1.0.7 gave `.itv`'s place to `.luigi`) |
 | 0x101 Cartridge CFG | `.cfg` | found by the core: NAME.cfg beside NAME.bin; used with a raw image only (ignored with a `.rom`) |
 
 The Pocket reloads the core when a cartridge is loaded (parameters `0x109`)
@@ -305,3 +305,104 @@ cart8test does the same), lines without `PAGE` on page 0 only, no trim, the
 bank registers 0 after a load, a line without `PAGE` over a page's own
 words, cart RAM in a paged range not shared by its pages. tb_savestate: the CFG's CRC not checked, the bank registers not
 restored, an image without save states saved.
+
+## 8 LTO Flash LUIGI (1.0.7)
+
+The LTO Flash multicart's own format, used for many newer homebrews. Written from its
+specification only: "Locutus Universal Intellivision Game Image (LUIGI) V1.0", J. Zbiciak, Left
+Turn Only, 6-Jul-2019 (the LTO Flash download page). Model: `tools/mapper/luigi.py` (the format,
+an encoder and a decoder, the spec's CRC test vectors and encoding example), `cartfmt.LuiParser`
+and `build_lui`; RTL: `intv_luiparse.sv` and the loader's LUIGI states.
+
+### 8.1 Structure
+
+A file whose bytes 0-3 are "LTO" and version 0 or 1, whatever its name. Header: 16 bytes
+(version 0) or 32 (version 1): feature flags (64 or 128 bits, little endian), in version 1 a
+source UID, reserved bytes, and a DOWCRC over the rest as the last byte. Then blocks: type,
+payload length (2 bytes), DOWCRC over those three bytes, CRC32/4 over the payload (4 bytes),
+the payload. Block $01: the tables (1,280 bytes: the memory map, 256 x 16 bits, Locutus
+address bits 23:8 per 256-word paragraph of the Intellivision map; the permissions, 256 x 8:
+READ 1, WRITE 2, NARROW 4, BANKSW 8; the page flips, 256 x 16 per chapter (4K range) and page:
+READ, WRITE, NARROW, PFE (page-flip enable) and the page's Locutus address bits 23:12). Block
+$02: a data hunk (a 24-bit Locutus word address, then 8-bit, 10-bit and 16-bit packed blocks of
+words). Block $03: metadata (skipped), other types skipped, $FF the end (what follows is
+ignored; a file may also just end after a block). DOWCRC: poly $98, right shifting, init 0.
+CRC32/4: poly $82F63B78, right shifting, init 0. The flags the core uses: voice_compat (bits
+1:0), ecs_compat (3:2), jlp_accel (17:16), jlp_flash (31:22: 1.5 KiB sectors), lto_mapper (32).
+
+### 8.2 Mapping
+
+Locutus has a 512K-word RAM that the memory map points paragraphs into (19-bit addresses: the
+upper bits of the map and of the page flips are ignored); the core has plane 1 (64K words):
+
+- Data below Locutus $10000 goes to plane 1 at its own address: that is the Intellicart's
+  memory, which bank windows reach (LUIGI keeps Intellicart memory at Locutus $00000-$0FFFF).
+- Data above (jzIntv's tools put paged ROM at the top of Locutus RAM): each Locutus 4K page takes
+  a free 4K page of plane 1 as its first word comes, the highest first. Free: no mapped paragraph
+  or readable / writable page flip of the tables points there, no data below $10000 wrote there.
+  With bankswitching, no page is free (any Intellicart address can be reached).
+- With JLP, data at Locutus $10000-$11FFF (Locutus' JLP RAM) is dropped: the core's JLP has its
+  own RAM.
+- Every plane-1 word no data word wrote reads 0, as jzIntv reads a LUIGI's unwritten words (a
+  64K-bit map of the written words, cleared at the finish).
+
+The map table (section 4) from the tables, per 256-word paragraph: page 0 from the memory map and
+permissions (the state at reset: Locutus copies its initial tables at every reset, and the
+Mattel scheme selects page 0), pages 1-15 of a range with page flipping (any PFE in its
+chapter) from the page flips, except $4000-$47FF, which a flip leaves alone (the spec: the ECS
+RAM). READ, WRITE and BANKSW (the half-page's first paragraph's, as Locutus looks it up) as the
+entry's R, W, B; NARROW only with WRITE (the spec: ignored without WRITE, and a read gives all
+16 bits; the core's N makes reads of 8-bit RAM give 0 in the upper byte: the one difference,
+for 8-bit RAM preloaded with upper bytes). No reads at $0000-$04FF, $1000-$1FFF, $3000-$3FFF
+(the spec: Locutus ignores them). A WRITE paragraph without B is RAM: a block of the cart RAM area
+(saved in the state), copied from its Locutus address (or cleared, if no data came there); a
+paragraph pointing above $10000 where no data came: RAM as above, ROM not answered. Bank
+registers, page selects, save states and the "no save states" rules as for a .rom (section 3.2,
+5). The format is reported as `.rom` with layout $FD.
+
+Flags: ecs_compat 11 (requires) ECS, 00 (incompatible) ECS_OFF; voice_compat 10 (enhanced) or 11
+(requires) VOICE; jlp_accel non-zero JLP, its mode and jlp_flash's sectors (at most 16, the
+core's flash store); plus RAM, PAGED and the ECS conflicts of the map.
+
+Where Locutus differs and the core does not follow: Locutus reloads its bankswitch state at a
+console reset (the core keeps the Intellicart's behaviour, as for a .rom: the registers keep
+their values); a bankswitched image whose map points a paragraph elsewhere than its own address
+is refused (below).
+
+### 8.3 Refused (fmt_err)
+
+| fmt_err | Cause |
+|---|---|
+| $28 | the header's DOWCRC |
+| $29 | a block header's DOWCRC |
+| $2A | a block payload's CRC32/4 |
+| $2B | an encrypted file (block $00) |
+| $2C | the tables block missing, twice, or not 1,280 bytes |
+| $2D | a data hunk before the tables |
+| $2E | a data hunk's packing (a reserved start byte, a block that runs past the payload) |
+| $2F | the file ends inside the header or a block |
+| $30 | lto_mapper (the LTO Flash mapper is not documented) |
+| $31 | data above Locutus $10000 with no free 4K page of plane 1, or with bankswitching |
+| $32 | data below $10000 on a plane-1 page already given to data above it |
+| $33 | bankswitching with a mapped paragraph not at its own Locutus address |
+| $25 | longer than 1 MiB |
+
+### 8.4 Tests
+
+- `python3 -I tools/mapper/luigi.py`: the spec's test vectors for both CRCs (and IEEE CRC32's),
+  the spec's encoding example decoded to its listing, encode -> decode, flipped bits caught
+  (LUIGI_SELFTEST).
+- `sim/testroms/step8/build_images.py`: `lui_paged` (page flips with pages above $10000, partial
+  paragraphs, RAM 16 and 8, $4800's flipped half, metadata and an unknown block, junk after the
+  end mark), `lui_bank` (version 0, bank windows, B without R, NARROW without WRITE, preloads, no
+  end mark), `lui_jlp` (flags, a JLP RAM preload dropped, unwritten pages above $10000) and one
+  file per refusal. `tb_loader` runs them all: RTL = model on every bus address, plus planted
+  faults.
+- `tools/refs/jz_luigi_ref.sh` (`JZ_LUIGI`): jzIntv's bin2luigi / rom2luigi make LUIGI files from
+  the step-8 images, luigi2bin turns them back into BIN + CFG, jzIntv dumps its space for every
+  JZ_REF case's writes; the model on the LUIGI must read the same (all three tools and jzIntv run
+  as programs; their code is not read). Where we differ on purpose (`jz_luigi_compare.py`
+  KEEP, each must still differ): a bankswitched paragraph without READ answers nothing (the
+  spec; luigi2bin's `[bankswitch]` line makes it readable), and a bank window moved onto other
+  Intellicart memory (jzIntv reads 0 there through luigi2bin's BIN + CFG; on the original .rom it
+  reads the memory, as we do).

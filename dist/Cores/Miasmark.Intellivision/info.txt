@@ -8,9 +8,9 @@ System ROMs (yours to supply, in /Assets/intv/common/):
   ecs.bin      ECS ROM, 24,576 bytes (for ECS games)
   ivoice.bin   Intellivoice SP0256-012 ROM, 2,048 bytes (for voice games)
 
-Cartridges: .int / .bin / .rom / .itv. A .bin that needs a .cfg takes
-NAME.cfg from beside NAME.bin by itself. JLP games keep their flash
-saves in a .sav file.
+Cartridges: .int / .bin / .rom / .luigi (LTO Flash; an .itv loads
+renamed .rom). A .bin that needs a .cfg takes NAME.cfg from beside
+NAME.bin by itself. JLP games keep their flash saves in a .sav file.
 
 Controls (Keypad Mode Auto: by the game, else Layer):
   D-pad        the disc; L + D-pad: the 8 in-between directions

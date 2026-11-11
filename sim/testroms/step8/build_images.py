@@ -16,6 +16,10 @@ committed sources in this directory, never committed themselves:
   the refusal set                          made here from the above: CFG text with one
                                            fault each, .rom files with a bad CRC, cut short,
                                            a backwards segment, an LTO tag, and the like
+  LUIGI (1.0.7)                            made here with tools/mapper/luigi.py (an encoder
+                                           written from the format's specification): the
+                                           formats' features over synthetic words, and one
+                                           file for each refusal (docs/CARTFORMATS.md 8)
 
 images() returns a list of dicts: name, data (bytes), cfg (bytes or None), want_err (the
 loader's fmt_err the Python model must give, 0 = mapped, -1 = refused by the length/size
@@ -32,6 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'mapper'))
 import cartfmt as cf  # noqa: E402
+import luigi          # noqa: E402
 
 AS1600 = os.environ.get('AS1600', os.path.expanduser(
     '~/daria_work/intv/refs/jzintv/src-tree/jzintv-20200712-src/bin/as1600'))
@@ -91,6 +96,138 @@ def tag(ttype, body):
     assert n < 64
     t = bytes([n, ttype]) + bytes(body)
     return t + struct.pack('>H', cf.crc16(t))
+
+
+def lui_tables():
+    """Empty LUIGI tables: memory map, permissions, page flips."""
+    return [0] * 256, [0] * 256, [0] * 256
+
+
+def lui_tab_block(mm, pm, fl, length=1280):
+    t = b''.join(struct.pack('<H', x) for x in mm) + bytes(pm) + b''.join(struct.pack('<H', x) for x in fl)
+    return luigi.block(1, (t + bytes(8))[:length])
+
+
+def lui_hunk(addr, words):
+    return luigi.block(2, bytes([addr & 0xFF, addr >> 8 & 0xFF, addr >> 16 & 0xFF]) + luigi.pack_words(words))
+
+
+def lui_pattern(n, seed, bits=16):
+    return [((i * 0x9E37 + seed) & 0xFFFF) & ((1 << bits) - 1) for i in range(n)]
+
+
+def lui_images():
+    """(name, bytes, want) LUIGI files over synthetic words."""
+    out = []
+    # ---- paged: like cfgmap (non-paged ROM with partial paragraphs, RAM 16 and narrow RAM 8,
+    # page flipping with pages above Locutus $10000, $4800's flipped half beside a fixed $4000)
+    mm, pm, fl = lui_tables()
+    for p in range(0x50, 0x60):
+        mm[p], pm[p] = p, 1
+    for p in (0x80, 0x81):
+        mm[p], pm[p] = p, 3                  # RAM 16, preloaded below
+    mm[0x90], pm[0x90] = 0x90, 7             # RAM 8 (narrow)
+    for p in range(0xD0, 0xD4):
+        mm[p], pm[p] = p, 1
+    for p in range(0x40, 0x48):
+        mm[p], pm[p] = p, 3                  # $4000-$47FF RAM (the ECS's place: a conflict flag)
+    for y, la in ((0, 0x7C000), (1, 0x79000), (2, 0x7A000), (15, 0x7B000)):
+        fl[0xF0 | y] = (la >> 8) | 1 | 8     # chapter F: pages 0, 1, 2, F above $10000
+    for y in range(16):
+        fl[0xF0 | y] |= 8
+    for p in range(0xF0, 0x100):
+        mm[p], pm[p] = (0x7C0 | (p & 15)), 1  # page 0 is the reset map
+    for y, la in ((1, 0x0C000), (3, 0x77000)):
+        fl[0x20 | y] = (la >> 8) | 1 | 8      # chapter 2: pages 1 ($C000: plane 1, only a flip uses it) and 3
+    for y in range(16):
+        fl[0x20 | y] |= 8
+        fl[0x40 | y] |= 8                     # chapter 4: pages 0 and 1 of $4800-$4FFF
+    fl[0x41] = (0x75000 >> 8) | 1 | 8
+    fl[0x40] = (0x40 << 4) | 3 | 8            # page 0: the fixed RAM's own page (lower half)
+    hunks = [(0x5000, lui_pattern(0x12C, 0x11)), (0x5140, lui_pattern(0x14, 0x22, 10)),
+             (0x5800, lui_pattern(0x800, 0x33, 10)), (0xD000, lui_pattern(0x200, 0x44, 8)),
+             (0xD2F0, lui_pattern(0x28, 0x55)), (0x8000, [0] * 0x10 + lui_pattern(0x10, 0x66)),
+             (0x7C000, lui_pattern(0x1000, 0x77, 10)), (0x79000, lui_pattern(0x1000, 0x88, 10)),
+             (0x7A000, lui_pattern(0x1000, 0x99)), (0x7B000, lui_pattern(0x800, 0xAA, 8)),
+             (0x76000, lui_pattern(0x1000, 0xBB, 10)), (0x77000, lui_pattern(0x400, 0xCC, 10)),
+             (0x75800, lui_pattern(0x800, 0xDD, 10)), (0x0C000, lui_pattern(0x1000, 0xEE, 10))]
+    flags = 1 << 2 | 2 | 1 << 63            # ecs tolerates, voice enhanced, explicit
+    body = luigi.block(3, b'\x00\x09lui_paged') + lui_tab_block(mm, pm, fl) + luigi.block(5, b'skip me')
+    body += b''.join(lui_hunk(a, w) for a, w in hunks)
+    out.append(('lui_paged', luigi.header(flags) + body + b'\xff' + b'junk after the end', 0))
+    # ---- bank windows (as a .rom through rom2luigi): version 0 header, no end mark
+    mm, pm, fl = lui_tables()
+    for p in range(0x50, 0x54):
+        mm[p], pm[p] = p, 1
+    for p in range(0x60, 0x70):
+        mm[p], pm[p] = p, 9                   # R + B: Intellicart bank windows
+    for p in range(0xC0, 0xC8):
+        mm[p], pm[p] = p, 8                   # B without R: no reads
+    for p in range(0x80, 0x84):
+        mm[p], pm[p] = p, 3
+    for p in range(0x98, 0x99):
+        mm[p], pm[p] = p, 5                   # NARROW without WRITE: reads give 16 bits
+    mm[0x88], pm[0x88] = 0x88, 7
+    hunks = [(0x5000, lui_pattern(0x400, 0x13)), (0x1000, lui_pattern(0x200, 0x24)),
+             (0x3000, lui_pattern(0x100, 0x35)), (0x9800, lui_pattern(0x100, 0x46)),
+             (0x6000, lui_pattern(0x1000, 0x57, 10))]
+    body = lui_tab_block(mm, pm, fl) + b''.join(lui_hunk(a, w) for a, w in hunks)
+    out.append(('lui_bank', luigi.header(0x55, version=0) + body, 0))
+    # ---- JLP (accelerators and flash), the ECS required, the Intellivoice: a JLP RAM preload
+    # at Locutus $10040 (dropped: the JLP's own), unwritten paragraphs above $10000 (RAM: a
+    # cleared cart RAM block; ROM: no answer)
+    mm, pm, fl = lui_tables()
+    for p in range(0x50, 0x58):
+        mm[p], pm[p] = p, 1
+    mm[0xA0], pm[0xA0] = 0x6F0, 3            # RAM at an unwritten Locutus page
+    mm[0xB0], pm[0xB0] = 0x6E0, 1            # ROM at an unwritten Locutus page
+    flags = 3 | 3 << 2 | 3 << 16 | 2 << 22 | 1 << 63
+    body = lui_tab_block(mm, pm, fl) + lui_hunk(0x5000, lui_pattern(0x800, 0x5A, 10)) + \
+        lui_hunk(0x10040, lui_pattern(0x40, 0x6B))
+    out.append(('lui_jlp', luigi.header(flags) + body + b'\xff', 0))
+    # ---- refusals
+    mm, pm, fl = lui_tables()
+    for p in range(0x50, 0x60):
+        mm[p], pm[p] = p, 1
+    good = lui_tab_block(mm, pm, fl) + lui_hunk(0x5000, lui_pattern(0x1000, 0x7C, 10))
+    hdr = luigi.header(0x55)
+    f = bytearray(hdr + good + b'\xff')
+    f[31] ^= 0x01
+    out.append(('lui_hdrcrc', bytes(f), cf.ERR_LUI_HDR))
+    f = bytearray(hdr + good + b'\xff')
+    f[32 + 3] ^= 0x01
+    out.append(('lui_bhdr', bytes(f), cf.ERR_LUI_BHDR))
+    f = bytearray(hdr + good + b'\xff')
+    f[32 + 8 + 100] ^= 0x01
+    out.append(('lui_pcrc', bytes(f), cf.ERR_LUI_PCRC))
+    out.append(('lui_enc', hdr + luigi.block(0, bytes(16)) + good, cf.ERR_LUI_ENC))
+    out.append(('lui_notab', hdr + luigi.block(3, b'\x00\x02hi') + b'\xff', cf.ERR_LUI_TAB))
+    out.append(('lui_tab2', hdr + lui_tab_block(mm, pm, fl) + good, cf.ERR_LUI_TAB))
+    out.append(('lui_tablen', hdr + lui_tab_block(mm, pm, fl, 1279) + good, cf.ERR_LUI_TAB))
+    out.append(('lui_order', hdr + lui_hunk(0x5000, [1, 2, 3]) + good, cf.ERR_LUI_ORDER))
+    out.append(('lui_hunk', hdr + lui_tab_block(mm, pm, fl) + luigi.block(2, bytes([0, 0x50, 0, 0xFE, 1, 2])),
+                cf.ERR_LUI_HUNK))
+    out.append(('lui_hunk_end', hdr + lui_tab_block(mm, pm, fl) + luigi.block(2, bytes([0, 0x50, 0, 0x05, 1, 2])),
+                cf.ERR_LUI_HUNK))
+    out.append(('lui_short_hdr', hdr[:20], cf.ERR_LUI_SHORT))
+    out.append(('lui_short_blk', (hdr + good)[:32 + 600], cf.ERR_LUI_SHORT))
+    out.append(('lui_lto', luigi.header(0x55 | 1 << 32) + good, cf.ERR_LUI_LTO))
+    mmf, pmf, flf = lui_tables()
+    for p in range(256):
+        if p >= 0x05:
+            mmf[p], pmf[p] = p, 1             # every plane-1 page used by the map
+    out.append(('lui_full', hdr + lui_tab_block(mmf, pmf, flf) + lui_hunk(0x7F000, [1, 2, 3]), cf.ERR_LUI_FULL))
+    mmb, pmb, flb = list(mm), list(pm), list(fl)
+    for p in range(0x60, 0x68):
+        mmb[p], pmb[p] = p, 9
+    out.append(('lui_full_bsw', hdr + lui_tab_block(mmb, pmb, flb) + lui_hunk(0x7F000, [1, 2, 3]),
+                cf.ERR_LUI_FULL))
+    out.append(('lui_clash', hdr + lui_tab_block(mm, pm, fl) + lui_hunk(0x7F000, [1, 2, 3]) +
+                lui_hunk(0xF000, [4, 5, 6]), cf.ERR_LUI_CLASH))
+    mmn = list(mmb)
+    mmn[0x50] = 0x51                          # a mapped paragraph not at its own address, with B
+    out.append(('lui_bsw', hdr + lui_tab_block(mmn, pmb, flb) + lui_hunk(0x5000, [1, 2]), cf.ERR_LUI_BSW))
+    return out
 
 
 def images(work=None):
@@ -189,6 +326,9 @@ def images(work=None):
     add('rom_lto', rom_file(segs[:1], acc, fine, tag(0x06, [0, 0, 0, 0x20, 0])), want=cf.ERR_ROM_LTO)
     # not a .rom: byte 1 is 0 (n = 0) -> a raw image (default map)
     add('rom_not', bytes([0xA8, 0x00, 0xFF]) + base[3:], want=0)
+    # ---- LUIGI (1.0.7)
+    for name, data, want in lui_images():
+        add(name, data, want=want)
     # ---- refusals: length (the step-2 checks): a raw image over 64K words
     add('raw_big', pattern_bin(0x10001, 0x77), want=-1)
     if own:
@@ -217,7 +357,7 @@ def main():
                                                     '' if ok else ' (want %s)' % img['want_err']))
         if a.out:
             os.makedirs(a.out, exist_ok=True)
-            ext = '.rom' if cf.is_rom(img['data']) else '.bin'
+            ext = '.rom' if cf.is_rom(img['data']) else '.luigi' if cf.is_luigi(img['data']) else '.bin'
             open(os.path.join(a.out, img['name'] + ext), 'wb').write(img['data'])
             if img['cfg'] is not None:
                 open(os.path.join(a.out, img['name'] + '.cfg'), 'wb').write(img['cfg'])

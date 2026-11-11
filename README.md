@@ -19,7 +19,10 @@ Its timing was measured against a real console.
 - **Cartridges:**
   - raw `.int` / `.bin`, mapped by a CRC table of known games;
   - `.bin` + `.cfg` (jzIntv's format): `NAME.cfg` beside `NAME.bin` is loaded by itself;
-  - Intellicart `.rom` (`.itv`);
+  - Intellicart `.rom` (an `.itv` file loads renamed `.rom` or `.bin`: the Pocket lists four
+    extensions);
+  - LTO Flash `.luigi` (1.0.7), the format of many newer homebrews: page flipping, bank windows,
+    RAM, JLP, ECS and Intellivoice flags ([docs/CARTFORMATS.md](docs/CARTFORMATS.md) 8);
   - cartridge RAM, page switching and Intellicart bank switching.
 - **ECS:** its ROMs, RAM and second sound chip, its computer keyboard on screen (Start) or from a
   USB keyboard on the Dock, and its music synthesizer from the USB keyboard (no diodes, as the
@@ -138,8 +141,10 @@ button is which side action. Without a profile, Auto is Layer.
   (ECS BASIC, Game Factory, Scooby Doo's Maze Chase, Super NFL Football) work with the on-screen
   ECS keyboard, one key at a time; a USB keyboard on the Dock is quicker.
 - **The on-screen keypad** shows text labels, not overlay pictures.
-- **Game profiles** exist for B-17 Bomber, Space Spartans, TRON Deadly Discs and AD&D Cloudy
-  Mountain so far.
+- **Game profiles** (the on-screen keypad's labels) exist for 67 games: every overlay of the
+  owner's set that names key functions ([docs/KEYPAD_NOTES.md](docs/KEYPAD_NOTES.md) 3).
+- **LUIGI:** encrypted files (sold games for LTO Flash) and the LTO Flash's own memory mapper are
+  refused; 8-bit RAM preloaded with upper bytes reads them as 0 (CARTFORMATS 8.2).
 - **Library sweep:** a run of 188 library images through the core's model found one fault, now
   fixed: Super NFL Football (prototype) needs the ECS, which no game list recorded. Some games stay
   on their title screen until a key the test did not press.

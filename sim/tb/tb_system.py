@@ -105,7 +105,7 @@ import tbcommon             # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_jlp_pkg.sv', 'cp1610.sv', 'intv_bus.sv', 'intv_stic.sv', 'intv_psg.sv', 'intv_ram.sv',
        'intv_machine.sv', 'intv_timing.sv', 'intv_sram.sv', 'intv_cart.sv', 'intv_sysrom.sv',
-       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
+       'intv_loader.sv', 'intv_cfgparse.sv', 'intv_romparse.sv', 'intv_luiparse.sv', 'intv_pagesel.sv', 'intv_media.sv',
        'intv_ecs.sv', 'sp0256.sv', 'intv_voice.sv', 'intv_jlp_store.sv', 'intv_jlp.sv',
        'intv_tape_store.sv', 'intv_tape.sv']
 INC = ['sp0256_fmt.svh']             # included by sp0256.sv (tools/sp0256.py gen)

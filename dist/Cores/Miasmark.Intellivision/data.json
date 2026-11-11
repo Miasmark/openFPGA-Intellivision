@@ -7,7 +7,7 @@
         "id": "0x100",
         "required": true,
         "parameters": "0x109",
-        "extensions": ["int", "bin", "rom", "itv"],
+        "extensions": ["int", "bin", "rom", "luigi"],
         "size_maximum": "0x100000",
         "address": "0x00000000"
       },

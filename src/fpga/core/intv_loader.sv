@@ -11,7 +11,11 @@
 //                 n); Intellicart .rom (bytes 0-2 $A8, n, ~n with n > 0,
 //                 the test MAME makes, slot.cpp:450): from byte 3 on,
 //                 intv_romparse, its segment words at their Intellicart
-//                 addresses in plane 1. The CRC32 of the file either way.
+//                 addresses in plane 1; (1.0.7) LTO Flash LUIGI (bytes 0-3 "LTO",
+//                 version 0 or 1): from byte 4 on, intv_luiparse, its data words
+//                 to plane 1 (below Locutus $10000 at their own address, above on
+//                 free 4K pages), each word's bit set in a 64K-word bitmap. The
+//                 CRC32 of the file either way.
 //   1 CFG         intv_cfgparse, three bytes behind the stream (the last
 //                 ones at the finish, cut at the data table's length)
 //   2 EXEC        intv_sysrom, 4,096 x 10 (big-endian words, 10 bits kept)
@@ -49,13 +53,18 @@
 //      layout (cart_layouts.hex; layout 1 cut at the image length)
 //   5. the cart RAM area cleared (RAM_CELLS at RAM_BASE) and the JLP RAM after
 //      it (JLP_CELLS, $1C000-$1DFFF; build step 11); for a .rom, every
-//      256-word block of plane 1 no segment wrote cleared too
+//      256-word block of plane 1 no segment wrote cleared too; after a LUIGI
+//      stream, every plane-1 word no data word wrote (the bitmap, cleared on
+//      the way: Locutus' unwritten words read 0, as jzIntv reads them)
 //   6. the map table: 4,096 entries into intv_cart (docs/CARTFORMATS.md 4),
 //      from the layout, the CFG's ranges (word exact: a block one range
 //      covers whole points into the file; a block with parts of ranges or
 //      gaps is assembled into a pool block; RAM blocks get the cart RAM
 //      area) or the .rom's tables (W blocks get the cart RAM area, copied
-//      from plane 1, so that the save state holds them)
+//      from plane 1, so that the save state holds them) or the LUIGI's
+//      (docs/CARTFORMATS.md 8: the memory map and permissions per 256-word
+//      paragraph on page 0, the page flips on pages 1-15 of a flipped range;
+//      W paragraphs get the cart RAM area, copied from their Locutus address)
 //   7. assembly: pool blocks filled with $FFFF, then every range's words
 //      copied in (a later line wins); RAM blocks with data copied
 //   8. results into intv_cart; ready. A refused image maps nothing
@@ -140,9 +149,10 @@ module intv_loader #(
                            FLAG_JLP = 8'h10, FLAG_ECS_OFF = 8'h20, FLAG_EST = 8'h40,
                            FLAG_ECS_RISK = 8'h80;
     localparam logic [7:0] E_CFG_SHORT = 8'h16, E_RAM_FULL = 8'h18, E_POOL_FULL = 8'h19,
-                           E_ROM_SHORT = 8'h22, E_ROM_LTO = 8'h24, E_ROM_BIG = 8'h25;
+                           E_ROM_SHORT = 8'h22, E_ROM_LTO = 8'h24, E_ROM_BIG = 8'h25,
+                           E_LUI_TAB = 8'h2C, E_LUI_SHORT = 8'h2F, E_LUI_LTO = 8'h30, E_LUI_BSW = 8'h33;
     localparam logic [1:0] FMT_NONE = 2'd0, FMT_RAW = 2'd1, FMT_CFG = 2'd2, FMT_ROM = 2'd3;
-    localparam logic [1:0] A_RAM = 2'd0, A_POOL = 2'd1, A_ROM = 2'd2;
+    localparam logic [1:0] A_RAM = 2'd0, A_POOL = 2'd1, A_ROM = 2'd2, A_LUI = 2'd3;
 
     // ------------------------------------------------------------ tables
     logic [63:0] crc_rom [256];
@@ -188,17 +198,22 @@ module intv_loader #(
     wire logic [3:0]  slot = ld_addr[27:24];
     wire logic [23:0] off  = ld_addr[23:0];
     logic [7:0]  hb = 8'd0;                    // high byte of the word being built
-    logic [7:0]  b1 = 8'd0, b0 = 8'd0;         // the cartridge's bytes 0 and 1
+    logic [7:0]  b1 = 8'd0, b0 = 8'd0, b2 = 8'd0;  // the cartridge's bytes 0, 1 and 2
     logic [31:0] crc = 32'hFFFFFFFF;
     logic [31:0] crc_at [4];
     logic [24:0] cnt [6];                      // per slot: last offset + 1
     logic        started = 1'b0, seq_err = 1'b0, big = 1'b0, ovr = 1'b0;
     logic        rom_mode = 1'b0;              // byte 2 said .rom
+    logic        lui_mode = 1'b0;              // byte 3 said LUIGI (1.0.7)
+    logic        lui_dirty = 1'b0;             // the bitmap has bits of a LUIGI stream
     logic        pending = 1'b1;               // a stream not finished yet
     wire logic [31:0] crc_in  = off == 24'd0 ? 32'hFFFFFFFF : crc;
     wire logic [31:0] crc_nxt = crc_byte(crc_in, ld_data);
     wire logic        cart_b  = ld_wr && slot == 4'd0;
     wire logic        rom_det = cart_b && off == 24'd2 && b0 == 8'hA8 && b1 != 8'd0 && b1 == ~ld_data;
+    wire logic        lui_det = cart_b && off == 24'd3 && !rom_mode && b0 == 8'h4C && b1 == 8'h54 && b2 == 8'h4F
+                                && ld_data[7:1] == 7'd0;
+    wire logic        big_mode = rom_mode || lui_mode;
 
     // .rom parser
     logic        rp_wv;
@@ -218,6 +233,39 @@ module intv_loader #(
         .err(rp_err), .err_off(rp_err_off), .tab_done(rp_tab_done), .tab_end(rp_tab_end),
         .cmp_ok(rp_cmp_ok), .cmp_end(rp_cmp_end), .cmp_body(rp_cmp)
     );
+
+    // LUIGI parser (1.0.7)
+    logic        lp_wv;
+    logic [15:0] lp_sa, lp_wd;
+    logic [7:0]  lp_tp = 8'd0, lp_tf = 8'd0;
+    logic [6:0]  lp_tpg = 7'd0;
+    logic [15:0] lp_mmap, lp_pfe;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [39:0] lp_flags;                     // header flag bits (the core uses 32, 31:22, 17:16, 3:1)
+    logic [15:0] lp_flip;                      // (bit 3, PFE, is the parser's pfe)
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic [7:0]  lp_perm, lp_err;
+    logic [4:0]  lp_alloc;
+    logic [24:0] lp_err_off, lp_blk;
+    logic        lp_hdr, lp_inblk, lp_tab, lp_bsw, lp_nonid;
+    intv_luiparse luiparse (
+        .clk(clk), .start(lui_det), .ver(ld_data[0]),
+        .in_v(cart_b && lui_mode && off >= 24'd4), .in_off(off), .in_c(ld_data),
+        .w_v(lp_wv), .w_sa(lp_sa), .w_d(lp_wd),
+        .t_p(lp_tp), .t_mmap(lp_mmap), .t_perm(lp_perm), .t_f(lp_tf), .t_flip(lp_flip),
+        .t_pg(lp_tpg), .t_alloc(lp_alloc),
+        .flags(lp_flags), .err(lp_err), .err_off(lp_err_off), .hdr_open(lp_hdr), .in_blk(lp_inblk),
+        .blk_start(lp_blk), .tab_seen(lp_tab), .pfe(lp_pfe), .bsw(lp_bsw), .nonid(lp_nonid)
+    );
+    // the plane-1 words a LUIGI's data wrote (cleared by the finish's word pass)
+    logic        wbit [65536];
+    logic [15:0] wb_a;
+    logic        wb_we, wb_wd, wb_q;
+    initial for (int i = 0; i < 65536; i++) wbit[i] = 1'b0;
+    always_ff @(posedge clk) begin
+        if (wb_we) wbit[wb_a] <= wb_wd;
+        wb_q <= wbit[wb_a];
+    end
 
     // the .rom's covered 256-word blocks (swept back to 0 at every finish)
     logic        cov [256];
@@ -260,12 +308,15 @@ module intv_loader #(
 
     // assembly list: {kind, entry index, base}
     logic [30:0] asml [128];
+    logic [17:0] asms [128];                   // A_LUI: {has a source, its SRAM word}
     logic [6:0]  asm_wa, asm_ra;
     logic        asm_we;
     logic [30:0] asm_wd, asm_q;
+    logic [17:0] asm_ws, asm_sq;
     always_ff @(posedge clk) begin
-        if (asm_we) asml[asm_wa] <= asm_wd;
-        asm_q <= asml[asm_ra];
+        if (asm_we) begin asml[asm_wa] <= asm_wd; asms[asm_wa] <= asm_ws; end
+        asm_q  <= asml[asm_ra];
+        asm_sq <= asms[asm_ra];
     end
 
     // ------------------------------------------------------------ finish
@@ -274,7 +325,7 @@ module intv_loader #(
         F_LK_FW, F_LK_F, F_SRC, F_CLR, F_COV, F_COV_W, F_COV_D, F_COV_Z, F_COV_N, F_PG, F_PG_EV, F_BUILD,
         F_RAW_W, F_RAW_C, F_C_RD, F_C_EV, F_C_DEC, F_R_A, F_R_AW, F_R_F, F_R_FW, F_R_C,
         F_ZERO, F_ASM, F_ASM_W, F_ASM_D, F_FILL, F_SCAN, F_SCAN_EV, F_CP_RQ, F_CP_RD,
-        F_CP_WR, F_CP_NX, F_DRAIN, F_RES
+        F_CP_WR, F_CP_NX, F_DRAIN, F_RES, F_LW0, F_LW1, F_LW2, F_L0, F_L1, F_L2, F_L3, F_L4
     } fstate_t;
     fstate_t     st = F_IDLE;
     logic        len_d = 1'b0;
@@ -286,7 +337,13 @@ module intv_loader #(
     logic [7:0]  lid = 8'd0, tflg = 8'd0;
     logic        hitf = 1'b0, cfg_on = 1'b0, refused = 1'b0;
     logic [1:0]  fmt = FMT_NONE;
-    logic [1:0]  src = 2'd0;                   // map source: 0 refused, 1 raw, 2 CFG, 3 .rom
+    logic [2:0]  src = 3'd0;                   // map source: 0 refused, 1 raw, 2 CFG, 3 .rom, 4 LUIGI
+    logic [16:0] lw = 17'd0;                   // the LUIGI word pass
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [15:0] l_lp = 16'd0;                 // the paragraph's Locutus paragraph (bits 10:0: 19-bit addresses)
+    logic [7:0]  l_pm = 8'd0;                  // its permissions R W N (or the page flip's)
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        l_fl = 1'b0;                  // from the page flip table
     logic [14:0] clr = 15'd0;
     logic [12:0] idx = 13'd0;                  // the walk: {done, r, b, y} (a block's pages in a row)
     logic [7:0]  conf = 8'd0;
@@ -311,7 +368,9 @@ module intv_loader #(
     logic        apass = 1'b0;                 // assembly: 0 lines without PAGE, 1 PAGE lines
     logic [7:0]  acc = 8'd0;
     // the assembly item / copy run
-    logic [1:0]  a_kind = 2'd0;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [1:0]  a_kind = 2'd0;                // (bit 1: a copy from SRAM, A_ROM or A_LUI)
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [11:0] a_idx = 12'd0;
     logic [16:0] a_base = 17'd0;
     logic [15:0] c_a = 16'd0, c_hi = 16'd0, c_lo = 16'd0;
@@ -381,12 +440,15 @@ module intv_loader #(
     always_comb begin
         s_push = 1'b0;
         s_d = 35'd0;
-        if (cart_b && off[0] && !rom_mode && off[23:1] < 23'h10000) begin
+        if (cart_b && off[0] && !rom_mode && !lui_mode && off[23:1] < 23'h10000) begin
             s_push = 1'b1;
             s_d = {2'b11, off[17:1], hb, ld_data};
         end else if (rp_wv && rom_mode) begin
             s_push = 1'b1;
             s_d = {2'b11, 1'b0, rp_wa, rp_wd};
+        end else if (lp_wv && lui_mode) begin
+            s_push = 1'b1;
+            s_d = {2'b11, 1'b0, lp_sa, lp_wd};
         end else if (ld_wr && off[0] && slot == 4'd4 && off < 24'd24576) begin
             s_push = 1'b1;
             s_d = {2'b11, ECS_BASE + {3'd0, off[14:1]}, hb, ld_data};
@@ -394,13 +456,14 @@ module intv_loader #(
         f_want = 1'b0;
         f_d = 35'd0;
         case (st)
-            F_FIX: if (len[0] && {1'b0, len[31:1]} < 32'h10000 && !rom_mode) begin
+            F_FIX: if (len[0] && {1'b0, len[31:1]} < 32'h10000 && !big_mode) begin
                 // odd length: the last word's low byte is 0, not the pad byte
                 f_want = 1'b1;
                 f_d = {2'b01, len[17:1], 16'h0000};
             end
             F_CLR:   begin f_want = 1'b1; f_d = {2'b11, RAM_BASE + {2'd0, clr}, 16'h0000}; end
             F_COV_Z: begin f_want = 1'b1; f_d = {2'b11, 1'b0, blk, wcnt[7:0], 16'h0000}; end
+            F_LW2:   if (src == 3'd4 && !wb_q) begin f_want = 1'b1; f_d = {2'b11, 1'b0, lw[15:0], 16'h0000}; end
             F_FILL:  begin f_want = 1'b1; f_d = {2'b11, a_base + {9'd0, wcnt[7:0]}, 16'hFFFF}; end
             F_CP_WR: begin f_want = 1'b1; f_d = {2'b11, a_base + 17'(c_a - {ar, ab, 8'h00}), rd_q}; end
             default: ;
@@ -434,6 +497,12 @@ module intv_loader #(
     wire logic [1:0] cfg_jm = cp_jmset ? cp_jmode : 2'd0;
     wire logic [4:0] cfg_js = jlp_sect(cfg_jm, cp_jfset, {2'd0, cp_jflash});
     wire logic [1:0] rom_jm = cmp_in ? rp_cmp[15:14] : 2'd0;
+    // LUIGI header flags (1.0.7): ecs_compat 11 ECS, 00 ECS_OFF; voice_compat 10 or 11 VOICE;
+    // jlp_accel the JLP's mode, jlp_flash its sectors
+    wire logic [7:0] lflags = (lp_flags[3:2] == 2'b11 ? FLAG_ECS : 8'd0) | (lp_flags[3:2] == 2'b00 ? FLAG_ECS_OFF : 8'd0) |
+                              (lp_flags[1] ? FLAG_VOICE : 8'd0) | (lp_flags[17:16] != 2'd0 ? FLAG_JLP : 8'd0);
+    wire logic [1:0] lui_jm = lp_flags[17:16];
+    wire logic [4:0] lui_js = jlp_sect(lp_flags[17:16], 1'b1, lp_flags[31:22]);
     wire logic [4:0] rom_js = jlp_sect(rom_jm, 1'b1, {rp_cmp[9:8], rp_cmp[7:0]});
 
     always_ff @(posedge clk) begin
@@ -458,6 +527,10 @@ module intv_loader #(
         wq_n <= wq_n + {2'd0, push_ok} - {2'd0, q_ack};
 
         // ---- byte stream
+        wb_we <= 1'b0;
+        if (lp_wv && lui_mode) begin
+            wb_a <= lp_sa; wb_wd <= 1'b1; wb_we <= 1'b1;
+        end
         if (rp_wv && rom_mode) begin
             cov_a  <= rp_wa[15:8];
             cov_wd <= 1'b1;
@@ -480,15 +553,22 @@ module intv_loader #(
                         ovr      <= 1'b0;
                         ready    <= 1'b0;
                         rom_mode <= 1'b0;
+                        lui_mode <= 1'b0;
                         b0       <= ld_data;
                     end else if ({1'b0, off} != cnt[0]) begin
                         seq_err <= 1'b1;
                     end
                     if (off == 24'd1)
                         b1 <= ld_data;
+                    if (off == 24'd2)
+                        b2 <= ld_data;
                     if (rom_det)
                         rom_mode <= 1'b1;
-                    if (rom_mode ? off >= 24'h100000 : off[23:1] >= 23'h10000)
+                    if (lui_det) begin
+                        lui_mode  <= 1'b1;
+                        lui_dirty <= 1'b1;
+                    end
+                    if (big_mode ? off >= 24'h100000 : off[23:1] >= 23'h10000)
                         big <= 1'b1;
                 end
                 4'd1: begin
@@ -497,7 +577,7 @@ module intv_loader #(
                         cfg_clr <= 1'b1;
                         cfg_fin <= 1'b0;
                         cfg_crc <= 32'hFFFFFFFF;
-                        if (!rom_mode) pending <= 1'b1;   // a new CFG remaps a raw image
+                        if (!big_mode) pending <= 1'b1;   // a new CFG remaps a raw image
                     end else if (off >= 24'd3) begin
                         cp_in_v <= 1'b1;
                         cp_in_c <= lag[23:16];
@@ -542,8 +622,8 @@ module intv_loader #(
                 // and a cartridge reloaded alone must not take a stale one
                 cfg_on <= cnt[1] != 25'd0 && !(cinl && clen == 32'd0);
                 if (!started || len == 32'd0 || {7'd0, cnt[0]} < len || {7'd0, cnt[0]} - len > 32'd3
-                    || seq_err || big || (!rom_mode && len > 32'h20000)) begin
-                    err <= {1'b0, len_st == 2'd2, ovr, big || (!rom_mode && len > 32'h20000), seq_err,
+                    || seq_err || big || (!big_mode && len > 32'h20000)) begin
+                    err <= {1'b0, len_st == 2'd2, ovr, big || (!big_mode && len > 32'h20000), seq_err,
                             !started || len == 32'd0 || {7'd0, cnt[0]} < len || {7'd0, cnt[0]} - len > 32'd3};
                     words   <= 17'd0;
                     crc_fin <= 32'd0;
@@ -556,7 +636,7 @@ module intv_loader #(
                     st  <= F_FIX;
                 end
             end
-            F_FIX: if (!len[0] || {1'b0, len[31:1]} >= 32'h10000 || rom_mode || f_push)
+            F_FIX: if (!len[0] || {1'b0, len[31:1]} >= 32'h10000 || big_mode || f_push)
                 st <= F_CF0;
             // the CFG's last (up to three) bytes, cut at its length, then its end
             F_CF0, F_CF1, F_CF2: begin
@@ -576,7 +656,7 @@ module intv_loader #(
                 if (cfg_n != 25'd0) cfg_fin <= 1'b1;
                 st <= F_CFW;
             end
-            F_CFW: st <= refused ? F_SRC : rom_mode ? F_SRC : F_LK;
+            F_CFW: st <= refused ? F_SRC : big_mode ? F_SRC : F_LK;
             // binary search for the first entry whose CRC >= crc_fin
             F_LK: if (lo < hi)        st <= F_LK_W;
                   else if (lo[8])     st <= F_LK_F;
@@ -603,9 +683,9 @@ module intv_loader #(
             end
             // the format's verdict and the map's source
             F_SRC: begin
-                src <= 2'd0;
+                src <= 3'd0;
                 if (refused) begin
-                    src <= 2'd0;
+                    src <= 3'd0;
                 end else if (rom_mode) begin
                     fmt <= FMT_ROM;
                     lid <= 8'hFF;
@@ -618,7 +698,26 @@ module intv_loader #(
                     else if (cmp_in && rp_cmp[13])
                         fmt_err <= E_ROM_LTO;
                     else
-                        src <= 2'd3;
+                        src <= 3'd3;
+                end else if (lui_mode) begin
+                    fmt <= FMT_ROM;
+                    lid <= 8'hFD;
+                    if (len > 32'h100000)
+                        fmt_err <= E_ROM_BIG;
+                    else if (lp_err != 8'd0 && {7'd0, lp_err_off} < len)
+                        fmt_err <= lp_err;
+                    else if (lp_hdr || (lp_inblk && lp_err == 8'd0 && {7'd0, lp_blk} < len))
+                        fmt_err <= E_LUI_SHORT;
+                    else if (!lp_tab)
+                        fmt_err <= E_LUI_TAB;
+                    else if (lp_flags[32])
+                        fmt_err <= E_LUI_LTO;
+                    else if (lp_bsw && lp_nonid)
+                        fmt_err <= E_LUI_BSW;
+                    else begin
+                        src   <= 3'd4;
+                        paged <= lp_pfe;
+                    end
                 end else if (cfg_on && cinl && ({7'd0, cnt[1]} < clen || {7'd0, cnt[1]} - clen > 32'd3)) begin
                     fmt_err <= E_CFG_SHORT;
                 end else if (cfg_on && cp_err != 8'd0) begin
@@ -626,10 +725,10 @@ module intv_loader #(
                 end else begin
                     fmt <= cfg_on ? FMT_CFG : FMT_RAW;
                     if (cfg_on && nrng != 6'd0) begin
-                        src <= 2'd2;
+                        src <= 3'd2;
                         lid <= 8'hFE;
                     end else
-                        src <= 2'd1;
+                        src <= 3'd1;
                 end
                 clr <= 15'd0;
                 st  <= F_CLR;
@@ -647,7 +746,7 @@ module intv_loader #(
             F_COV_W: st <= F_COV_D;
             F_COV_D: begin
                 wcnt <= 9'd0;
-                st <= (src == 2'd3 && !cov_q) ? F_COV_Z : F_COV_N;
+                st <= (src == 3'd3 && !cov_q) ? F_COV_Z : F_COV_N;
             end
             F_COV_Z: if (f_push) begin
                 wcnt <= wcnt + 9'd1;
@@ -659,9 +758,27 @@ module intv_loader #(
                 if (blk == 8'hFF) begin
                     idx <= 13'd0;
                     ri  <= 6'd0;
-                    st  <= src == 2'd2 ? F_PG : F_BUILD;
+                    lw  <= 17'd0;
+                    st  <= lui_dirty ? F_LW0 : src == 3'd2 ? F_PG : F_BUILD;
                 end else
                     st <= F_COV;
+            end
+            // ---- LUIGI (1.0.7): every plane-1 word no data word wrote cleared (a mapped
+            // LUIGI only), every bit back to 0 (after any LUIGI stream)
+            F_LW0: begin
+                if (lw[16]) begin
+                    lui_dirty <= 1'b0;
+                    st <= F_BUILD;
+                end else begin
+                    wb_a <= lw[15:0];
+                    st <= F_LW1;
+                end
+            end
+            F_LW1: st <= F_LW2;
+            F_LW2: if (src != 3'd4 || wb_q || f_push) begin
+                wb_a <= lw[15:0]; wb_wd <= 1'b0; wb_we <= 1'b1;
+                lw <= lw + 17'd1;
+                st <= F_LW0;
             end
             // ---- CFG: the paged ranges first (every 4K range a PAGE line touches)
             F_PG: st <= ri == nrng ? F_BUILD : F_PG_EV;
@@ -678,9 +795,14 @@ module intv_loader #(
                     ai <= 7'd0;
                     st <= F_ASM;
                 end else case (src)
-                    2'd0: st <= F_ZERO;
-                    2'd1: st <= F_RAW_W;              // lay_ra is {lid, r, b[3]}
-                    2'd2: begin
+                    3'd0: st <= F_ZERO;
+                    3'd1: st <= F_RAW_W;              // lay_ra is {lid, r, b[3]}
+                    3'd4: begin                       // LUIGI: the paragraph's tables
+                        lp_tp <= {r, b};
+                        lp_tf <= {r, y};
+                        st <= F_L0;
+                    end
+                    3'd2: begin
                         if (y != 4'd0 && (!paged[r] || h_mode == H_RAM)) begin
                             // pages of a range no PAGE line touches: never looked up;
                             // a cart RAM block: the same on every page
@@ -702,6 +824,75 @@ module intv_loader #(
                         end
                     end
                 endcase
+            end
+            // ---- LUIGI (1.0.7): the map entry and permissions of the paragraph (page 0, and
+            // $4000-$47FF on every page), or the page flip (pages 1-15 of a flipped range)
+            F_L0: st <= F_L1;
+            F_L1: begin
+                if (y != 4'd0 && (!paged[r] || (r == 4'd4 && !b[3]))) begin
+                    // a range without page flips: pages 1-15 never looked up; a flip leaves
+                    // $4000-$47FF alone (the ECS RAM): every page is page 0's entry
+                    tab_we <= 1'b1; tab_idx <= tix; tab_d <= paged[r] ? h_ent : 38'd0;
+                    idx <= idx + 13'd1;
+                    st <= F_BUILD;
+                end else begin
+                    logic        uf;
+                    logic [15:0] lpar;
+                    uf = paged[r] && y != 4'd0;
+                    lpar = uf ? {lp_flip[15:4], b} : lp_mmap;
+                    l_fl   <= uf;
+                    l_pm   <= uf ? {5'd0, lp_flip[2:0]} : lp_perm;
+                    l_lp   <= lpar;
+                    lp_tp  <= {r, b[3], 3'b000};
+                    lp_tpg <= lpar[10:4];
+                    st <= F_L2;
+                end
+            end
+            F_L2: st <= F_L3;
+            F_L3: st <= F_L4;
+            F_L4: begin
+                logic        bb, rr, sv, s;
+                logic [16:0] sb, base;
+                bb = !l_fl && lp_perm[3];
+                rr = l_pm[0] && !((r == 4'd0 && b < 4'd5) || r == 4'd1 || r == 4'd3);
+                sv = l_lp[10:8] == 3'd0 || lp_alloc[4];
+                sb = l_lp[10:8] == 3'd0 ? {1'b0, l_lp[7:0], 8'h00} : {1'b0, lp_alloc[3:0], l_lp[3:0], 8'h00};
+                base = 17'd0;
+                s = 1'b0;
+                tab_we  <= 1'b1;
+                tab_idx <= tix;
+                if (l_pm[1:0] == 2'd0 && !bb) begin
+                    tab_d <= y == 4'd0 ? {8'h00, 8'hFF, 1'b1, 4'b0000, 1'b0, r, b, 8'h00} : 38'd0;
+                    h_ent <= {8'h00, 8'hFF, 1'b1, 4'b0000, 1'b0, r, b, 8'h00};
+                end else begin
+                    if (l_pm[1] && !bb) begin
+                        if (ram_next != 7'd64) begin
+                            base = RAM_BASE + {3'd0, ram_next[5:0], 8'd0};
+                            s = 1'b1;
+                            ram_next <= ram_next + 7'd1;
+                            asm_we <= 1'b1; asm_wa <= nasm; asm_wd <= {A_LUI, tix, base}; asm_ws <= {sv, sb};
+                            nasm <= nasm + 7'd1;
+                        end else begin
+                            noss <= 1'b1;
+                            base = sv ? sb : 17'd0;
+                            s = sv;
+                        end
+                    end else begin
+                        base = sv ? sb : 17'd0;
+                        s = sv || bb;
+                    end
+                    if (l_pm[1] && bb) noss <= 1'b1;
+                    if (l_pm[1]) anyw <= 1'b1;
+                    // N: NARROW changes only writes (ignored without W): writable paragraphs only
+                    tab_d <= {8'h00, 8'hFF, s, rr && (s || bb), l_pm[1], l_pm[2] && l_pm[1], bb, base};
+                    h_ent <= {8'h00, 8'hFF, s, rr && (s || bb), l_pm[1], l_pm[2] && l_pm[1], bb, base};
+                    if (y == 4'd0 && ((rr && (s || bb)) || l_pm[1] || bb)) begin
+                        if (r == 4'd7 || (r == 4'd4 && !b[3])) conf <= conf | FLAG_ECS_OFF;
+                        if (r == 4'd2 || r == 4'd14)          conf <= conf | FLAG_ECS_RISK;
+                    end
+                end
+                idx <= idx + 13'd1;
+                st  <= F_BUILD;
             end
             F_ZERO: begin
                 tab_we <= 1'b1; tab_idx <= tix; tab_d <= 38'd0;
@@ -778,7 +969,7 @@ module intv_loader #(
                     fmt_err <= E_POOL_FULL;
                 if ((e_w && !e_b && ram_next == 7'd64) ||
                     (!(e_w && !e_b) && !(e_cnt == 2'd1 && ffull) && e_cnt != 2'd0 && pool_next == 6'd32)) begin
-                    src <= 2'd0;                    // refused: the table all zero
+                    src <= 3'd0;                    // refused: the table all zero
                     idx <= 13'd0;
                     nasm <= 7'd0;
                     st  <= F_BUILD;
@@ -865,8 +1056,12 @@ module intv_loader #(
                 c_lo   <= {asm_q[28:25], asm_q[20:17], 8'h00};
                 c_a    <= {asm_q[28:25], asm_q[20:17], 8'h00};
                 c_hi   <= {asm_q[28:25], asm_q[20:17], 8'hFF};
-                c_src  <= {1'b0, asm_q[28:25], asm_q[20:17], 8'h00};
-                st <= asm_q[30:29] == A_POOL ? F_FILL : asm_q[30:29] == A_ROM ? F_CP_RQ : F_SCAN;
+                c_src  <= asm_q[30:29] == A_LUI ? asm_sq[16:0] : {1'b0, asm_q[28:25], asm_q[20:17], 8'h00};
+                if (asm_q[30:29] == A_LUI && !asm_sq[17]) begin   // no source: the cleared RAM block stays
+                    ai <= ai + 7'd1;
+                    st <= F_ASM;
+                end else
+                    st <= asm_q[30:29] == A_POOL ? F_FILL : asm_q[30:29][1] ? F_CP_RQ : F_SCAN;
             end
             F_FILL: if (f_push) begin
                 wcnt <= wcnt + 9'd1;
@@ -894,7 +1089,7 @@ module intv_loader #(
             F_CP_RQ: begin
                 logic [16:0] sa;
                 sa = c_src + {1'b0, c_a - c_lo};
-                if (sa >= words && a_kind != A_ROM)
+                if (sa >= words && !a_kind[1])
                     st <= F_CP_NX;                      // past the image: the fill stays
                 else if (wq_n == 3'd0 && !push) begin
                     rd_req  <= 1'b1;
@@ -910,7 +1105,7 @@ module intv_loader #(
             F_CP_WR: if (f_push) st <= F_CP_NX;
             F_CP_NX: begin
                 if (c_a == c_hi) begin
-                    if (a_kind == A_ROM) begin ai <= ai + 7'd1; st <= F_ASM; end
+                    if (a_kind[1]) begin ai <= ai + 7'd1; st <= F_ASM; end
                     else begin ri <= ri + 6'd1; st <= F_SCAN; end
                 end else begin
                     c_a <= c_a + 16'd1;
@@ -922,15 +1117,19 @@ module intv_loader #(
                 logic [7:0] f;
                 f = 8'd0;
                 case (src)
-                    2'd1: f = ((lid == 8'd1 && (tflg & FLAG_ECS) == 8'd0) ? tflg | conf : tflg)
+                    3'd1: f = ((lid == 8'd1 && (tflg & FLAG_ECS) == 8'd0) ? tflg | conf : tflg)
                               | (cfg_on ? vflags : 8'd0);
-                    2'd2: begin
+                    3'd2: begin
                         f = vflags | (hitf ? tflg & (FLAG_ECS | FLAG_VOICE) : 8'd0)
                             | (anyw ? FLAG_RAM : 8'd0) | (paged != 16'd0 ? FLAG_PAGED : 8'd0);
                         if ((f & FLAG_ECS) == 8'd0) f = f | conf;
                     end
-                    2'd3: begin
+                    3'd3: begin
                         f = rflags | (anyw ? FLAG_RAM : 8'd0);
+                        if ((f & FLAG_ECS) == 8'd0) f = f | conf;
+                    end
+                    3'd4: begin
+                        f = lflags | (anyw ? FLAG_RAM : 8'd0) | (paged != 16'd0 ? FLAG_PAGED : 8'd0);
                         if ((f & FLAG_ECS) == 8'd0) f = f | conf;
                     end
                     default: f = 8'd0;
@@ -938,16 +1137,16 @@ module intv_loader #(
                 res_we      <= 1'b1;
                 res_crc     <= crc_fin;
                 res_words   <= words;
-                res_layout  <= src == 2'd0 ? 8'd0 : lid;
+                res_layout  <= src == 3'd0 ? 8'd0 : lid;
                 res_flags   <= f;
-                res_hit     <= (src == 2'd1 || src == 2'd2) && hitf;
-                res_cfg_crc <= (src != 2'd0 && fmt == FMT_CFG) ? ~cfg_crc : 32'd0;
-                res_fmt     <= src == 2'd0 ? FMT_NONE : fmt;
-                res_noss    <= src != 2'd0 && noss;
-                res_paged   <= src == 2'd0 ? 16'd0 : paged;
-                res_limit   <= src == 2'd0 ? 17'd0 : src == 2'd3 ? 17'h10000 : words;
-                res_jlp_mode <= src == 2'd3 ? rom_jm : (src == 2'd2 || (src == 2'd1 && cfg_on)) ? cfg_jm : 2'd0;
-                res_jlp_sect <= src == 2'd3 ? rom_js : (src == 2'd2 || (src == 2'd1 && cfg_on)) ? cfg_js : 5'd0;
+                res_hit     <= (src == 3'd1 || src == 3'd2) && hitf;
+                res_cfg_crc <= (src != 3'd0 && fmt == FMT_CFG) ? ~cfg_crc : 32'd0;
+                res_fmt     <= src == 3'd0 ? FMT_NONE : fmt;
+                res_noss    <= src != 3'd0 && noss;
+                res_paged   <= src == 3'd0 ? 16'd0 : paged;
+                res_limit   <= src == 3'd0 ? 17'd0 : src >= 3'd3 ? 17'h10000 : words;
+                res_jlp_mode <= src == 3'd4 ? lui_jm : src == 3'd3 ? rom_jm : (src == 3'd2 || (src == 3'd1 && cfg_on)) ? cfg_jm : 2'd0;
+                res_jlp_sect <= src == 3'd4 ? lui_js : src == 3'd3 ? rom_js : (src == 3'd2 || (src == 3'd1 && cfg_on)) ? cfg_js : 5'd0;
                 if (fmt_err != 8'd0) err[5] <= 1'b1;
                 if (ovr) err[3] <= 1'b1;
                 ready   <= 1'b1;

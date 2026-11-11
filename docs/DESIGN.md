@@ -358,13 +358,13 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 | Intellivoice | menu Auto / On / Off | six titles use it in the owner's library | L-TA |
 | Cart RAM | from table or CFG | 8-bit cells in some carts (USCF Chess, Triple Challenge, Land Battle, Game Factory) | MAME slot.cpp:331-340, rom.h:52-53; L-TA |
 | JLP | from CFG `[vars]` or table | RAM, accelerators, flash on its own nonvolatile slot. **(review)** `jlp_accel` 0-3: 1 = accelerators on at reset, no flash; 2 = accelerators *off* at reset with flash; 3 = on with flash. The accelerator on/off state is run-time state and goes in the save state. Flash size is per game, `jlp_flash` x 1.5 KiB sectors (default 4 when flash is enabled), so the flash slot size is not fixed | L-DSL; L-PSS; S9 as1600.txt:1124-1133; id_tag.txt:638-670 |
-| LTO mapper **(review, was missing)** | CFG `lto_mapper` or .ROM tag flag LTOM | LTO Flash's own mapper. Not specified in the 2020 jzIntv docs; titles that need it will not run until it is documented (section 13) | S9 as1600.txt:1048; id_tag.txt:657 |
+| LTO mapper **(review, was missing)** | CFG `lto_mapper`, .ROM tag flag LTOM, or (1.0.7) the LUIGI flag | LTO Flash's own mapper (its $1000-$14FF registers: the LUIGI spec says the Locutus Programmer's Guide documents it, still unreleased). Not specified in the 2020 jzIntv docs; titles that need it will not run until it is documented (section 13) | S9 as1600.txt:1048; id_tag.txt:657 |
 
 ### 5.6 Data slots (proposed, `data.json`)
 
 | id | Name | Files | Notes |
 |---|---|---|---|
-| 0x100 | Cartridge | .int .bin .rom .itv | required |
+| 0x100 | Cartridge | .int .bin .rom .luigi (.itv until 1.0.6; the slot lists four) | required; **(1.0.7)** LTO Flash LUIGI: docs/CARTFORMATS.md 8 |
 | 0x101 | Cartridge config | .cfg | optional; **(build step 8)** used with a raw image (ignored with a .rom); **(build step 9b, owner 2026-10-27)** not picked by the user: a deferload slot (0x8) the core fills itself with NAME.cfg beside NAME.bin (apf_cfgfetch, target commands 0x0190 / 0x0192 / 0x0180; docs/CARTFORMATS.md 1) |
 | 0x102 | EXEC | exec.bin (8,192 bytes) | required |
 | 0x103 | GROM | grom.bin (2,048 bytes) | required |

@@ -127,10 +127,14 @@ def lui_images():
     for p in (0x80, 0x81):
         mm[p], pm[p] = p, 3                  # RAM 16, preloaded below
     mm[0x90], pm[0x90] = 0x90, 7             # RAM 8 (narrow)
+    mm[0x82], pm[0x82] = 0x83, 3             # RAM preloaded from another Locutus address ($8300)
     for p in range(0xD0, 0xD4):
         mm[p], pm[p] = p, 1
     for p in range(0x40, 0x48):
         mm[p], pm[p] = p, 3                  # $4000-$47FF RAM (the ECS's place: a conflict flag)
+    mm[0x02], pm[0x02] = 0x02, 3             # where Locutus answers no reads: $0200 (writes go in),
+    mm[0x10], pm[0x10] = 0x10, 1             # $1000, $3000
+    mm[0x30], pm[0x30] = 0x30, 1
     for y, la in ((0, 0x7C000), (1, 0x79000), (2, 0x7A000), (15, 0x7B000)):
         fl[0xF0 | y] = (la >> 8) | 1 | 8     # chapter F: pages 0, 1, 2, F above $10000
     for y in range(16):
@@ -150,7 +154,8 @@ def lui_images():
              (0x7C000, lui_pattern(0x1000, 0x77, 10)), (0x79000, lui_pattern(0x1000, 0x88, 10)),
              (0x7A000, lui_pattern(0x1000, 0x99)), (0x7B000, lui_pattern(0x800, 0xAA, 8)),
              (0x76000, lui_pattern(0x1000, 0xBB, 10)), (0x77000, lui_pattern(0x400, 0xCC, 10)),
-             (0x75800, lui_pattern(0x800, 0xDD, 10)), (0x0C000, lui_pattern(0x1000, 0xEE, 10))]
+             (0x75800, lui_pattern(0x800, 0xDD, 10)), (0x0C000, lui_pattern(0x1000, 0xEE, 10)),
+             (0x8300, lui_pattern(0x100, 0xF1))]
     flags = 1 << 2 | 2 | 1 << 63            # ecs tolerates, voice enhanced, explicit
     body = luigi.block(3, b'\x00\x09lui_paged') + lui_tab_block(mm, pm, fl) + luigi.block(5, b'skip me')
     body += b''.join(lui_hunk(a, w) for a, w in hunks)
@@ -161,6 +166,8 @@ def lui_images():
         mm[p], pm[p] = p, 1
     for p in range(0x60, 0x70):
         mm[p], pm[p] = p, 9                   # R + B: Intellicart bank windows
+    for p in range(0x69, 0x70):
+        pm[p] = 1                             # B looked up at the half-page's first paragraph only
     for p in range(0xC0, 0xC8):
         mm[p], pm[p] = p, 8                   # B without R: no reads
     for p in range(0x80, 0x84):
@@ -176,14 +183,19 @@ def lui_images():
     # ---- JLP (accelerators and flash), the ECS required, the Intellivoice: a JLP RAM preload
     # at Locutus $10040 (dropped: the JLP's own), unwritten paragraphs above $10000 (RAM: a
     # cleared cart RAM block; ROM: no answer)
+    # The map uses every plane-1 page but $C: the paged data at Locutus $40000 must get it, which
+    # it can only if the JLP RAM preload before it was dropped
     mm, pm, fl = lui_tables()
-    for p in range(0x50, 0x58):
-        mm[p], pm[p] = p, 1
+    for p in range(0x05, 0x100):
+        if p >> 4 != 0xC:
+            mm[p], pm[p] = p, 1
     mm[0xA0], pm[0xA0] = 0x6F0, 3            # RAM at an unwritten Locutus page
     mm[0xB0], pm[0xB0] = 0x6E0, 1            # ROM at an unwritten Locutus page
+    for p in range(0xC0, 0xC4):
+        mm[p], pm[p] = 0x400 | (p & 15), 1    # ROM at Locutus $40000 (paged data's place)
     flags = 3 | 3 << 2 | 3 << 16 | 2 << 22 | 1 << 63
     body = lui_tab_block(mm, pm, fl) + lui_hunk(0x5000, lui_pattern(0x800, 0x5A, 10)) + \
-        lui_hunk(0x10040, lui_pattern(0x40, 0x6B))
+        lui_hunk(0x10040, lui_pattern(0x40, 0x6B)) + lui_hunk(0x40000, lui_pattern(0x400, 0x7C))
     out.append(('lui_jlp', luigi.header(flags) + body + b'\xff', 0))
     # ---- refusals
     mm, pm, fl = lui_tables()

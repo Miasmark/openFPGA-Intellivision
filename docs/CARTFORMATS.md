@@ -392,12 +392,14 @@ is refused (below).
 - `python3 -I tools/mapper/luigi.py`: the spec's test vectors for both CRCs (and IEEE CRC32's),
   the spec's encoding example decoded to its listing, encode -> decode, flipped bits caught
   (LUIGI_SELFTEST).
-- `sim/testroms/step8/build_images.py`: `lui_paged` (page flips with pages above $10000, partial
-  paragraphs, RAM 16 and 8, $4800's flipped half, metadata and an unknown block, junk after the
-  end mark), `lui_bank` (version 0, bank windows, B without R, NARROW without WRITE, preloads, no
-  end mark), `lui_jlp` (flags, a JLP RAM preload dropped, unwritten pages above $10000) and one
-  file per refusal. `tb_loader` runs them all: RTL = model on every bus address, plus planted
-  faults.
+- `sim/testroms/step8/build_images.py`: `lui_paged` (page flips with pages above $10000, a
+  plane-1 page only a page flip uses, partial paragraphs, RAM 16 and 8, $4800's flipped half,
+  paragraphs where Locutus answers no reads, metadata and an unknown block, junk after the end
+  mark), `lui_bank` (version 0, bank windows, B looked up at the half-page's first paragraph,
+  B without R, NARROW without WRITE, preloads, no end mark), `lui_jlp` (flags, a JLP RAM preload
+  that must be dropped for the paged data after it to find the one free page, unwritten pages
+  above $10000) and one file per refusal. `tb_loader` runs them all: RTL = model on every bus
+  address, plus 14 planted faults (`lui_*`), each caught.
 - `tools/refs/jz_luigi_ref.sh` (`JZ_LUIGI`): jzIntv's bin2luigi / rom2luigi make LUIGI files from
   the step-8 images, luigi2bin turns them back into BIN + CFG, jzIntv dumps its space for every
   JZ_REF case's writes; the model on the LUIGI must read the same (all three tools and jzIntv run

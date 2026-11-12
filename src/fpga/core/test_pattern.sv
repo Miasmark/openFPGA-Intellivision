@@ -29,7 +29,9 @@
 //   - (0.0.14) Load diagnostics, cards 12-17 of that row, one card each
 //     (card 18: red when the core gave up waiting for the Pocket's ok to Ready
 //     to run, 0x0140, after 5 s, as on a Core Settings reload (2026-10-31);
-//     card 19 stays black):
+//     card 19: (1.0.8) pixels 152-155 the TutorVision EXEC slot, 156-158 the
+//     TutorVision GROM slot, in the indicators' colours (the EXEC red only
+//     with the menu's TutorVision on Full)):
 //       12  the command that timed out: black none, blue get filename
 //           (0x0190), red open file (0x0192), tan read (0x0180)
 //       13  core_bridge_cmd's target command state: black idle, yellow
@@ -61,8 +63,8 @@ module test_pattern (
     input  wire logic        in_pf,
     input  wire logic [7:0]  pf_x,      // 0..159
     input  wire logic [7:0]  pf_y,      // 0..191
-    input  wire logic [11:0] slot_st,   // 2 bits a slot: 0 empty, 1 other size, 2 ok
-    input  wire logic [5:0]  slot_req,  // slot is required
+    input  wire logic [15:0] slot_st,   // 2 bits a slot: 0 empty, 1 other size, 2 ok
+    input  wire logic [7:0]  slot_req,  // slot is required
     input  wire logic [1:0]  len_st,    // cartridge length source (see above)
     input  wire logic [2:0]  cfg_res,   // the CFG fetch (see above)
     input  wire logic [2:0]  fetch_to,  // load diagnostics (see above)
@@ -85,6 +87,11 @@ module test_pattern (
     wire logic [2:0]  ind  = 3'(cx[4:1]);       // indicator 0..5 (cards 0-11)
 
     logic [1:0] st;
+    // card 19 (1.0.8): the TutorVision EXEC (pixels 152-155) and GROM (156-158) slots
+    wire logic       tv_half = pf_x[2];
+    wire logic [1:0] tv_st   = tv_half ? slot_st[15:14] : slot_st[13:12];
+    wire logic [3:0] tv_col  = tv_st == 2'd2 ? 4'd5 : tv_st == 2'd1 ? 4'd6
+                             : slot_req[tv_half ? 3'd7 : 3'd6] ? 4'd2 : 4'd8;
     always_comb begin
         st = 2'd0;
         case (ind)
@@ -121,6 +128,8 @@ module test_pattern (
             colour = d_phase == 2'd2 ? 4'd5 : d_phase == 2'd1 ? 4'd9 : 4'd0;
         else if (cx == 5'd18)                                       // Ready to run given up
             colour = rtr_gaveup ? 4'd2 : 4'd0;
+        else if (cx == 5'd19)                                       // the TutorVision slots
+            colour = tv_col;
         else if (cx >= 5'd12)
             colour = 4'd0;
         else if (cx == 5'd3)                                        // the CFG fetch

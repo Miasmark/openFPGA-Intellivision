@@ -14,7 +14,8 @@
 //   [bankswitch] lo - hi                   Intellicart bank windows
 //   [vars]       name = decimal            ecs, ecs_compat, voice,
 //                voice_compat, jlp, jlp_accel, jlp_flash, jlpflash (sic:
-//                IntyBASIC's), lto_mapper (others and other values ignored;
+//                IntyBASIC's), lto_mapper, tv_compat (1.0.8: 2 or 3 f_tv_on, 0
+//                f_tv_off; the TutorVision mode's Auto rule) (others and other values ignored;
 //                values saturate at 255). jlp / jlp_accel and jlp_flash /
 //                jlpflash: the first one counts (f_jlp_mode, f_jlp_flash with
 //                their "given" bits; build step 11, docs/JLP_NOTES.md 1.1)
@@ -53,7 +54,9 @@ module intv_cfgparse (
     output logic [1:0]       f_jlp_mode,      // min(value, 3) of the first jlp / jlp_accel
     output logic             f_jlp_mset,
     output logic [7:0]       f_jlp_flash,     // the first jlp_flash / jlpflash
-    output logic             f_jlp_fset
+    output logic             f_jlp_fset,
+    output logic             f_tv_on,
+    output logic             f_tv_off
 );
 
     localparam logic [7:0] E_SYNTAX = 8'h10, E_MANY = 8'h11, E_RANGE = 8'h12, E_PAGE = 8'h13,
@@ -85,7 +88,7 @@ module intv_cfgparse (
 
     initial begin
         rng_we = 1'b0; rng_idx = 5'd0; rng_d = 59'd0; nrng = 6'd0; err = 8'd0;
-        f_ecs = 1'b0; f_ecs_off = 1'b0; f_voice = 1'b0; f_jlp = 1'b0;
+        f_ecs = 1'b0; f_ecs_off = 1'b0; f_voice = 1'b0; f_jlp = 1'b0; f_tv_on = 1'b0; f_tv_off = 1'b0;
         f_jlp_mode = 2'd0; f_jlp_mset = 1'b0; f_jlp_flash = 8'd0; f_jlp_fset = 1'b0;
     end
 
@@ -128,6 +131,7 @@ module intv_cfgparse (
     localparam logic [95:0] N_JLPF     = {"jlp_flash", 24'd0};
     localparam logic [95:0] N_JLPF2    = {"jlpflash", 32'd0};
     localparam logic [95:0] N_LTO      = {"lto_mapper", 16'd0};
+    localparam logic [95:0] N_TVC      = {"tv_compat", 24'd0};
 
     // the line's range, checked (a commit)
     wire logic [20:0] span   = 21'(num1) - 21'(num0);           // hi - lo (num1 >= num0)
@@ -197,6 +201,8 @@ module intv_cfgparse (
             end
             if (is_name(name, nlen, N_VOICE, 4'd5) && val == 8'd1)     f_voice <= 1'b1;
             if (is_name(name, nlen, N_VOICEC, 4'd12) && (val == 8'd2 || val == 8'd3)) f_voice <= 1'b1;
+            if (is_name(name, nlen, N_TVC, 4'd9) && (val == 8'd2 || val == 8'd3)) f_tv_on <= 1'b1;
+            if (is_name(name, nlen, N_TVC, 4'd9) && val == 8'd0) f_tv_off <= 1'b1;
             if ((is_name(name, nlen, N_JLP, 4'd3) || is_name(name, nlen, N_JLPA, 4'd9)) && val != 8'd0)
                 f_jlp <= 1'b1;
             if ((is_name(name, nlen, N_JLP, 4'd3) || is_name(name, nlen, N_JLPA, 4'd9)) && !f_jlp_mset) begin
@@ -220,7 +226,7 @@ module intv_cfgparse (
         rng_we <= 1'b0;
         if (clr) begin
             st <= P_BOL; sec <= S_NONE; ended <= 1'b0; err <= 8'd0; nrng <= 6'd0;
-            f_ecs <= 1'b0; f_ecs_off <= 1'b0; f_voice <= 1'b0; f_jlp <= 1'b0;
+            f_ecs <= 1'b0; f_ecs_off <= 1'b0; f_voice <= 1'b0; f_jlp <= 1'b0; f_tv_on <= 1'b0; f_tv_off <= 1'b0;
             f_jlp_mode <= 2'd0; f_jlp_mset <= 1'b0; f_jlp_flash <= 8'd0; f_jlp_fset <= 1'b0;
             has_page <= 1'b0; has_bsw <= 1'b0;
         end else if (in_v && !ended && c == 8'h00 && !in_end) begin

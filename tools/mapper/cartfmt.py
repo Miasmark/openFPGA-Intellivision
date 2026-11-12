@@ -56,6 +56,7 @@ LAYOUT_CFG, LAYOUT_ROM, LAYOUT_LUI = 0xFE, 0xFF, 0xFD   # 1.0.7: a LUIGI is form
 # flags (as tools/mapper/intvcart.py)
 FLAG_ECS, FLAG_VOICE, FLAG_RAM, FLAG_PAGED = 0x01, 0x02, 0x04, 0x08
 FLAG_JLP, FLAG_ECS_OFF, FLAG_ESTIMATED, FLAG_ECS_RISK = 0x10, 0x20, 0x40, 0x80
+TV_NONE, TV_ON, TV_OFF = 0, 1, 2   # 1.0.8: the TutorVision Auto rule's input (intv_loader res_tv)
 
 # refusal codes (the loader's fmt_err; err[5] set): 0 = none
 ERR_CFG_SYNTAX = 0x10       # a line of a map section does not parse
@@ -171,6 +172,7 @@ class CfgParser:
         self.ended = False          # a NUL byte: the text ends there
         self.ranges = []            # (kind, haspage, page, attr, lo, hi, src)
         self.ecs = self.ecs_off = self.voice = self.jlp = False
+        self.tv_on = self.tv_off = False        # 1.0.8: tv_compat 2 / 3, 0 (TutorVision)
         self.jlp_mode = self.jlp_flash = None   # build step 11: the first instance counts
         self.has_page = self.has_bsw = False
         self.name = b''
@@ -228,6 +230,9 @@ class CfgParser:
             self.voice |= v == 1
         elif n == b'voice_compat':
             self.voice |= v in (2, 3)
+        elif n == b'tv_compat':                 # 1.0.8 (jzIntv id_tag.txt: 0 incompatible, 1 tolerates,
+            self.tv_on |= v in (2, 3)           # 2 supports, 3 requires)
+            self.tv_off |= v == 0
         elif n in (b'jlp', b'jlp_accel'):
             self.jlp |= v != 0
             if self.jlp_mode is None:
@@ -1008,6 +1013,24 @@ def rom_jlp(compat):
     return jlp_config(compat[3] >> 6, (compat[3] & 3) << 8 | (compat[4] if len(compat) >= 5 else 0))
 
 
+def tv_of(on, off):
+    """1.0.8: the TutorVision Auto rule's input: off (incompatible) wins, then on."""
+    return TV_OFF if off else TV_ON if on else TV_NONE
+
+
+def rom_tv(compat):
+    """A .rom compat tag's TUTOR field (byte 1 bits 3-2; id_tag.txt: 01 supports, 10 requires, 11
+    incompatible)."""
+    t = (compat[1] >> 2) & 3 if compat is not None and len(compat) >= 2 else 0
+    return tv_of(t in (1, 2), t == 3)
+
+
+def lui_tv(fl):
+    """A LUIGI's tv_compat (header flags 11:10; 10 enhanced, 11 requires, 00 incompatible)."""
+    t = (fl >> 10) & 3
+    return tv_of(t >= 2, t == 0)
+
+
 def rom_flags(compat):
     """Compat tag ($06) body -> flags (id_tag.txt: 00 don't care, 01 supports, 10 requires,
     11 incompatible)."""
@@ -1070,6 +1093,7 @@ class Loaded:
         self.hit = False
         self.cfg_crc = 0
         self.jlp_mode, self.jlp_sectors = 0, 0  # build step 11
+        self.tv = TV_NONE                       # 1.0.8: the TutorVision Auto rule's input
         self.noss = False
         self.err = 0                    # fmt_err (0: mapped)
         self.asm = []                   # (entry index, dest base, kind) assembled blocks
@@ -1081,7 +1105,7 @@ class Loaded:
     def summary(self):
         return dict(fmt=FMT_NAMES[self.fmt], crc='%08X' % self.crc, words=self.words, layout=self.layout,
                     flags='%02X' % self.flags, hit=int(self.hit), cfg_crc='%08X' % self.cfg_crc,
-                    paged='%04X' % self.paged, noss=int(self.noss), err=self.err)
+                    paged='%04X' % self.paged, noss=int(self.noss), err=self.err, tv=self.tv)
 
 
 def _conflicts(table, flags):
@@ -1346,6 +1370,7 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
             ld.notes.append('CFG ignored: the image is a LUIGI')
         build_lui(ld, p)
         ld.flags = lui_flags(p.flags)
+        ld.tv = lui_tv(p.flags)
         ld.jlp_mode, ld.jlp_sectors = jlp_config((p.flags >> 16) & 3, (p.flags >> 22) & 0x3FF)
         if any(e & E_W for e in ld.table):
             ld.flags |= FLAG_RAM
@@ -1380,6 +1405,7 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
             ld.notes.append('CFG ignored: the image is a .rom')
         build_rom(ld, access, fine)
         ld.flags = rom_flags(compat)
+        ld.tv = rom_tv(compat)
         ld.jlp_mode, ld.jlp_sectors = rom_jlp(compat)
     else:
         words = struct.unpack('>%dH' % ld.words, data + (b'\0' if len(data) & 1 else b''))
@@ -1388,6 +1414,7 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
         lid, flags, ok, hit = tables.lookup(ld.crc, ld.words)
         if not ok:
             lid, flags, hit = 1, FLAG_ESTIMATED, False
+        ttv = hit and tables.tv(ld.crc, ld.words)     # 1.0.8: the table's TutorVision flag
         if cfg is not None and cfg_len == 0:
             cfg = None                          # the data table lists no CFG: none is used
         if cfg is not None and cfg_len is not None:
@@ -1400,6 +1427,7 @@ def load(image, cfg=None, tables=None, layout_pages=None, cfg_len=None):
             ld.err = c.err
             return _refused(ld)
         vflags = 0
+        ld.tv = tv_of(ttv or (c is not None and c.tv_on), c is not None and c.tv_off)
         if c is not None:
             ld.cfg_crc = crc32(cfg)
             ld.jlp_mode, ld.jlp_sectors = jlp_config(c.jlp_mode, c.jlp_flash)
@@ -1449,6 +1477,7 @@ def _refused(ld):
     ld.table = [0] * NENT
     ld.paged = 0
     ld.layout, ld.flags, ld.hit = 0, 0, False
+    ld.tv = TV_NONE
     ld.fmt = FMT_NONE
     ld.cfg_crc = 0
     ld.noss = False

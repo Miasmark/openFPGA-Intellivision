@@ -195,6 +195,33 @@ HW_IMAGES = [('hw_steal', ('hw', 'hw_steal'), None, 460, (0xFF, 0xFF), 'stic'),
              ('hw_frame2', ('hw', 'hw_frame2'), None, 120, (0xFF, 0xFF), 'stic'),
              ('hw_grant', ('hw', 'hw_grant'), None, 130, (0xFF, 0xFF), 'stic'),
              ('hw_grantx', ('hw', 'hw_grantx'), None, 80, (0xFF, 0xFF), 'stic')]
+# 1.0.8: the TutorVision / INTV88 mode (docs/TUTORVISION.md): our sim/testroms/tvtest.asm in the EXEC
+# slot with the mode off, INTV88, Full (wbexec.bin from the BIOS directory), INTV88 with the STIC 1A
+# timing option and with the TutorVision font (wbgrom.bin); the owner's TutorVision images (never in
+# the repository; INTV_LIBRARY/TutorVision/NAME/NAME.bin + .cfg): Little Man Computer on INTV88, Map
+# Mazes on Auto (its table flag: Full). The model's tvtest results are checked against the documents
+# by sim/check/tv_check.py; here RTL = model.
+TV_IMAGES = [('tvtest_off', None, 'tvtest.asm', 13, (0xFF, 0xFF), 'stic'),
+             ('tvtest_88', None, 'tvtest.asm', 13, (0xFF, 0xFF), 'stic'),
+             ('tvtest_full', None, 'tvtest.asm', 13, (0xFF, 0xFF), 'stic'),
+             ('tvtest_bq', None, 'tvtest.asm', 13, (0xFF, 0xFF), 'stic'),
+             ('tvtest_font', None, 'tvtest.asm', 13, (0xFF, 0xFF), 'stic'),
+             ('tv_lmc', ('tvlib', 'lmc'), None, 40, (0xFF, 0xFF), 'stic'),
+             ('tv_mmaze', ('tvlib', 'TutorVision_MapMazes'), None, 40, (0xFF, 0xFF), 'stic')]
+IMAGES += TV_IMAGES
+# the TutorVision setting of an image ('auto', 'off', 'intv88', 'full'), the STIC 1A timing, the font;
+# images not listed run with it Off (the bench's +tv=1)
+TV_OF = {'tvtest_off': dict(tv='off'), 'tvtest_88': dict(tv='intv88'), 'tvtest_full': dict(tv='full'),
+         'tvtest_bq': dict(tv='intv88', bq=True), 'tvtest_font': dict(tv='intv88', font=True),
+         'tv_lmc': dict(tv='intv88', font=True), 'tv_mmaze': dict(tv='auto')}
+TV_SET = {'auto': 0, 'off': 1, 'intv88': 2, 'full': 3}
+
+
+def tv_files():
+    """(wbexec.bin, wbgrom.bin) in the BIOS directory (the owner's files), each None if absent."""
+    return isys.tv_paths(os.environ.get('INTV_BIOS_DIR'))
+
+
 # step 10: the Intellivoice of an image: the menu override ('on', 'off'), level, DAC sound. Images
 # not listed run with it Off (the RTL's override 2; the model without one)
 VOICE_OF = {'voicetest': dict(ovr='on', level=4, dac=False),
@@ -621,7 +648,7 @@ TESTROMS = os.path.join(ROOT, 'sim', 'testroms')
 PHASE = {'NACT': 0, 'ADAR': 1, 'IAB': 2, 'DTB': 3, 'BAR': 4, 'DW': 5, 'DWS': 6, 'INTAK': 7}
 SS = {'cpu': 0x02, 'bus': 0x03, 'stic': 0x04, 'psg': 0x05, 'scr': 0x06, 'sys': 0x07,
       'gram': 0x09, 'cart': 0x0B, 'row': 0x0C, 'line': 0x0D, 'ecs': 0x0E, 'psg2': 0x0F, 'eram': 0x10,
-      'voice': 0x18, 'jlp': 0x20, 'tape': 0x22}
+      'voice': 0x18, 'jlp': 0x20, 'tape': 0x22, 'gramhi': 0x24, 'tvram': 0x2A}
 
 
 # ------------------------------------------------------------------- model
@@ -682,17 +709,27 @@ def ecs_device(cart, ecs):
     return dev
 
 
-def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic', ecs=None, voice=None):
+def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mode='stic', ecs=None, voice=None,
+              tv=None):
     """The model's expected log: bus phases, step starts, handshake and mode
     latch changes, state at the dumps, pictures and STIC logs. ecs: an
-    ECS_OF entry (step 9); voice: a VOICE_OF entry (step 10)."""
+    ECS_OF entry (step 9); voice: a VOICE_OF entry (step 10); tv: a TV_OF entry (1.0.8)."""
     cart = isys.load_cart(cart_path, CFG_OF.get(cart_path))
     vdev = None
     if voice:
         vdev = sp0256.VoiceBus(open(ivoice_rom(), 'rb').read(), on=voice['ovr'] == 'on')
+    tv = tv or {}
+    wbx, wbg = tv_files()
+    ctv = cart[0].ld.tv if cart and getattr(cart[0], 'ld', None) is not None else 0
+    tvm = isys.tv_mode(tv.get('tv', 'off'), ctv, wbx is not None)
+    if tv.get('font') and wbg:
+        grom_path = wbg
+    if tvm == 2 and ecs:
+        ecs = dict(ecs, ovr='off')
     bus = isys.SystemBus(isys.load_words(exec_path), open(grom_path, 'rb').read(),
                          cart[0] if cart else None, stic_mode=mode, ecs=ecs_device(cart, ecs), voice=vdev,
-                         jlp=isys.make_jlp(cart[0] if cart else None))
+                         jlp=isys.make_jlp(cart[0] if cart else None), tv=tvm,
+                         wbexec=isys.load_words(wbx)[4096:8192] if tvm == 2 else None, tv_bq=bool(tv.get('bq')))
     bus.vid.mobs = STIC_MOBS
     bus.pad = tuple(pads)
     if ecs and ecs.get('presses'):
@@ -770,6 +807,7 @@ def model_run(exec_path, grom_path, cart_path, ncyc=NCYC, pads=(0xFF, 0xFF), mod
     exp.mix_raw = ecs_audio
     exp.voice = voice
     exp.vsamples = [x for x in vdev.samples if x[0] < ncyc] if vdev is not None else []
+    exp.tv, exp.tvm = (tv or None), tvm
     return exp
 
 
@@ -1296,6 +1334,12 @@ def compare(name, run, got, exp):
         # moment between instructions, so they are left out)
         checks += [('tape word %d' % i, d[(SS['tape'], i)] & (0xFFFFFFFF if i == 0 else 0x7FFFFF),
                     st['tape'][i]) for i in range(2)]
+        # 1.0.8: the TutorVision segment's words (the INTV88's GRAM cards 64-255, System RAM
+        # $0360-$04FF; zero with the mode off)
+        checks += [('gram %03X' % (512 + i), d[(SS['gramhi'] + i // 256, i % 256)], st['gramhi'][i])
+                   for i in range(1536)]
+        checks += [('sysram %03X' % (352 + i), d[(SS['tvram'] + i // 256, i % 256)], st['tvram'][i])
+                   for i in range(416)]
         bad = [c for c in checks if c[1] != c[2]]
         if bad:
             probs.append('dump %d (cycle %d): %d words differ from the model, first: %s' % (
@@ -1317,6 +1361,10 @@ def compare(name, run, got, exp):
     want = 'L ecs full %d' % (mode == 1)
     if want not in got[3]:
         probs.append('RTL ECS: %s, want "%s"' % ([x for x in got[3] if x.startswith('L ecs full')], want))
+    # 1.0.8: the TutorVision mode the RTL took
+    tl = [x for x in got[3] if x.startswith('L tv ')]
+    if not tl or not tl[0].endswith('next %d' % getattr(exp, 'tvm', 0)):
+        probs.append('RTL TutorVision: %s, want next %d' % (tl, getattr(exp, 'tvm', 0)))
     return probs
 
 
@@ -1336,6 +1384,7 @@ def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pad
         if CFG_OF.get(cart_path):
             cmd.append('+cfg=' + CFG_OF[cart_path])
     cmd += ecs_args(work, tag, exp.ecs, exp.ncyc // FRAME)
+    cmd += tv_args(getattr(exp, 'tv', None))
     if exp.voice:
         cmd += ['+voice=%d' % {'auto': 0, 'on': 1, 'off': 2}[exp.voice['ovr']], '+ivoice=' + ivoice_rom(),
                 '+vlevel=%d' % exp.voice['level'], '+vdac=%d' % exp.voice['dac']]
@@ -1346,6 +1395,23 @@ def run_bench(binary, work, tag, exec_path, grom_path, cart_path, args, exp, pad
     got = parse_log(log, pic)
     os.remove(pic)
     return got
+
+
+def tv_args(tv):
+    """The bench's TutorVision plusargs for a TV_OF entry (none: +tv=1, Off)."""
+    if not tv:
+        return ['+tv=1']
+    args = ['+tv=%d' % TV_SET[tv['tv']]]
+    wbx, wbg = tv_files()
+    if wbx:
+        args.append('+wbexec=' + wbx)
+    if wbg:
+        args.append('+wbgrom=' + wbg)
+    if tv.get('bq'):
+        args.append('+bq=1')
+    if tv.get('font'):
+        args.append('+font=1')
+    return args
 
 
 def ecs_bios():
@@ -2153,7 +2219,7 @@ def main():
     mi = re.search(r"mod_id \[NMOD\] = '\{([^}]*)\}", sv)
     mn = re.search(r"mod_n  \[NMOD\] = '\{([^}]*)\}", sv)
     want_id, want_n = [], []
-    for mid, _, n, *_ in ssl.LAYOUT:
+    for mid, _, n, *_ in ssl.LAYOUT + ssl.TV_LAYOUT:
         for k in range((n + 255) // 256):
             want_id.append(mid + k)
             want_n.append(min(256, n - 256 * k))
@@ -2200,6 +2266,11 @@ def main():
                 cart = hw_image(zipname[1], work)
             elif isinstance(zipname, tuple) and zipname[0] == 'jlp':
                 cart = jlp_image(zipname[1], work)
+            elif isinstance(zipname, tuple) and zipname[0] == 'tvlib':
+                # 1.0.8: the owner's TutorVision images, BIN + CFG (game data: read in place)
+                d = os.path.join(lib, 'TutorVision', zipname[1])
+                cart = os.path.join(d, zipname[1] + '.bin')
+                CFG_OF[cart] = os.path.join(d, zipname[1] + '.cfg')
             elif isinstance(zipname, tuple) and zipname[0] == 'ib':
                 import importlib.util
                 spec = importlib.util.spec_from_file_location('ibjlp', os.path.join(TESTROMS, 'jlp', 'ibjlp.py'))
@@ -2238,7 +2309,7 @@ def main():
                     f.write(img)
             execs[name] = ex
             exps[name] = model_run(ex, grom_path, cart, nframes * FRAME, pad, smode, ECS_OF.get(name),
-                                   VOICE_OF.get(name))
+                                   VOICE_OF.get(name), TV_OF.get(name))
             exps[name].name = name
             e = exps[name]
             if name in ECS_OF:

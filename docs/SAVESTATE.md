@@ -138,7 +138,7 @@ Header (bytes 0-63, 32-bit words, big-endian):
 | 3 | 12 | length | payload bytes from byte 64 (56896) |
 | 4 | 16 | cart_crc | the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge) |
 | 5 | 20 | cart_words | the cartridge image length in 16-bit words |
-| 6 | 24 | flags | bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core) |
+| 6 | 24 | flags | bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 2 TutorVision mode on, bit 3 its Full mode (1.0.8), bit 8 PAL (0 in this core) |
 | 7 | 28 | crc | CRC32 of the payload (bytes 64 .. 64 + length - 1) |
 | 8 | 32 | mod_words | module state words (1971) |
 | 9 | 36 | cram_cells | cart RAM cells (16384) |
@@ -147,7 +147,8 @@ Header (bytes 0-63, 32-bit words, big-endian):
 | 12 | 48 | cfg_crc | the CFG's CRC32 when the map came with one (0: none; version 2) |
 | 13 | 52 | ecs_crc | the ECS ROM slot's CRC32 while the ECS is attached, else 0 (version 3) |
 | 14 | 56 | jram_cells | JLP RAM cells (8000; version 5) |
-| 15-15 | 60-63 | reserved | 0 |
+| 15 | 60 | wbx_crc | the TutorVision EXEC slot's CRC32 in Full mode, else 0 (1.0.8) |
+| 16-15 | 64-63 | reserved | 0 |
 
 Modules (state words in id order; one 32-bit word per state word):
 
@@ -179,14 +180,22 @@ Then:
 |---|---|
 | 8192-40959 | cart RAM: 16384 cells of the SRAM area $18000-$1BFFF, cell 2k in bits 31-16 of a word |
 | 40960-56959 | JLP RAM: 8000 cells ($8040-$9F7F, the SRAM at $1C000), as the cart RAM |
-| 56960-153599 | reserved for later steps, zero |
+| 56960-64767 | (1.0.8) the TutorVision segment, only with header flag bit 2 (else reserved, zero): |
+| 64768-153599 | reserved for later steps, zero |
 
 Ids kept for later steps:
 
 | Id | For |
 |---|---|
 
-Module words: 1971 (7884 bytes); payload 56896 bytes (bytes 64-56959); blob 153600 bytes.
+The TutorVision segment (1.0.8; its state words, one a word, from byte 56960):
+
+| Id | Module | Words | Blob bytes | RTL | Holds |
+|---|---|---|---|---|---|
+| $24-$29 | gramhi | 1536 | 56960-63103 | intv_ram.sv | the INTV88's GRAM cards 64-255, bytes 512-2,047 (ids $24-$29; 1.0.8) |
+| $2A-$2B | tvram | 416 | 63104-64767 | intv_ram.sv | the INTV88's System RAM $0360-$04FF (ids $2A-$2B; 1.0.8) |
+
+Module words: 1971 (7884 bytes); payload 56896 bytes (bytes 64-56959; 64704, to byte 64767, in TutorVision mode); blob 153600 bytes.
 
 <!-- END GENERATED -->
 

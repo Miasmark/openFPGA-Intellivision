@@ -47,18 +47,20 @@ def build(root):
                 log.append('MAME %s has the same CRC as %s; kept the first' % (sw['name'], entries[e['crc']]['name']))
                 continue
             entries[e['crc']] = dict(layout=e['layout'], flags=e['flags'], words=e['bytes'] // 2,
+                                     tv=e['tv'],
                                      source='mame:' + lst.split('.')[0], name=sw['name'],
                                      status='mame' if sw['supported'] == 'yes' else 'mame-unsupported:' + sw['supported'])
     for r in m.read_extra(os.path.join(root, 'data', 'cart_extra.csv')):
         crc = int(r['crc32'], 16)
         if crc in entries:
             sys.exit('cart_extra.csv: %08X is already in MAME\'s lists' % crc)
-        lay = m.Layout(m.segs_from_text(r['segments']), m.rams_from_text(r['ram']))
+        # 1.0.8: a row with no segments only flags its image (the default map; a CFG maps it)
+        lay = m.Layout(m.segs_from_text(r['segments']), m.rams_from_text(r['ram'])) if r['segments'] else None
         flags = m.FLAG_ESTIMATED
         flags |= m.FLAG_ECS if r['ecs'] == '1' else 0
         flags |= m.FLAG_VOICE if r['voice'] == '1' else 0
         entries[crc] = dict(layout=lay, flags=flags, words=(int(r['bytes']) + 1) // 2, source='extra',
-                            name=r['ref'] or r['title'], status=r['status'])
+                            name=r['ref'] or r['title'], status=r['status'], tv=r.get('tv') == '1')
     names = m.read_name_flags(os.path.join(root, 'data', 'jzintv_name_flags.csv'))
     for crc, (ecs, voice) in sorted(names.items()):
         add = (m.FLAG_ECS if ecs else 0) | (m.FLAG_VOICE if voice else 0)
@@ -100,13 +102,15 @@ def build(root):
             lay = None
         flags = m.layout_flags(lay, e['flags']) if lay else e['flags']
         size256 = -(-e['words'] // 256)
-        rows.append(dict(crc=crc, layout=lid, flags=flags, size256=size256, e=e,
+        assert size256 < m.TV_FLAG
+        rows.append(dict(crc=crc, layout=lid, flags=flags, size256=size256, e=e, tv=e.get('tv', False),
                          text=lay.text() if lay else 'default map (cut at image length)'))
     return rows, tables, ids, lay_by_key, log
 
 
 def crc_word(r):
-    return (r['crc'] << 32) | (r['layout'] << 24) | (r['flags'] << 16) | (r['size256'] & 0xFFFF)
+    return ((r['crc'] << 32) | (r['layout'] << 24) | (r['flags'] << 16) | (r['size256'] & 0x7FFF)
+            | (m.TV_FLAG if r['tv'] else 0))
 
 
 def crc_table_words(rows):
@@ -144,7 +148,7 @@ def outputs(root):
     crcs = crc_table_words(rows)
     files['src/fpga/core/tables/cart_crc.mif'] = mif(64, CRC_DEPTH, crcs, head + [
         'Entry: [63:32] CRC32 of exactly the file length (data table size of slot 0x100, not the',
-        'bridge strobes), [31:24] layout id, [23:16] flags, [15:0] image size in 256-word units',
+        'bridge strobes), [31:24] layout id, [23:16] flags, [15] TutorVision (1.0.8), [14:0] image size in 256-word units',
         '(ceil(ceil(bytes/2)/256); 0 = not checked). %d entries, then padding entries with CRC' % len(rows),
         'FFFFFFFF and layout 0 (no entry): sorted by CRC end to end, so a linear scan that stops',
         'at layout 0 and a binary search both work.'])
@@ -187,6 +191,8 @@ def outputs(root):
     for r in rows:
         e = r['e']
         fn = '+'.join(n for b, n in m.FLAG_NAMES.items() if r['flags'] & b)
+        if r['tv']:                     # 1.0.8: the TutorVision flag (size word bit 15)
+            fn = fn + '+tv' if fn else 'tv'
         lines.append('%08X,%d,%02X,%s,%X,%s,%s,%s,%s' % (r['crc'], r['layout'], r['flags'], fn, e['words'],
                                                        e['source'], e['status'], e['name'], r['text']))
     files['data/cart_table.csv'] = '\n'.join(lines) + '\n'

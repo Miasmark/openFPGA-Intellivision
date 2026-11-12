@@ -32,6 +32,16 @@
 //   $00E0-$00E3, $00F0-$00FF, $4000-$47FF
 //                           the ECS when attached (intv_ecs: ecs_hit,
 //                           ecs_q); the cartridge does not answer there
+// TutorVision / INTV88 (1.0.8, experimental; docs/TUTORVISION.md 3, J. Zbiciak's notes): tv
+// (taken at machine reset) 1 = the INTV88 board, 2 = with the WBEXEC. The STIC 1A decodes:
+//   $0000-$003F             STIC registers only (no aliases at $4000, $8000, $C000; no mode
+//                           read through $x021)
+//   $0200-$04FF             System RAM (sys_idx = a - $0200; $0360-$04FF only in this mode,
+//                           where the cartridge, the ECS and the JLP do not answer)
+//   $2000-$2FFF             tv 2: the WBEXEC's second half (wbx_q; the ECS is off)
+//   $3000-$37FF             GROM; $00FF while the STIC holds the graphics bus (stic_open low)
+//   $3800-$3FFF             GRAM 2K x 8 (gram_idx, 256 cards); no write aliases; $00FF closed
+//
 // STIC registers and GRAM are open to the CPU as intv_stic says
 // (stic_open: in the register window, and all frame when the frame's
 // display is off: the console fit F, docs/TIMING_FIT.md); otherwise a read
@@ -91,6 +101,7 @@ module intv_bus #(
     input  wire logic [31:0] ss_wdata,        // [31:19] unused
     /* verilator lint_on UNUSEDSIGNAL */
     input  wire logic [8:0]  vcnt,
+    input  wire logic [1:0]  tv,              // 1.0.8: 0 off, 1 INTV88, 2 Full (taken at machine reset)
     output logic             hold,            // CPU held in reset
     output logic             frame_end,       // ce that ends the frame's last slot
 
@@ -106,6 +117,8 @@ module intv_bus #(
     output logic             wr,              // ce of DW
     output logic             vb,              // the register window, this slot
     output logic             scr_we, psg_we, sys_we, gram_we, stic_we,
+    output logic [9:0]       sys_idx,         // System RAM word: a - $0200
+    output logic [10:0]      gram_idx,        // GRAM byte: a[10:0] (tv), a[8:0] (the 2609's 512)
 
     // from the devices
     input  wire logic        stic_open,       // STIC registers and GRAM open
@@ -114,6 +127,7 @@ module intv_bus #(
     input  wire logic [7:0]  psg_q,
     input  wire logic [15:0] sys_q,
     input  wire logic [9:0]  exec_q,
+    input  wire logic [9:0]  wbx_q,           // 1.0.8: the WBEXEC's $2000-$2FFF (intv_sysrom)
     input  wire logic [7:0]  grom_q,
     input  wire logic [7:0]  gram_q,
 
@@ -164,6 +178,11 @@ module intv_bus #(
     wire logic sel_scr  = a[15:8] == 8'h01 && a[7:4] != 4'hF;
     wire logic sel_psg  = a[15:4] == 12'h01F;
     wire logic sel_sys  = a[15:9] == 7'b0000001 && a[8:0] < 9'h160;
+    wire logic tv_on    = tv != 2'd0;
+    wire logic sel_tvr  = tv_on && a >= 16'h0360 && a <= 16'h04FF;     // the INTV88's System RAM
+    wire logic sel_wbx  = tv == 2'd2 && a[15:12] == 4'h2;               // the WBEXEC's half
+    assign sys_idx  = 10'(a[9:0] - 10'h200);
+    assign gram_idx = tv_on ? a[10:0] : {2'b00, a[8:0]};
     wire logic sel_exec = a[15:12] == 4'h1;
     wire logic sel_grom = a[15:11] == 5'b00110;
     wire logic sel_gram = a[15:11] == 5'b00111;
@@ -174,9 +193,9 @@ module intv_bus #(
 
     assign scr_we  = wr && sel_scr;
     assign psg_we  = wr && sel_psg;
-    assign sys_we  = wr && sel_sys;
-    assign gram_we = wr && a[13:11] == 3'b111 && stic_open;
-    assign stic_we = wr && a[13:6] == 8'd0;
+    assign sys_we  = wr && (sel_sys || sel_tvr);
+    assign gram_we = wr && (tv_on ? a[15:11] == 5'b00111 : a[13:11] == 3'b111) && stic_open;
+    assign stic_we = wr && (tv_on ? a[15:6] == 10'd0 : a[13:6] == 8'd0);
 
     // ------------------------------------------------------------ data in
     always_comb begin
@@ -189,11 +208,14 @@ module intv_bus #(
             if (sel_psg)  din &= {8'h00, psg_q};
             if (sel_sys)  din &= sys_q;
             if (sel_exec) din &= {6'd0, exec_q};
-            if (sel_grom) din &= {8'hFF, grom_q};
-            if (sel_gram) din &= stic_open ? {8'h00, gram_q} : 16'd0;   // closed: $0000 (TIMING_FIT)
+            if (sel_grom) din &= tv_on && !stic_open ? 16'h00FF : {8'hFF, grom_q};
+            // closed: $0000 (TIMING_FIT); the STIC 1A $00FF (Zbiciak p.15)
+            if (sel_gram) din &= stic_open ? {8'h00, gram_q} : tv_on ? 16'h00FF : 16'd0;
             if (cart_hit) din &= cart_q;
             if (ecs_hit)  din &= ecs_q;
             if (ovr_hit)  din = ovr_q;
+            if (sel_tvr)  din = sys_q;                  // tv: nothing else answers there
+            if (sel_wbx)  din = {6'd0, wbx_q};
         end
     end
 

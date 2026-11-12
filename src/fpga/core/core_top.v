@@ -384,7 +384,9 @@ synch_3 s01(pll_core_locked, pll_core_locked_s, clk_74a);
 //   0x02000000  EXEC (0x102)                        |  bits 27:24 name the slot
 //   0x03000000  GROM (0x103)                        |  (intv_media)
 //   0x04000000  ECS ROM (0x104)                     |
-//   0x05000000  Intellivoice ROM (0x105)           /
+//   0x05000000  Intellivoice ROM (0x105)            |
+//   0x06000000  TutorVision EXEC (0x108; 1.0.8)     |
+//   0x07000000  TutorVision GROM (0x109; 1.0.8)    /
 //   0x10000000  settings (interact.json)
 //   0x20000000  JLP flash (0x106, nonvolatile; step 11)
 //   0x30000000  ECS tape (0x107, nonvolatile; 1.0.5)
@@ -400,6 +402,8 @@ localparam [15:0] SLOT_ECS    = 16'h0104;
 localparam [15:0] SLOT_IVOICE = 16'h0105;
 localparam [15:0] SLOT_JLP    = 16'h0106;
 localparam [15:0] SLOT_TAPE   = 16'h0107;
+localparam [15:0] SLOT_WBEXEC = 16'h0108;
+localparam [15:0] SLOT_WBGROM = 16'h0109;
 
 // Save state (DESIGN.md 4.1, 4.4): the blob's bridge address and its fixed
 // size (tools/savestate.py, intv_ss_pkg), served by intv_ss_ctl.
@@ -423,6 +427,9 @@ localparam [31:0] SS_SIZE = 32'd153600;
     reg             set_vdac = 1'b0;        // Voice sound: 0 clean (14 bits), 1 the chip's 7-bit DAC
     reg     [2:0]   set_elevel = 3'd2;      // ECS level: PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: as 0.0.9; the ECS has its own knob)
     reg             set_tfast = 1'b0;       // Tape speed: 0 Normal, 1 Instant (1.0.6; intv_tape)
+    reg     [1:0]   set_tv = 2'd0;          // TutorVision: 0 Auto, 1 Off, 2 INTV88, 3 Full (1.0.8; at reset)
+    reg             set_bq = 1'b0;          // STIC 1A timing: 0 Off, 1 On (1.0.8; at reset)
+    reg             set_font = 1'b0;        // Font: 0 Original, 1 TutorVision (1.0.8; at reset)
     reg     [7:0]   menu_reset_cnt = 8'd0;
     reg             tape_erase_t = 1'b0;    // the menu's Erase ECS tape: a toggle into clk_sys
 
@@ -445,6 +452,9 @@ always @(posedge clk_74a) begin
             12'h228: set_elevel     <= bridge_wr_data[2:0];
             12'h22C: tape_erase_t   <= ~tape_erase_t;
             12'h230: set_tfast      <= bridge_wr_data[0];
+            12'h234: set_tv         <= bridge_wr_data[1:0];
+            12'h238: set_bq         <= bridge_wr_data[0];
+            12'h23C: set_font       <= bridge_wr_data[0];
             default: ;
         endcase
     end
@@ -778,6 +788,8 @@ data_loader #(
     reg     [1:0]   vdac_s = 2'b00;
     reg     [2:0]   terase_s = 3'd0;        // the tape erase toggle
     reg     [1:0]   tfast_s = 2'b00;        // Tape speed (any time)
+    reg     [1:0]   tv_s0 = 2'd0, tv_s1 = 2'd0;    // TutorVision (taken at a machine reset)
+    reg     [1:0]   bq_s = 2'b00, font_s = 2'b00;
     reg             timing_reset = 1'b1;
 
 always @(posedge clk_sys) begin
@@ -791,6 +803,9 @@ always @(posedge clk_sys) begin
     vdac_s   <= {vdac_s[0], set_vdac};
     terase_s <= {terase_s[1:0], tape_erase_t};
     tfast_s  <= {tfast_s[0], set_tfast};
+    tv_s0    <= set_tv;  tv_s1 <= tv_s0;
+    bq_s     <= {bq_s[0], set_bq};
+    font_s   <= {font_s[0], set_font};
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
     timing_reset  <= ~lock_s[2];
@@ -863,7 +878,8 @@ intv_input input_map (
     wire            machine_reset;
     wire    [31:0]  cart_crc;
     wire            cart_ready;
-    wire    [11:0]  slot_st;
+    wire    [15:0]  slot_st;
+    wire            tv_on;
     wire    [1:0]   cart_len_st;
     wire            ce_pix, live;
     wire    [8:0]   hcnt, vcnt, vline;
@@ -893,6 +909,10 @@ intv_core machine_side (
     .ecs_keys           ( ecs_keys ),
     .ecs_synth          ( ecs_synth ),
     .tape_instant       ( tfast_s[1] ),
+    .tv_setting         ( tv_s1 ),
+    .tv_bq_set          ( bq_s[1] ),
+    .font_set           ( font_s[1] ),
+    .tv_on              ( tv_on ),
     .ecs_full           ( ecs_full ),
     .voice_override     ( voice_s1 ),
     .voice_dac7         ( vdac_s[1] ),
@@ -960,7 +980,7 @@ test_pattern pattern (
     .pf_x       ( pf_x ),
     .pf_y       ( pf_y ),
     .slot_st    ( slot_st ),
-    .slot_req   ( 6'b001101 ),
+    .slot_req   ( {1'b0, tv_s1 == 2'd3, 6'b001101} ),
     .len_st     ( cart_len_st ),
     .cfg_res    ( cfg_res_s2 ),
     .fetch_to   ( diag_s2[13:11] ),
@@ -1018,6 +1038,7 @@ pocket_video video (
     .hcnt       ( hcnt ),
     .vline      ( vline ),
     .border_on  ( border_s[1] ),
+    .tv         ( tv_on ),
     .blank      ( !live ),
     .in_pf      ( in_pf ),
     .pf_x       ( pf_x ),

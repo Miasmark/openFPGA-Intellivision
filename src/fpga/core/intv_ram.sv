@@ -14,6 +14,11 @@
 // ss_addr (0 when not addressed), and ss_we writes it. ss_en must drop at
 // least two clocks before the machine runs again.
 //
+// (1.0.8) A second save-state window: WORDS2 more words from RAM word BASE2 on, numbered from
+// module id SS_ID2 (0: none). The TutorVision mode's GRAM cards 64-255 and System RAM
+// $0360-$04FF live in the same block RAMs as the 2609's, past their words, but keep ids of
+// their own, so that the blob's first module area stays as it was (tools/savestate.py TV_LAYOUT).
+//
 // Port B (build step 4) is the STIC's: read only, q_b one clock after
 // addr_b, every clock (also while ss_en is high). A reader must take q_b
 // only when addr_b has not changed in the clock before, so that a freeze,
@@ -29,7 +34,10 @@ module intv_ram #(
     parameter int         AW    = 8,
     parameter int         DW    = 8,
     parameter int         WORDS = 256,        // used words (state words)
-    parameter logic [7:0] SS_ID = 8'h06
+    parameter logic [7:0] SS_ID = 8'h06,
+    parameter int         WORDS2 = 0,         // (1.0.8) the second window's words, from BASE2
+    parameter int         BASE2 = 0,
+    parameter logic [7:0] SS_ID2 = 8'h00
 ) (
     input  wire logic          clk,
     input  wire logic [AW-1:0] addr,
@@ -57,9 +65,13 @@ module intv_ram #(
 
     wire logic [7:0]  ss_id  = ss_addr[15:8] - SS_ID;
     wire logic [15:0] ss_idx = {ss_id, ss_addr[7:0]};
-    wire logic        ss_hit = ss_addr[15:8] >= SS_ID && ss_idx < 16'(WORDS);
+    wire logic        ss_hit1 = ss_addr[15:8] >= SS_ID && ss_idx < 16'(WORDS);
+    wire logic [7:0]  ss_id2  = ss_addr[15:8] - SS_ID2;
+    wire logic [15:0] ss_idx2 = {ss_id2, ss_addr[7:0]};
+    wire logic        ss_hit2 = WORDS2 != 0 && ss_addr[15:8] >= SS_ID2 && ss_idx2 < 16'(WORDS2);
+    wire logic        ss_hit  = ss_hit1 || ss_hit2;
 
-    wire logic [AW-1:0] ra = ss_en ? AW'(ss_idx) : addr;
+    wire logic [AW-1:0] ra = !ss_en ? addr : ss_hit2 ? AW'(ss_idx2 + 16'(BASE2)) : AW'(ss_idx);
     wire logic          wa = ss_en ? ss_we && ss_hit : we;
     wire logic [DW-1:0] wd = ss_en ? ss_wdata[DW-1:0] : d;
 

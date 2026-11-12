@@ -63,6 +63,13 @@
 //          word, the cart RAM and the JLP RAM are written (the timing word's mpos: the
 //          machine resumes at the saved position), then ok.
 //
+// (1.0.8) The TutorVision mode (tv_flag; docs/TUTORVISION.md): the blob's live part goes on past
+// the JLP RAM with the TutorVision segment (blob words 14,240-16,191: the INTV88's GRAM cards
+// 64-255 and System RAM $0360-$04FF through the state bus, ss_tv_addr), staged in the same block
+// RAM shadow (6,144 words); the header's length grows to SS_PAYLOAD_TV, flags bit 2 (and bit 3
+// in Full mode, tv_full) and word 15 (the WBEXEC slot's CRC in Full mode) must match the core's.
+// With the mode off everything is 1.0.7's: its states load unchanged.
+//
 // (build step 8) An image whose writable storage the blob cannot hold
 // (cart_noss: an Intellicart bank window that writes, or more cart RAM than
 // the 16K cells; docs/CARTFORMATS.md 5) refuses saves and loads with err,
@@ -136,6 +143,9 @@ module intv_ss_ctl #(
     input  wire logic        voice_flag,         // the Intellivoice on (step 10: header flags bit 1)
     input  wire logic        voice_busy,         // a voice sample in the making: not a quiet point
     input  wire logic [31:0] ecs_crc,            // its ROM slot's CRC32 (0 when not attached)
+    input  wire logic        tv_flag,            // 1.0.8: the TutorVision mode on (header flags bit 2)
+    input  wire logic        tv_full,            // ... its Full mode (bit 3)
+    input  wire logic [31:0] wbx_crc,            // the WBEXEC slot's CRC32 (header word 15 in Full)
 
     output logic             run,
     output logic             frozen,
@@ -160,6 +170,9 @@ module intv_ss_ctl #(
     localparam int W_CRAM = SS_CRAM_BYTE / 4;             // 2048
     localparam int W_JRAM = SS_JRAM_BYTE / 4;             // 10240: the shadow's from here
     localparam int W_END  = SS_LIVE_END / 4;              // 14240
+    localparam int W_TV0  = SS_TV_BYTE / 4;               // 14240: the TutorVision segment (1.0.8)
+    localparam int W_TVEND = SS_TV_END / 4;               // 16192
+    localparam int SH_WORDS = W_TVEND - W_JRAM;           // 5952: the shadow's words
 
     // ============================================== clk_74a side
     logic        b_t = 1'b0;                              // request toggle
@@ -253,8 +266,8 @@ module intv_ss_ctl #(
     typedef enum logic [1:0] {M_IDLE, M_HI, M_LO, M_SH} mst_t;
     mst_t        mst = M_IDLE;
     logic        m_go, m_we, m_sh;
-    logic [11:0] m_si;
-    logic [31:0] shadow [4096];
+    logic [12:0] m_si;
+    logic [31:0] shadow [SH_WORDS];
     logic [31:0] sh_q;
     always_ff @(posedge clk) begin
         if (mst == M_IDLE && m_go && m_sh && m_we) shadow[m_si] <= m_d;
@@ -391,13 +404,16 @@ module intv_ss_ctl #(
     wire logic        in_mod  = w >= 14'(W_MOD0) && w < 14'(W_GAP0);
     wire logic        in_gap  = w >= 14'(W_GAP0) && w < 14'(W_CRAM);
     wire logic        in_cram = w >= 14'(W_CRAM) && w < 14'(W_JRAM);
-    wire logic        in_jram = w >= 14'(W_JRAM);
+    wire logic        in_jram = w >= 14'(W_JRAM) && w < 14'(W_TV0);
+    wire logic        in_tvs  = tv_flag && w >= 14'(W_TV0) && w < 14'(W_TVEND);
     wire logic [13:0] jw      = w - 14'(W_JRAM);
+    wire logic [10:0] ti      = 11'(w - 14'(W_TV0));
+    wire logic [13:0] w_endl  = tv_flag ? 14'(W_TVEND) : 14'(W_END);   // the live part's end
     wire logic [16:0] jram_a  = JRAM + {2'd0, jw, 1'b0};
     wire logic [10:0] mi      = 11'(w - 14'(W_MOD0));
     wire logic [16:0] stg_a   = STAGE + {2'd0, w, 1'b0};
     wire logic [16:0] cram_a  = CRAM + {2'd0, w - 14'(W_CRAM), 1'b0};
-    wire logic        w_last  = w == 14'(W_END - 1);
+    wire logic        w_last  = w == w_endl - 14'd1;
     wire logic        m_idle  = mst == M_IDLE;
 
     // the header this core expects (word SS_H_CRC: c)
@@ -408,10 +424,10 @@ module intv_ss_ctl #(
             4'(SS_H_MAGIC):      hdr_exp = SS_MAGIC;
             4'(SS_H_VERSION):    hdr_exp = SS_VERSION;
             4'(SS_H_SIZE):       hdr_exp = 32'(SS_BLOB_BYTES);
-            4'(SS_H_LENGTH):     hdr_exp = 32'(SS_PAYLOAD);
+            4'(SS_H_LENGTH):     hdr_exp = tv_flag ? 32'(SS_PAYLOAD_TV) : 32'(SS_PAYLOAD);
             4'(SS_H_CART_CRC):   hdr_exp = ccrc;
             4'(SS_H_CART_WORDS): hdr_exp = {15'd0, cwords};
-            4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, ecs_flag};
+            4'(SS_H_FLAGS):      hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, voice_flag, ecs_flag};
             4'(SS_H_CRC):        hdr_exp = c;
             4'(SS_H_MOD_WORDS):  hdr_exp = 32'(SS_MOD_WORDS);
             4'(SS_H_CRAM_CELLS): hdr_exp = 32'(SS_CRAM_CELLS);
@@ -420,12 +436,13 @@ module intv_ss_ctl #(
             4'(SS_H_CFG_CRC):    hdr_exp = cfg_crc;
             4'(SS_H_ECS_CRC):    hdr_exp = ecs_crc;
             4'(SS_H_JRAM_CELLS): hdr_exp = 32'(SS_JRAM_CELLS);
+            4'(SS_H_WBX_CRC):    hdr_exp = tv_flag && tv_full ? wbx_crc : 32'd0;
             default:             hdr_exp = 32'd0;
         endcase
     endfunction
 
     // the bridge's word: in the live part from the SRAM, else 0
-    wire logic bp_live = bp_w < 22'(W_END);
+    wire logic bp_live = bp_w < (tv_flag ? 22'(W_TVEND) : 22'(W_END));
 
     // the SRAM requests of each state (m_go in a state's phase 0; the
     // state moves to phase 1 or 2 in the same clk and waits for m_done)
@@ -434,8 +451,8 @@ module intv_ss_ctl #(
         m_we = 1'b0;
         m_a  = stg_a;
         m_d  = v;
-        m_sh = in_jram;                                   // a staged word: the shadow's
-        m_si = jw[11:0];
+        m_sh = w >= 14'(W_JRAM);                          // a staged word: the shadow's
+        m_si = jw[12:0];
         bp_take = 1'b0;
         case (ost)
             O_BR: if (m_idle) begin
@@ -446,7 +463,7 @@ module intv_ss_ctl #(
                     m_a  = STAGE + {bp_w[15:0], 1'b0};
                     m_d  = bp_d;
                     m_sh = bp_w >= 22'(W_JRAM);
-                    m_si = 12'(bp_w - 22'(W_JRAM));
+                    m_si = 13'(bp_w - 22'(W_JRAM));
                 end
             end
             O_SNAP:  if (ph == 2'd0 && dly == 3'd0 && (in_cram || in_jram)) begin
@@ -569,8 +586,8 @@ module intv_ss_ctl #(
             // ---------------- save: module words, gap, cart RAM, then header
             O_SNAP: if (dly == 3'd0) begin
                 case (ph)
-                    2'd0: if (in_mod) begin
-                              ss_addr <= intv_ss_pkg::ss_word_addr(mi);
+                    2'd0: if (in_mod || in_tvs) begin
+                              ss_addr <= in_tvs ? intv_ss_pkg::ss_tv_addr(ti) : intv_ss_pkg::ss_word_addr(mi);
                               dly <= 3'd2;
                               ph <= 2'd1;
                           end else if (in_gap) begin
@@ -667,8 +684,8 @@ module intv_ss_ctl #(
             end
             O_APPLYW: begin
                 case (ph)
-                    2'd0: if (in_mod) begin
-                              ss_addr  <= intv_ss_pkg::ss_word_addr(mi);
+                    2'd0: if (in_mod || in_tvs) begin
+                              ss_addr  <= in_tvs ? intv_ss_pkg::ss_tv_addr(ti) : intv_ss_pkg::ss_word_addr(mi);
                               ss_wdata <= v;
                               ss_we    <= 1'b1;
                               ph       <= 2'd2;

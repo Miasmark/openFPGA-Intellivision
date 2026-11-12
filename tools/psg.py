@@ -148,6 +148,7 @@ class Psg:
         self.on_level = None    # called with the levels before each tick (the RTL's filter input)
         self.on_sample = None   # called with each 48 kHz sample
         self.mame_tone = False  # MAME's tone counter (remainder kept), checks only
+        self.tv = False         # 1.0.8: the STIC 1A's PSG (TutorVision mode; docs/TUTORVISION.md 3.7)
         self.reset()
 
     # ---------------------------------------------------------------- state
@@ -162,6 +163,7 @@ class Psg:
         self.estep = 15         # shape 0 written at reset (MAME ay8910_reset_ym)
         self.eattack = 0
         self.eholding = 0
+        self.efirst = 1         # 1.0.8: no envelope step since the last shape write (the STIC 1A)
         self.ticks = 0          # ticks since reset
         self.box, self.boxn, self.srphase = 0, 0, 0
         self.lp1 = self.lp2 = 0
@@ -173,7 +175,8 @@ class Psg:
         w.append(self.ncount | self.nprescale << 5)
         w.append(self.rng)
         w.append(self.ecount)
-        w.append(self.estep | (self.eattack & 1) << 4 | self.eholding << 5 | (phase & 3) << 6)
+        w.append(self.estep | (self.eattack & 1) << 4 | self.eholding << 5 | (phase & 3) << 6
+                 | (self.efirst if self.tv else 0) << 8)    # 1.0.8: 0 with the mode off (1.0.7's word)
         return list(self.regs) + w
 
     # ------------------------------------------------------------ registers
@@ -184,11 +187,16 @@ class Psg:
         if n == R_SHAPE:        # every write restarts the envelope
             self.estep = 15
             self.eholding = 0
+            self.efirst = 1
             self.eattack = 15 if self.regs[R_SHAPE] & 4 else 0
 
     def read(self, n, pads=(0xFF, 0xFF)):
         n &= 15
-        return pads[n - 14] if n >= 14 else self.regs[n]
+        if n >= 14:
+            return pads[n - 14]
+        if n == R_ENABLE and self.tv:
+            return self.regs[n] & 0x3F  # the STIC 1A: R7 bits 7:6 read 0 (Zbiciak p.18)
+        return self.regs[n]
 
     def _shape(self):
         s = self.regs[R_SHAPE]
@@ -225,6 +233,7 @@ class Psg:
             ep = r[R_EFINE] | r[R_ECOARSE] << 8
             if self.ecount + 1 >= 2 * ep:
                 self.ecount = 0
+                self.efirst = 0
                 if self.estep == 0:
                     hold, alt = self._shape()
                     if hold:
@@ -270,7 +279,12 @@ class Psg:
             sel = (v >> 4) & 3
             if self.variant == "8917":
                 sel = 3 if sel & 1 else 0
-            lv = (ev >> (3 - sel)) if sel else (v & 15)
+            if self.tv and sel in (1, 2):
+                # the STIC 1A: "take volume from envelope for one envelope step and then go to
+                # silence" (Zbiciak p.18): the envelope until its first step after a shape write
+                lv = ev if self.efirst else 0
+            else:
+                lv = (ev >> (3 - sel)) if sel else (v & 15)
             out.append(lv if on else 0)
         return out
 

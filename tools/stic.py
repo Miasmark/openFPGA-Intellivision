@@ -260,6 +260,8 @@ class Stic:
         if a >= STIC_REGS:
             return 0x3FFF
         fixed, keep = STIC_DEF[a]
+        if a == 0x22 and self.tv():
+            return 0x3FF7               # the STIC 1A: bit 3 of $0022 reads 0 (Zbiciak p.14)
         return fixed | (self.regs[a] & keep)
 
     def alias_mode_read(self, open_):
@@ -288,11 +290,23 @@ class Stic:
         """[(kind, request cycle, release cycle, fetch cycle or None)] for a
         frame with the display enabled, relative to the frame start
         (docs/TIMING_FIT.md, family F)."""
-        s = [("frame", FRAME_BUSRQ_AT, FRAME_BUSRQ_AT + FRAME_BUSRQ, None)]
+        # 1.0.8: the STIC 1A timing option (TutorVision mode; docs/TUTORVISION.md 3.6): no
+        # request at the frame start, each row's one cycle shorter (Zbiciak's notes p.15-16:
+        # the INTV88 lets more of the frame to the CPU; the pattern there is a guess, unmeasured)
+        bq = self.tv_bq()
+        s = [] if bq else [("frame", FRAME_BUSRQ_AT, FRAME_BUSRQ_AT + FRAME_BUSRQ, None)]
         for r in range(ROW_REQS):
             req = ROW0_REQ + 2 * LINE * vdr + ROW_PERIOD * r
-            s.append(("row%d" % r, req, req + ROW_HOLD, req + FETCH_OFF))
+            s.append(("row%d" % r, req, req + ROW_HOLD - (1 if bq else 0), req + FETCH_OFF))
         return s
+
+    # -- TutorVision / INTV88 (1.0.8; docs/TUTORVISION.md) -------------------
+    def tv(self):
+        """The machine's TutorVision mode (0 off, 1 INTV88, 2 Full): the STIC 1A's rules."""
+        return getattr(self.bus, "tv", 0)
+
+    def tv_bq(self):
+        return bool(self.tv()) and getattr(self.bus, "tv_bq", False)
 
     def busrq(self, cycle):
         """BUSRQ* as the CPU sees it at `cycle` (model cycle)."""
@@ -536,6 +550,7 @@ class Stic:
         # mode mame: what MAME's bitmap holds where this frame draws no card
         fg = bytearray(self.mame_fg) if (mame and self.mame_fg is not None) else bytearray(W * H)
         grom, gram = self.bus.grom, self.bus.gram
+        tv = self.tv()
         hd, vd = r[HDR] & 7, r[VDR] & 7
         cs = 0                          # colour stack pointer, 0 every frame
         for row in range(CARD_ROWS):
@@ -566,7 +581,8 @@ class Stic:
                     fgc = (w & 7) | ((w >> 9) & 8)
                     bgc = r[CSR + cs] & 0xF
                     if w & 0x0800:
-                        mem, base = gram, w & 0x01F8
+                        # the STIC 1A: bits 10:9 join the GRAM card number (256 cards)
+                        mem, base = gram, w & (0x07F8 if tv else 0x01F8)
                     else:
                         mem, base = grom, w & 0x07F8
                 else:
@@ -587,7 +603,7 @@ class Stic:
         # borders (MAME stic.cpp:1102-1108): left, right, top, bottom
         lw = OV_L + (8 if r[CBR] & 1 else hd)
         th = (OV_T + (8 if r[CBR] & 2 else vd)) * 2
-        x1 = OV_L + CARD_COLS * 8 - 1
+        x1 = OV_L + CARD_COLS * 8 - (0 if tv else 1)   # the STIC 1A shows the 160th column
         full, zero = bytes([border]) * W, bytes(W)
         for y in range(H):
             base = y * W
@@ -632,7 +648,8 @@ class Stic:
             if gram_:
                 card &= 0x3F            # MAME stic.cpp:622
         else:
-            if gram_ or not self.csmode:
+            # the STIC 1A: MOBs see all of GRAM and GROM in both modes (Zbiciak p.17, p.20)
+            if (gram_ or not self.csmode) and not self.tv():
                 card &= 0x3F            # S9 stic.txt:298-303; WIKI STIC (M2)
             if yr & MY_YRES:
                 card &= ~1              # S9 stic.txt:274-279, 305-306 (M1)
@@ -642,7 +659,7 @@ class Stic:
         for k in range(nrows):
             a = base + k
             if gram_:
-                pats.append(mem[a] & 0xFF if a < 0x200 else 0xFF)   # MAME stic.cpp:629-635
+                pats.append(mem[a] & 0xFF if a < len(mem) else 0xFF)   # MAME stic.cpp:629-635 (2K: STIC 1A)
             else:
                 pats.append(mem[a] & 0xFF if a < len(mem) else 0xFF)
         tab = ROWBITS[(1 if xr & MX_XSIZE else 0, 1 if yr & MY_XFLIP else 0)]

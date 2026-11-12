@@ -20,6 +20,13 @@
 // picture is blanked by pocket_video and the sound decays to silence
 // (0) in about 4 ms instead of holding the PSG's last sample.
 //
+// TutorVision / INTV88 (1.0.8, experimental; docs/TUTORVISION.md): the menu's TutorVision item
+// (tv_setting: 0 Auto, 1 Off, 2 INTV88, 3 Full) and the cartridge's flag (intv_media tv_auto) give
+// the mode, taken at machine reset like the ECS's: Full needs wbexec.bin (slot 6 loaded whole;
+// else INTV88) and turns the ECS off (the WBEXEC is where the ECS ROM goes); Auto turns it on for a
+// flagged cartridge. The STIC 1A timing option (tv_bq_set) and the TutorVision font (font_set:
+// wbgrom.bin, slot 7, for both GROM ports; grom.bin while it is not loaded) are taken there too.
+//
 // SPDX-License-Identifier: MIT
 
 `default_nettype none
@@ -41,7 +48,7 @@ module intv_core #(
     input  wire logic [1:0]  len_chk,
     input  wire logic [31:0] cfg_len,
     input  wire logic        cfg_inlist,
-    output logic [11:0]      slot_st,
+    output logic [15:0]      slot_st,
     output logic [1:0]       len_st,
     output logic             machine_reset,
     output logic [31:0]      cart_crc_o,      // the cartridge's CRC-32, and loaded (intv_profile, step 13)
@@ -65,6 +72,12 @@ module intv_core #(
     output logic             voice_on,
     // the ECS's own volume (the module has its own knob): PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2
     input  wire logic [2:0]  ecs_level,
+
+    // TutorVision (1.0.8): the menu's items, and the mode the machine runs in (pocket_video)
+    input  wire logic [1:0]  tv_setting,      // 0 Auto, 1 Off, 2 INTV88, 3 Full
+    input  wire logic        tv_bq_set,       // STIC 1A timing
+    input  wire logic        font_set,        // the TutorVision font
+    output logic             tv_on,
 
     // raster and picture
     output logic             ce_pix,
@@ -126,8 +139,24 @@ module intv_core #(
     logic        ecs_on, ecs_rom_ok;
     logic [11:0] ecs_pg;
     logic [1:0]  ecs_auto, ecs_mode;
-    // the mode intv_ecs takes at machine reset: the menu's override or the Auto rule
-    assign ecs_mode = ecs_override == 2'd1 ? 2'd1 : ecs_override == 2'd2 ? 2'd0 : ecs_auto;
+    // TutorVision (1.0.8): the mode at the next machine reset, and the ones taken
+    logic        tv_auto;
+    wire  logic  wbx_ok = slot_st[13:12] == 2'd2, wbg_ok = slot_st[15:14] == 2'd2;
+    wire  logic [1:0] tv_next = tv_setting == 2'd1 ? 2'd0 : tv_setting == 2'd2 ? 2'd1
+                              : (tv_setting == 2'd3 || tv_auto) ? (wbx_ok ? 2'd2 : 2'd1) : 2'd0;
+    logic [1:0]  tv_l = 2'd0;
+    logic        bq_l = 1'b0, font_l = 1'b0;
+    always_ff @(posedge clk)
+        if (machine_reset) begin
+            tv_l   <= tv_next;
+            bq_l   <= tv_bq_set;
+            font_l <= font_set && wbg_ok;
+        end
+    assign tv_on = tv_l != 2'd0;
+    // the mode intv_ecs takes at machine reset: the menu's override or the Auto rule; off in the
+    // TutorVision mode's Full (1.0.8)
+    assign ecs_mode = tv_next == 2'd2 ? 2'd0
+                    : ecs_override == 2'd1 ? 2'd1 : ecs_override == 2'd2 ? 2'd0 : ecs_auto;
     logic [16:0] cart_words;
     logic [7:0]  cart_layout, cart_flags;
     // the Intellivoice at machine reset: On, or Auto and the cartridge's flags say so (the CRC
@@ -199,6 +228,7 @@ module intv_core #(
     logic [16:0] aux_addr;
     logic [15:0] aux_wdata, aux_rdata;
     logic [11:0] exec_addr;
+    logic [9:0]  wbx_q;
     logic [10:0] grom_addr, vgrom_addr;
     logic [9:0]  exec_q;
     logic [7:0]  grom_q, vgrom_q;
@@ -220,8 +250,13 @@ module intv_core #(
         return x;
     endfunction
     logic [31:0] ex_c = 32'hFFFFFFFF, gr_c = 32'hFFFFFFFF, es_c = 32'hFFFFFFFF;
+    logic [31:0] wx_c = 32'hFFFFFFFF, wg_c = 32'hFFFFFFFF;  // 1.0.8: wbexec.bin, wbgrom.bin
     always_ff @(posedge clk)
         if (ld_wr) begin
+            if (ld_addr[27:24] == 4'd6)
+                wx_c <= crc_byte(ld_addr[23:0] == 24'd0 ? 32'hFFFFFFFF : wx_c, ld_data);
+            if (ld_addr[27:24] == 4'd7)
+                wg_c <= crc_byte(ld_addr[23:0] == 24'd0 ? 32'hFFFFFFFF : wg_c, ld_data);
             if (ld_addr[27:24] == 4'd4)
                 es_c <= crc_byte(ld_addr[23:0] == 24'd0 ? 32'hFFFFFFFF : es_c, ld_data);
             if (ld_addr[27:24] == 4'd2)
@@ -243,6 +278,7 @@ module intv_core #(
         .bus_ack(cbus_ack), .bus_rdata(cbus_rdata), .bus_hit(cbus_hit), .bus_attr(cbus_attr),
         .bus_paged(cbus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
         .ecs_on(ecs_on), .ecs_pg(ecs_pg), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok), .voice_auto(voice_auto),
+        .tv_auto(tv_auto), .wbx_q(wbx_q), .font(font_l),
         .jlp_mode(jlp_mode), .jlp_sect(jlp_sect), .jlp_on(jlp_on), .jlp_busy(jlp_busy),
         .jm_req(jm_req), .jm_we(jm_we), .jm_addr(jm_addr), .jm_wdata(jm_wdata), .jm_ack(jm_ack), .jm_rdata(jm_rdata),
         .aux_req(aux_req), .aux_we(aux_we), .aux_addr(aux_addr), .aux_wdata(aux_wdata),
@@ -281,7 +317,7 @@ module intv_core #(
     ) machine (
         .clk(clk), .mreset(machine_reset), .ce(ce_cpu), .ce_pix(ce_stic), .live(live),
         .hcnt(hcnt), .vcnt(vcnt),
-        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1),
+        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1), .tv(tv_l), .tv_bq(bq_l),
         .pad_r(pad_r), .pad_l(pad_l),
         .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .tape_instant(tape_instant), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
         .voice_mode(voice_mode), .voice_dac7(voice_dac7), .voice_level(voice_level), .voice_on(voice_on), .ecs_level(ecs_level),
@@ -294,7 +330,7 @@ module intv_core #(
         .tape_nv_wdata(tape_nv_wdata), .tape_nv_q(tape_nv_q), .tape_busy(tape_busy),
         .cart_req(cbus_req), .cart_we(cbus_we), .cart_addr(cbus_addr), .cart_wdata(cbus_wdata),
         .cart_ack(cbus_ack), .cart_rdata(cbus_rdata), .cart_hit(cbus_hit),
-        .exec_addr(exec_addr), .exec_q(exec_q), .grom_addr(grom_addr), .grom_q(grom_q),
+        .exec_addr(exec_addr), .exec_q(exec_q), .wbx_q(wbx_q), .grom_addr(grom_addr), .grom_q(grom_q),
         .vgrom_addr(vgrom_addr), .vgrom_q(vgrom_q),
         .colour(colour), .audio(psg_audio), .audio_stb(m_audio_stb),
         .phase(m_phase), .dout(m_dout), .din(m_din), .addr(m_addr),
@@ -317,7 +353,8 @@ module intv_core #(
         .ce_cpu(ce_cpu),
         .cpu_fetch(m_fetch), .cpu_halted(m_halted), .cpu_hold(m_hold),
         .cart_crc(cart_crc), .cart_words(cart_words), .cfg_crc(cart_cfg_crc), .cart_noss(cart_noss),
-        .exec_crc(~ex_c), .grom_crc(~gr_c),
+        .exec_crc(~ex_c), .grom_crc(font_l ? ~wg_c : ~gr_c),
+        .tv_flag(tv_on), .tv_full(tv_l == 2'd2), .wbx_crc(~wx_c),
         .ecs_flag(ecs_on), .ecs_crc(ecs_on ? ~es_c : 32'd0), .voice_flag(voice_on), .voice_busy(voice_busy || jlp_eng_busy),
         .run(run), .frozen(frozen), .ss_en(ss_en), .ss_addr(ss_addr), .ss_we(ss_we),
         .ss_wdata(ss_wdata), .ss_rdata(ss_rdata),

@@ -59,6 +59,15 @@
 //   SS_ERAM ($10, $11)   ECS RAM, 512 words
 //   SS_VOICE ($18)       intv_voice, 24 words; its FIFO ($19), 64 words
 //   SS_JLP  ($20)        intv_jlp, 28 words (build step 11; its RAM is in SRAM)
+//   SS_TAPE ($22)        intv_tape, 2 words (1.0.5)
+//   SS_GRAMHI ($24-$29)  1.0.8: the INTV88's GRAM cards 64-255 (GRAM bytes 512-2,047), 1,536 words
+//   SS_TVRAM ($2A-$2B)   1.0.8: the INTV88's System RAM $0360-$04FF, 416 words
+//                        (the TutorVision blob segment: tools/savestate.py TV_LAYOUT)
+//
+// TutorVision / INTV88 (1.0.8, experimental; docs/TUTORVISION.md): tv (taken at machine reset by
+// intv_core) 1 = the INTV88 board, 2 = with the WBEXEC (wbx_q); tv_bq its bus-request option.
+// GRAM is a 2K x 8 block RAM (the 2609 uses bytes 0-511), System RAM 1K x 16 (words 0-351 the
+// 2609's $0200-$035F, 352-767 $0360-$04FF): the 2609's behaviour and state words unchanged.
 // The timing ($01) and the cartridge ($0B) have their own modules.
 //
 // SPDX-License-Identifier: MIT
@@ -84,7 +93,9 @@ module intv_machine #(
     parameter logic [7:0] SS_ERAM = 8'h10,
     parameter logic [7:0] SS_VOICE = 8'h18,
     parameter logic [7:0] SS_JLP  = 8'h20,
-    parameter logic [7:0] SS_TAPE = 8'h22
+    parameter logic [7:0] SS_TAPE = 8'h22,
+    parameter logic [7:0] SS_GRAMHI = 8'h24,
+    parameter logic [7:0] SS_TVRAM = 8'h2A
 ) (
     input  wire logic        clk,
     input  wire logic        mreset,
@@ -96,6 +107,8 @@ module intv_machine #(
     input  wire logic        cfg_hlt_imm,
     input  wire logic        cfg_sdbd_r6_mame,
     input  wire logic        busrq_en,
+    input  wire logic [1:0]  tv,              // 1.0.8: 0 off, 1 INTV88, 2 Full (taken at machine reset)
+    input  wire logic        tv_bq,           // 1.0.8: the STIC 1A bus-request option
     input  wire logic [7:0]  pad_r,           // hand controllers ($FF: none)
     input  wire logic [7:0]  pad_l,
     input  wire logic [1:0]  ecs_mode,        // 0 off, 1 on, 2 attached (taken at reset)
@@ -153,6 +166,7 @@ module intv_machine #(
     input  wire logic        cart_hit,
     output logic [11:0]      exec_addr,
     input  wire logic [9:0]  exec_q,
+    input  wire logic [9:0]  wbx_q,           // 1.0.8: the WBEXEC's $2000-$2FFF at exec_addr
     output logic [10:0]      grom_addr,
     input  wire logic [7:0]  grom_q,
     output logic [10:0]      vgrom_addr,      // the STIC's GROM port
@@ -184,7 +198,10 @@ module intv_machine #(
     logic [3:0]  ebca;
     /* verilator lint_on UNUSEDSIGNAL */
     logic        busrq, busak;
-    logic [8:0]  v_sys_addr, v_gram_addr;
+    logic [8:0]  v_sys_addr;
+    logic [10:0] v_gram_addr;
+    logic [9:0]  sys_idx;
+    logic [10:0] gram_idx;
     logic [15:0] v_sys_q;
     logic [7:0]  v_gram_q;
     /* verilator lint_off UNUSEDSIGNAL */
@@ -215,10 +232,10 @@ module intv_machine #(
 
     intv_bus #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .VB_CYCLES(VB_CYCLES), .WIN_CYCLES(WIN_CYCLES),
                .SS_ID(SS_BUS)) bus (
-        .clk, .mreset, .ce, .hcnt, .vcnt, .hold, .frame_end,
+        .clk, .mreset, .ce, .hcnt, .vcnt, .tv, .hold, .frame_end,
         .phase, .dout, .din, .intrm,
-        .a(addr), .rd, .wr, .vb, .scr_we, .psg_we, .sys_we, .gram_we, .stic_we,
-        .stic_open, .stic_q, .scr_q, .psg_q, .sys_q, .exec_q, .grom_q, .gram_q,
+        .a(addr), .rd, .wr, .vb, .scr_we, .psg_we, .sys_we, .gram_we, .stic_we, .sys_idx, .gram_idx,
+        .stic_open, .stic_q, .scr_q, .psg_q, .sys_q, .exec_q, .wbx_q, .grom_q, .gram_q,
         .cart_req, .cart_we, .cart_wdata, .cart_ack, .cart_rdata, .ovr_hit(tovr_hit), .ovr_q(tovr_q),
         .cart_hit_in(cart_hit), .ecs_hit(ecs_hit || v_hit || j_hit),
         .ecs_q((ecs_hit ? ecs_q : 16'hFFFF) & (v_hit ? v_q : 16'hFFFF) & (j_hit ? j_q : 16'hFFFF)),
@@ -230,7 +247,7 @@ module intv_machine #(
 
     intv_stic #(.H_TOTAL(H_TOTAL), .V_TOTAL(V_TOTAL), .WIN_CYCLES(WIN_CYCLES),
                 .SS_ID(SS_STIC), .SS_ROW(SS_ROW), .SS_LINE(SS_LINE)) stic (
-        .clk, .reset(mreset), .ce, .ce_pix, .live, .hcnt, .vcnt,
+        .clk, .reset(mreset), .tv(tv != 2'd0), .tv_bq, .ce, .ce_pix, .live, .hcnt, .vcnt,
         .vb, .frame_end, .a(addr), .wdata(dout), .rd, .we(stic_we),
         .open(stic_open), .q(stic_q), .intak(ce && phase == 3'd7),
         .busrq_en, .busrq, .busak,
@@ -239,7 +256,7 @@ module intv_machine #(
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_stic));
 
     intv_psg #(.SS_ID(SS_PSG)) psg (
-        .clk, .reset(mreset), .ce, .run(!hold), .n(addr[3:0]), .we(psg_we), .wdata(dout[7:0]),
+        .clk, .reset(mreset), .tv(tv != 2'd0), .ce, .run(!hold), .n(addr[3:0]), .we(psg_we), .wdata(dout[7:0]),
         .q(psg_q), .pad_r, .pad_l, .ctrl(psg1_ctrl), .audio(audio1), .audio_stb(audio1_stb),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_psg));
 
@@ -307,13 +324,13 @@ module intv_machine #(
         .addr_b(8'd0), .q_b(scr_qb),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_scr));
 
-    intv_ram #(.AW(9), .DW(16), .WORDS(352), .SS_ID(SS_SYS)) sysram (
-        .clk, .addr(addr[8:0]), .we(sys_we), .d(dout), .q(sys_q),
-        .addr_b(v_sys_addr), .q_b(v_sys_q),
+    intv_ram #(.AW(10), .DW(16), .WORDS(352), .SS_ID(SS_SYS), .WORDS2(416), .BASE2(352), .SS_ID2(SS_TVRAM)) sysram (
+        .clk, .addr(sys_idx), .we(sys_we), .d(dout), .q(sys_q),
+        .addr_b({1'b0, v_sys_addr}), .q_b(v_sys_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_sys));
 
-    intv_ram #(.AW(9), .DW(8), .WORDS(512), .SS_ID(SS_GRAM)) gram (
-        .clk, .addr(addr[8:0]), .we(gram_we), .d(dout[7:0]), .q(gram_q),
+    intv_ram #(.AW(11), .DW(8), .WORDS(512), .SS_ID(SS_GRAM), .WORDS2(1536), .BASE2(512), .SS_ID2(SS_GRAMHI)) gram (
+        .clk, .addr(gram_idx), .we(gram_we), .d(dout[7:0]), .q(gram_q),
         .addr_b(v_gram_addr), .q_b(v_gram_q),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_gram));
 

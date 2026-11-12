@@ -92,9 +92,19 @@ class Tables:
         if i is None:
             return m.LAYOUT_DEFAULT, m.FLAG_ESTIMATED, True, False
         e = self.crc[i]
-        size256 = e & 0xFFFF
+        size256 = e & 0x7FFF
         ok = size256 == 0 or size256 == -(-words // 256)
         return (e >> 24) & 0xFF, (e >> 16) & 0xFF, ok, True
+
+    def tv(self, crc, words, method='linear'):
+        """1.0.8: the entry's TutorVision flag (bit 15 of its size word; intvcart.TV_FLAG), as the
+        loader takes it: only for an entry that matches (size check included)."""
+        i = self.find(crc, method)
+        if i is None:
+            return False
+        e = self.crc[i]
+        size256 = e & 0x7FFF
+        return bool(e & m.TV_FLAG) and (size256 == 0 or size256 == -(-words // 256))
 
     def model(self, words, crc):
         lid, flags, ok, hit = self.lookup(crc, len(words))

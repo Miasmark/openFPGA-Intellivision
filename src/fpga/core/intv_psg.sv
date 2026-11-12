@@ -56,7 +56,8 @@
 //   17    noise: [4:0] count, [5] prescaler
 //   18    [16:0] LFSR
 //   19    [16:0] envelope count
-//   20    [3:0] envelope step, [4] attack, [5] holding, [7:6] tick phase
+//   20    [3:0] envelope step, [4] attack, [5] holding, [7:6] tick phase,
+//         [8] no envelope step since the last shape write (1.0.8: the STIC 1A's volume modes)
 //         (the CPU cycle's number mod 4)
 //
 // SPDX-License-Identifier: MIT
@@ -69,6 +70,9 @@ module intv_psg #(
 ) (
     input  wire logic        clk,
     input  wire logic        reset,
+    input  wire logic        tv,              // 1.0.8: the STIC 1A's PSG (docs/TUTORVISION.md 3.7):
+                                              // R7 bits 7:6 read 0; volume modes 01 / 10 give the
+                                              // envelope until its first step, then silence
     input  wire logic        ce,              // CPU cycle enable
     input  wire logic        run,             // 0 while the CPU is held after reset
     input  wire logic [3:0]  n,               // address [3:0]
@@ -101,7 +105,7 @@ module intv_psg #(
     logic [16:0] rng;
     logic [16:0] ecnt;
     logic [3:0]  estep;
-    logic        eatt, ehold;
+    logic        eatt, ehold, efirst;
     logic [1:0]  tph;
     // the 48 kHz filter (not saved)
     logic [22:0] lp1, lp2;
@@ -113,7 +117,7 @@ module intv_psg #(
         for (int i = 0; i < 14; i++) r[i] = 8'd0;
         for (int i = 0; i < 3; i++) tcnt[i] = 12'd0;
         tout = 3'd0; ncnt = 5'd0; npre = 1'b0; rng = 17'd1;
-        ecnt = 17'd0; estep = 4'd15; eatt = 1'b0; ehold = 1'b0; tph = 2'd3;
+        ecnt = 17'd0; estep = 4'd15; eatt = 1'b0; ehold = 1'b0; efirst = 1'b1; tph = 2'd3;
         lp1 = 23'd0; lp2 = 23'd0;
         box = 18'd0; bcnt = 3'd0; srph = 22'd0; audio = 16'd0; audio_stb = 1'b0;
     end
@@ -146,6 +150,7 @@ module intv_psg #(
         unique case (n)
             4'd14:   q = pad_r;
             4'd15:   q = pad_l;
+            4'd8:    q = tv ? r[8] & 8'h3F : r[8];
             default: q = r[n];
         endcase
     end
@@ -161,8 +166,8 @@ module intv_psg #(
             sel = ENV2 ? r[11 + c][5:4] : {2{r[11 + c][4]}};
             unique case (sel)
                 2'd0: l = r[11 + c][3:0];
-                2'd1: l = ev >> 2;
-                2'd2: l = ev >> 1;
+                2'd1: l = tv ? (efirst ? ev : 4'd0) : ev >> 2;
+                2'd2: l = tv ? (efirst ? ev : 4'd0) : ev >> 1;
                 default: l = ev;
             endcase
             on = (tout[c] | r[8][c]) & (rng[0] | r[8][3 + c]);
@@ -200,7 +205,7 @@ module intv_psg #(
             for (int i = 0; i < 14; i++) r[i] <= 8'd0;
             for (int i = 0; i < 3; i++) tcnt[i] <= 12'd0;
             tout <= 3'd0; ncnt <= 5'd0; npre <= 1'b0; rng <= 17'd1;
-            ecnt <= 17'd0; estep <= 4'd15; eatt <= 1'b0; ehold <= 1'b0; tph <= 2'd3;
+            ecnt <= 17'd0; estep <= 4'd15; eatt <= 1'b0; ehold <= 1'b0; efirst <= 1'b1; tph <= 2'd3;
             lp1 <= 23'd0; lp2 <= 23'd0;
             box <= 18'd0; bcnt <= 3'd0; srph <= 22'd0; audio <= 16'd0;
         end else if (ss_we && ss_hit) begin
@@ -214,7 +219,7 @@ module intv_psg #(
                 5'd17: {npre, ncnt} <= ss_wdata[5:0];
                 5'd18: rng <= ss_wdata[16:0];
                 5'd19: ecnt <= ss_wdata[16:0];
-                default: {tph, ehold, eatt, estep} <= ss_wdata[7:0];
+                default: {efirst, tph, ehold, eatt, estep} <= ss_wdata[8:0];
             endcase
         end else begin
             if (ce && run)
@@ -237,6 +242,7 @@ module intv_psg #(
                 if (!ehold) begin
                     if (18'(ecnt) + 18'd1 >= {1'b0, eper2}) begin
                         ecnt <= 17'd0;
+                        efirst <= 1'b0;
                         if (estep == 4'd0) begin
                             if (s_alt) eatt <= !eatt;
                             if (s_hold) ehold <= 1'b1;
@@ -266,6 +272,7 @@ module intv_psg #(
                 if (n == 4'd10) begin           // every shape write restarts the envelope
                     estep <= 4'd15;
                     ehold <= 1'b0;
+                    efirst <= 1'b1;
                     eatt  <= wdata[2];
                 end
             end
@@ -283,7 +290,8 @@ module intv_psg #(
                 5'd17: ss_rdata = {26'd0, npre, ncnt};
                 5'd18: ss_rdata = {15'd0, rng};
                 5'd19: ss_rdata = {15'd0, ecnt};
-                default: ss_rdata = {24'd0, tph, ehold, eatt, estep};
+                default: ss_rdata = {23'd0, efirst && tv, tph, ehold, eatt, estep};  // 1.0.8: 0 with
+                                                                                   // the mode off
             endcase
         end
     end

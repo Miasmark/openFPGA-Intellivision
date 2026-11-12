@@ -80,6 +80,26 @@
         "extensions": ["ecs"],
         "size_maximum": "0x4000",
         "address": "0x30000000"
+      },
+      {
+        "name": "TutorVis. EXEC",
+        "id": "0x108",
+        "required": false,
+        "filename": "wbexec.bin",
+        "parameters": "0x88",
+        "extensions": ["bin"],
+        "size_maximum": "0x4000",
+        "address": "0x06000000"
+      },
+      {
+        "name": "TutorVis. GROM",
+        "id": "0x109",
+        "required": false,
+        "filename": "wbgrom.bin",
+        "parameters": "0x88",
+        "extensions": ["bin"],
+        "size_maximum": "0x800",
+        "address": "0x07000000"
       }
     ]
   }

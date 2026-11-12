@@ -65,7 +65,12 @@ SLOTS = [
     ("Intellivoice", 0x105, "ivoice.bin", 2048, False),
     ("JLP flash", 0x106, None, None, False),
     ("ECS tape", 0x107, None, None, False),
+    ("TutorVis. EXEC", 0x108, "wbexec.bin", 16384, False),   # 1.0.8 (docs/TUTORVISION.md)
+    ("TutorVis. GROM", 0x109, "wbgrom.bin", 2048, False),
 ]
+# the data loader's slot (address bits 27:24) of each slot that streams at start: the six of
+# 1.0.0's, then 1.0.8's TutorVision two as loader slots 6 and 7
+LOADER_SLOT = {0x100: 0, 0x101: 1, 0x102: 2, 0x103: 3, 0x104: 4, 0x105: 5, 0x108: 6, 0x109: 7}
 
 # Analogue's documented fields and limits, from the APF developer pages
 # https://www.analogue.co/developer/docs/core-definition-files/<file>-json
@@ -373,14 +378,17 @@ def main():
     slots = js[f"Cores/{cname}/data.json"][0]["data"]["data_slots"]
     check([s["name"] for s in slots] == [s[0] for s in SLOTS], f"slot names and order {[s['name'] for s in slots]}")
     ids = [int(s["id"], 16) for s in slots]
-    check(ids == [s[1] for s in SLOTS], "slot ids 0x100-0x107 (DESIGN.md 5.6; 0x107 the ECS tape, 1.0.5)")
+    check(ids == [s[1] for s in SLOTS], "slot ids 0x100-0x109 (DESIGN.md 5.6; 0x107 the ECS tape, 1.0.5; 0x108-0x109 TutorVision, 1.0.8)")
     m = dict(re.findall(r"localparam \[15:0\] (SLOT_\w+)\s*=\s*16'h([0-9A-Fa-f]+);", core_top))
-    want = dict(zip(("SLOT_CART", "SLOT_CFG", "SLOT_EXEC", "SLOT_GROM", "SLOT_ECS", "SLOT_IVOICE", "SLOT_JLP", "SLOT_TAPE"), ids))
+    want = dict(zip(("SLOT_CART", "SLOT_CFG", "SLOT_EXEC", "SLOT_GROM", "SLOT_ECS", "SLOT_IVOICE", "SLOT_JLP", "SLOT_TAPE", "SLOT_WBEXEC",
+                    "SLOT_WBGROM"), ids))
     check({k: int(v, 16) for k, v in m.items()} == want, "core_top.v SLOT_* = data.json ids")
-    sizes = re.search(r"SIZE \[6\] = '\{([^}]*)\}", stub)
+    sizes = re.search(r"SIZE \[8\] = '\{([^}]*)\}", stub)
     stub_sizes = [int(x.split("'d")[1]) for x in sizes.group(1).split(",")] if sizes else []
-    req = re.search(r"\.slot_req\s*\(\s*6'b([01]{6})\s*\)", core_top)
-    req = [req.group(1)[5 - i] == "1" for i in range(6)] if req else []
+    # 1.0.8: loader slot 7 (wbgrom.bin) never required, slot 6 (wbexec.bin) only with the menu's
+    # TutorVision Full (tv_s1 3): red then, else grey
+    req = re.search(r"\.slot_req\s*\(\s*\{1'b0, tv_s1 == 2'd3, 6'b([01]{6})\}\s*\)", core_top)
+    req = [req.group(1)[5 - i] == "1" for i in range(6)] + [False, False] if req else []
     loader_mask = re.search(r"\.ADDRESS_MASK_UPPER_4\s*\(\s*4'h([0-9A-Fa-f])\s*\)", core_top)
     for i, (s, (name, sid, fn, size, required)) in enumerate(zip(slots, SLOTS)):
         addr = int(s["address"], 16)
@@ -389,11 +397,12 @@ def main():
             check(s.get("filename") == fn and int(s["parameters"], 16) == 0x88
                   and int(s["size_maximum"], 16) == size,
                   f"{name}: {fn}, {size} bytes, loaded at start, not reloadable, in /Assets/intv/common/ (0x88)")
-        if i < 6:
-            check(loader_mask and addr >> 28 == int(loader_mask.group(1), 16) and addr == i << 24,
-                  f"{name}: address {s['address']} reaches the data loader as slot {i} (bits 27:24)")
-            check(i < len(stub_sizes) and stub_sizes[i] == (size or 0), f"{name}: intv_loader expects {size or 'any size'}")
-            check(i < len(req) and req[i] == required, f"{name}: core_top tells the test pattern required = {required}")
+        if sid in LOADER_SLOT:
+            k = LOADER_SLOT[sid]
+            check(loader_mask and addr >> 28 == int(loader_mask.group(1), 16) and addr == k << 24,
+                  f"{name}: address {s['address']} reaches the data loader as slot {k} (bits 27:24)")
+            check(k < len(stub_sizes) and stub_sizes[k] == (size or 0), f"{name}: intv_loader expects {size or 'any size'}")
+            check(k < len(req) and req[k] == required, f"{name}: core_top tells the test pattern required = {required}")
     cart, cfg = slots[0], slots[1]
     check(int(cart["parameters"], 16) == 0x109, "cartridge: reloadable, full core reload (0x109)")
     # build step 9b: the core opens NAME.cfg beside the cartridge itself (apf_cfgfetch, target
@@ -527,8 +536,9 @@ def main():
     pw_, ph_ = param(video, "PF_W"), param(video, "PF_H")
     bw = pw_ + param(video, "BD_L") + param(video, "BD_R")
     bh = ph_ + param(video, "BD_T") + param(video, "BD_B")
-    check(modes[0][:2] == (pw_, ph_) and "cropped = !border_on && pf_x == 8'(PF_W - 1)" in video,
-          f"slot 0 = pocket_video's playfield window {pw_} x {ph_} (the STIC's 160th column drawn black)")
+    check(modes[0][:2] == (pw_, ph_) and "cropped = !border_on && !tv && pf_x == 8'(PF_W - 1)" in video,
+          f"slot 0 = pocket_video's playfield window {pw_} x {ph_} (the STIC's 160th column drawn black, "
+          "shown in the TutorVision mode, 1.0.8)")
     check(modes[1][:2] == (bw, bh), f"slot 1 = pocket_video's border window {bw} x {bh}")
     check("{8'd0, 2'd0, border_on, 13'd0}" in video, "pocket_video sends slot 0 or 1 (border_on) in rgb[23:13]")
     # Pixel aspect: NTSC square pixels at 135/11 MHz on 480 lines, so a 240p

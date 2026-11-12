@@ -11,6 +11,7 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 0B50A367,15,01,ecs,3000,mame:intvecs,mame,mrbasic,5000-6FFF D000-DFFF
 0BF464C6,13,00,,4000,mame:intv,mame,csspgolf,5000-6FFF 9000-AFFF
 0E4920C1,23,41,ecs+estimated,4000,extra,sibling,jumble,5000-6FFF D000-DFFF F000-FFFF
+10BBDB07,13,40,estimated+tv,4000,extra,estimated,tv_geo,5000-6FFF 9000-AFFF
 10D64E48,15,40,estimated,3000,extra,sibling,allstar,5000-6FFF D000-DFFF
 11C3BCFA,7,00,,2000,mame:intv,mame,adventur,5000-6FFF
 11FB9974,7,00,,2000,mame:intv,mame,missionx,5000-6FFF
@@ -84,7 +85,7 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 55E5862A,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
 573B9B6D,23,00,,4000,mame:intv,mame,masters,5000-6FFF D000-DFFF F000-FFFF
 598662F2,3,00,,1000,mame:intv,mame,mtrap,5000-5FFF
-59F5FA32,13,00,,4000,mame:intv,mame-unsupported:no,tv_mmaze,5000-6FFF 9000-AFFF
+59F5FA32,13,00,tv,4000,mame:intv,mame-unsupported:no,tv_mmaze,5000-6FFF 9000-AFFF
 5A144835,7,00,,2000,mame:intv,mame,advtron,5000-6FFF
 5A4CE519,7,00,,2000,mame:intv,mame,minotaur2,5000-6FFF
 5C7E9848,7,00,,2000,mame:intv,mame,lnc2,5000-6FFF
@@ -108,7 +109,7 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 6F23A741,7,00,,2000,mame:intv,mame,tropical,5000-6FFF
 6F91FBC1,3,00,,1000,mame:intv,mame,armorbtl,5000-5FFF
 6FA698B3,7,00,,2000,mame:intv,mame,tutankhm,5000-6FFF
-714ECD51,13,00,,4000,mame:intv,mame-unsupported:no,tv_shape,5000-6FFF 9000-AFFF
+714ECD51,13,00,tv,4000,mame:intv,mame-unsupported:no,tv_shape,5000-6FFF 9000-AFFF
 7217CA7B,28,20,ecs_off,1000,mame:intv,mame,imitc,7000-7FFF
 72E11FCA,3,00,,1000,mame:intv,mame,starstrk,5000-5FFF
 7334CD44,3,00,,1000,mame:intv,mame,nstalker,5000-5FFF
@@ -235,6 +236,7 @@ F3AE29EA,7,40,estimated,2000,extra,sibling,lfun1,5000-6FFF
 F3B0C759,17,82,voice+ecs_risk,4000,mame:intv,mame,magic,5000-6FFF D000-EFFF
 F3DF94E0,23,00,,4000,mame:intv,mame,thinice,5000-6FFF D000-DFFF F000-FFFF
 F400A953,1,41,ecs+estimated,0,name_list,flags-only,,default map (cut at image length)
+F57B1FCE,1,40,estimated+tv,9816,extra,flags-only,lmc,default map (cut at image length)
 F8B1F2B7,5,40,estimated,2000,extra,prefix,add,5000-67FF
 F8EF3E5A,7,00,,2000,mame:intv,mame,spacecad,5000-6FFF
 F95504E0,3,00,,1000,mame:intv,mame,spacebtl,5000-5FFF

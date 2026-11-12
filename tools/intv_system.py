@@ -40,6 +40,17 @@ the RTL:
   anything else reads $FFFF (pull-ups, DESIGN 2.5). Devices that answer
   together give the AND of their words (the pulled-up bus).
 
+TutorVision / INTV88 (1.0.8, experimental; docs/TUTORVISION.md, from J. Zbiciak's
+reverse-engineering notes): tv = 1 (INTV88: the board with the stock EXEC) or 2 (Full: with
+the WBEXEC's second half at $2000-$2FFF; the ECS is off). The board's STIC 1A: GRAM 2K x 8
+at $3800-$3FFF, not mirrored (256 cards); no write aliases ($7800 / $B800 / $F800 for GRAM,
+$4000 / $8000 / $C000 for the STIC; no mode read through $x021 aliases); System RAM goes on
+to $04FF (tvram: $0360-$04FF, 416 words, where the cartridge does not answer); closed GRAM and
+GROM reads give $00FF; $0022 reads $3FF7; the 160th column shows; MOBs see all of GRAM and
+GROM; Color Stack cards take bits 10:9 into the GRAM card number (tools/stic.py); the PSG's
+R7 reads bits 7:6 as 0 and volume modes 01 / 10 give the envelope for one step, then silence
+(tools/psg.py). tv_bq: the STIC 1A bus-request option (tools/stic.py schedule).
+
 Frame timing (DESIGN 2.4; MAME stic.h:47-50): a frame is FRAME = 14,934 CPU
 cycles; it starts with VBlank, and INTRM is held for the first VBLANK =
 3,790 cycles. A write to STIC register $20 (display enable) sets the
@@ -375,9 +386,15 @@ class SystemBus:
     """The step-3 system around the CPU model (see the module docstring)."""
 
     def __init__(self, exec_words, grom_bytes, cart=None, timing=None, stic_mode="none", ecs=None,
-                 voice=None, jlp=None):
+                 voice=None, jlp=None, tv=0, wbexec=None, tv_bq=False):
         if len(exec_words) != 4096 or len(grom_bytes) != 2048:
             raise ValueError("EXEC must be 4096 words, GROM 2048 bytes")
+        if tv == 2 and (wbexec is None or len(wbexec) != 4096):
+            raise ValueError("TutorVision Full mode needs the WBEXEC's $2000-$2FFF (4096 words)")
+        self.tv = tv                    # 1.0.8: 0 off, 1 INTV88, 2 Full (taken at construction)
+        self.tv_bq = tv_bq
+        self.wbexec = [w & 0x3FF for w in wbexec] if tv == 2 else None
+        self.tvram = [0] * 416          # $0360-$04FF (tv)
         self.exec = [w & 0x3FF for w in exec_words]
         self.grom = list(grom_bytes)
         self.cart = cart
@@ -386,9 +403,10 @@ class SystemBus:
         self.scratch = [0] * 256
         self.tp_step = self.tp_opnd = False   # Tape speed Instant (_tape_patch)
         self.sysram = [0] * 352
-        self.gram = [0] * 512
+        self.gram = [0] * (2048 if tv else 512)
         self.vid = sticm.Stic(self, stic_mode)   # the STIC (tools/stic.py)
         self.snd = psgm.ClockedPsg()    # the PSG (tools/psg.py)
+        self.snd.tv = bool(tv)
         self.pad = (0xFF, 0xFF)         # $01FE right, $01FF left: no input
         self.presses = None             # scripted keys (press_pads): override self.pad
         self.zero = ()                  # MAME mode: unmapped ranges MAME reads as 0
@@ -534,7 +552,7 @@ class SystemBus:
         self.vid.advance(self._t(cycle))
         if a < 0x40:
             v &= self._stic_read(a, cycle)
-        elif a & 0x3FFF == STIC_GMR and not self.mame_map:
+        elif a & 0x3FFF == STIC_GMR and not self.mame_map and not self.tv:
             # $x021 read reaches the mode latch (DESIGN 2.6)
             self.vid.alias_mode_read(self.stic_open(cycle))
         if 0x100 <= a <= 0x1EF:
@@ -549,13 +567,22 @@ class SystemBus:
             v &= self.snd.read(n, pads)
         elif 0x200 <= a <= 0x35F:
             v &= self.sysram[a - 0x200]
+        elif self.tv and 0x360 <= a <= 0x4FF:
+            return v & self.tvram[a - 0x360]   # the INTV88's System RAM: the cartridge does not answer
         elif 0x1000 <= a <= 0x1FFF:
             v &= self.exec[a - 0x1000]
+        elif self.tv == 2 and 0x2000 <= a <= 0x2FFF:
+            return v & self.wbexec[a - 0x2000]  # the WBEXEC's second half (the ECS is off)
         elif 0x3000 <= a <= 0x37FF:
-            v &= 0xFF00 | self.grom[a - 0x3000]
+            if self.tv and not self.stic_open(cycle):
+                v &= 0x00FF             # the STIC 1A isolates the graphics bus (Zbiciak p.15)
+            else:
+                v &= 0xFF00 | self.grom[a - 0x3000]
         elif 0x3800 <= a <= (0x3BFF if self.mame_map else 0x3FFF):
             if self.stic_open(cycle):
-                v &= self.gram[a & 0x1FF]
+                v &= self.gram[a & (0x7FF if self.tv else 0x1FF)]
+            elif self.tv:
+                v &= 0x00FF
             else:                       # MAME: the offset; the core: $0000 as the STIC's (TIMING_FIT)
                 v &= a & 0x1FF if self.vid.mode == "mame" else 0
         if self.voice is not None and self.voice.on and 0x80 <= a <= 0x81:
@@ -588,7 +615,7 @@ class SystemBus:
         a = addr & 0xFFFF
         value &= 0xFFFF
         self.vid.advance(self._t(cycle))
-        if a & 0x3FFF < 0x40 and (a < 0x40 or not self.mame_map):
+        if a & 0x3FFF < 0x40 and (a < 0x40 or not (self.mame_map or self.tv)):
             self._stic_write(a & 0x3F, value, cycle)   # $0000, aliases $4000 $8000 $C000
         if 0x100 <= a <= 0x1EF:
             self.scratch[a & 0xFF] = value & 0xFF
@@ -596,7 +623,12 @@ class SystemBus:
             self.snd.bus_write(a & 0xF, value, self._t(cycle))   # MAME mode: on MAME's clock
         elif 0x200 <= a <= 0x35F:
             self.sysram[a - 0x200] = value
-        if a & 0x3800 == 0x3800 and (0x3800 <= a <= 0x3BFF or not self.mame_map):
+        elif self.tv and 0x360 <= a <= 0x4FF:
+            self.tvram[a - 0x360] = value
+        if self.tv:
+            if 0x3800 <= a <= 0x3FFF and self.stic_open(cycle):
+                self.gram[a & 0x7FF] = value & 0xFF
+        elif a & 0x3800 == 0x3800 and (0x3800 <= a <= 0x3BFF or not self.mame_map):
             if self.stic_open(cycle):  # $3800, $7800, $B800, $F800 (+ $7FF)
                 self.gram[a & 0x1FF] = value & 0xFF
         if self.voice is not None and self.voice.on and 0x80 <= a <= 0x81:
@@ -628,7 +660,10 @@ class SystemBus:
         self.snd.advance(self._t(cycle) - 1)
         return {"psgx": self.snd.state(self._t(cycle) % 4)[14:],
                 "scratch": list(self.scratch), "sysram": list(self.sysram),
-                "gram": list(self.gram), "stic": list(self.stic),
+                "gram": list(self.gram[:512]), "stic": list(self.stic),
+                # 1.0.8: the INTV88's GRAM cards 64-255 and System RAM $0360-$04FF (0 when off)
+                "gramhi": list(self.gram[512:]) if self.tv else [0] * 1536,
+                "tvram": list(self.tvram),
                 "psg": list(self.psg), "handshake": int(self.handshake(cycle)),
                 "csmode": self.csmode,
                 "sel": list(self.cart.sel) if self.cart is not None else list(self.sel0),
@@ -729,16 +764,52 @@ def make_ecs(cart, ecs, bios_dir=None, mame=False):
     return ecsm.Ecs(rom, ecsm.mode_for(ECS_OVERRIDES[override], auto), mame=mame)
 
 
+TV_SETTINGS = ("auto", "off", "intv88", "full")    # the menu's TutorVision item (1.0.8)
+
+
+def tv_paths(bios_dir=None):
+    """(wbexec.bin, wbgrom.bin) in the BIOS directory, each None when absent (1.0.8)."""
+    d = bios_dir or os.environ.get("INTV_BIOS_DIR") or ""
+    out = []
+    for n in ("wbexec.bin", "wbgrom.bin"):
+        p = os.path.join(d, n)
+        out.append(p if os.path.exists(p) else None)
+    return tuple(out)
+
+
+def tv_mode(setting, cart_tv, wbexec_ok):
+    """The machine's TutorVision mode at reset (intv_core.sv tv_mode): 0 off, 1 INTV88, 2 Full.
+    Full needs wbexec.bin (else INTV88); Auto follows the cartridge (cartfmt.TV_ON)."""
+    import cartfmt
+    if setting == "off":
+        return 0
+    if setting == "intv88":
+        return 1
+    if setting == "full" or (setting == "auto" and cart_tv == cartfmt.TV_ON):
+        return 2 if wbexec_ok else 1
+    return 0
+
+
 def make_system(bios_dir=None, cart_path=None, timing=None, buslog=True, stic_mode="none", cfg_path=None,
-                ecs=None, mame_ecs=False, jlp_flash=None, cpu_timing=None):
+                ecs=None, mame_ecs=False, jlp_flash=None, cpu_timing=None, tv="off", tv_bq=False,
+                font="original"):
     """cpu_timing: the CPU model's counts (tools/cp1610.py timing); default "doc" (MAME's)
-    for stic_mode "mame", else "f" (the console fit, the core's)."""
+    for stic_mode "mame", else "f" (the console fit, the core's). tv: the TutorVision setting
+    (TV_SETTINGS; wbexec.bin from the BIOS directory), tv_bq the STIC 1A timing option, font
+    "tv": wbgrom.bin instead of grom.bin when it is there (1.0.8)."""
     ex, gr = bios_paths(bios_dir)
+    wbx, wbg = tv_paths(bios_dir)
     cart = load_cart(cart_path, cfg_path)
+    ctv = cart[0].ld.tv if cart and getattr(cart[0], "ld", None) is not None else 0
+    tvm = tv_mode(tv, ctv, wbx is not None)
+    if tvm == 2 and ecs is not None:
+        ecs = ("off", ecs[1])           # Full: the WBEXEC is where the ECS ROM goes
     dev = make_ecs(cart[0] if cart else None, ecs, bios_dir, mame_ecs)
-    bus = SystemBus(load_words(ex), open(gr, "rb").read(),
+    grom = open(wbg if font == "tv" and wbg else gr, "rb").read()
+    bus = SystemBus(load_words(ex), grom,
                     cart[0] if cart else None, timing, stic_mode, ecs=dev,
-                    jlp=make_jlp(cart[0] if cart else None, jlp_flash))
+                    jlp=make_jlp(cart[0] if cart else None, jlp_flash),
+                    tv=tvm, wbexec=load_words(wbx)[4096:8192] if tvm == 2 else None, tv_bq=tv_bq)
     if cpu_timing is None:
         cpu_timing = "doc" if stic_mode == "mame" else "f"
     cpu = CP1610(bus=bus, buslog=buslog, timing=cpu_timing)
@@ -961,13 +1032,15 @@ def run_pictures(bus, cpu, last, mame_clock=False, max_cycles=None):
     return events
 
 
-def system_for(mode, bios_dir=None, cart_path=None, buslog=False, ecs=None, cfg_path=None, jlp_flash=None):
+def system_for(mode, bios_dir=None, cart_path=None, buslog=False, ecs=None, cfg_path=None, jlp_flash=None,
+               tv="off", tv_bq=False, font="original"):
     """(bus, cpu, mame_clock) for a STIC mode: "mame" runs on MAME's frame
-    timing, clock and memory map, "stic" and "none" on the RTL's. ecs: as
+    timing, clock and memory map, "stic" and "none" on the RTL's. ecs, tv, tv_bq, font: as
     make_system (in "mame" mode the ECS is MAME's)."""
     tm = MameTiming() if mode == "mame" else FrameTiming()
     bus, cpu = make_system(bios_dir, cart_path, tm, buslog=buslog, stic_mode=mode, ecs=ecs,
-                           mame_ecs=mode == "mame", cfg_path=cfg_path, jlp_flash=jlp_flash)
+                           mame_ecs=mode == "mame", cfg_path=cfg_path, jlp_flash=jlp_flash,
+                           tv=tv, tv_bq=tv_bq, font=font)
     bus.mame_map = mode == "mame"
     if mode == "mame":
         cpu.mvo_ptr = "mame"

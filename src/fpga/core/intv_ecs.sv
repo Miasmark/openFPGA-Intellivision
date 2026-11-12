@@ -143,7 +143,7 @@ module intv_ecs #(
     logic [31:0] ssr_psg;
 
     intv_psg #(.SS_ID(SS_PSG), .ENV2(1'b0)) psg (
-        .clk, .reset(mreset || !on), .ce, .run, .n(a[3:0]), .we(wr && sel_psg && on),
+        .clk, .reset(mreset || !on), .tv(1'b0), .ce, .run, .n(a[3:0]), .we(wr && sel_psg && on),
         .wdata(wdata[7:0]), .q(psg_q), .pad_r(port_a), .pad_l(port_b), .ctrl,
         .audio, .audio_stb,
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_psg));

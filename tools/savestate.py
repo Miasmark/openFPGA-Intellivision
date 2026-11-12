@@ -18,7 +18,11 @@ The blob (format version 6, 1.0.5: the ECS cassette's module; 5 was step 11's, 4
                     (cell 2k in bits 31-16)
   bytes 40960-56959 JLP RAM, its 8,000 words ($8040-$9F7F, the SRAM at $1C000), two per word
                     (version 5; zero without a JLP)
-  bytes 56960-      reserved: zero
+  bytes 56960-64767 (1.0.8) the TutorVision segment, only in a blob with header flag bit 2 (the
+                    TutorVision mode on): TV_LAYOUT's state words (the INTV88's GRAM cards
+                    64-255 and System RAM $0360-$04FF), one a word; its length is then
+                    64,704 (the header's length word), else 56,896 as before
+  bytes 56960- (64768- in TutorVision mode) reserved: zero
 The payload is bytes 64 .. 64 + length - 1 (length in the header); its CRC32 (zlib's
 CRC-32, the same as the cartridge CRC) is in the header. A blob is refused unless the
 magic, version, size, length, cartridge CRC and length, the CFG's CRC, flags, word
@@ -26,7 +30,10 @@ counts and the EXEC and GROM CRCs match this core, its cartridge (and CFG) and i
 ROMs, the ECS flag and ECS ROM CRC (version 3: the ECS attached or not, and with which ROM),
 the Intellivoice flag (version 4: on or off), the JLP RAM's cell count (version 5),
 the reserved header words and the reserved area are
-zero, and the payload CRC is right.
+zero, and the payload CRC is right. (1.0.8) Flags bit 2: the TutorVision mode on (INTV88 or Full),
+bit 3: Full (the WBEXEC); header word 15: the WBEXEC slot's CRC32 in Full, else 0; the GROM CRC
+is the active GROM's (grom.bin, or wbgrom.bin with the TutorVision font). A blob without bit 2
+is the 1.0.7 layout, so 1.0.7 states load unchanged with the mode off.
 
 Usage:
   python3 -I tools/savestate.py gen [--check]   write (or check) the package and the doc table
@@ -87,13 +94,21 @@ LAYOUT = [
      'ECS cassette: the head and the mode, the motor-off count (1.0.5, version 6; the tape itself is media, '
      'not state)'),
 ]
+# 1.0.8: the TutorVision segment (blob bytes TV_BYTE on, only with FLAG_TV): its own module list,
+# after the JLP RAM, so that the module area above keeps 1.0.7's layout.
+TV_LAYOUT = [
+    (0x24, 'gramhi', 1536, 'intv_ram.sv', None,
+     "the INTV88's GRAM cards 64-255, bytes 512-2,047 (ids $24-$29; 1.0.8)"),
+    (0x2A, 'tvram', 416, 'intv_ram.sv', None,
+     "the INTV88's System RAM $0360-$04FF (ids $2A-$2B; 1.0.8)"),
+]
 # Ids kept for later build steps.
 RESERVED_IDS = []
 # intv_machine's id parameters (the rest are in core_top / intv_core)
 MACHINE_PARAMS = {'SS_CPU': 0x02, 'SS_BUS': 0x03, 'SS_STIC': 0x04, 'SS_PSG': 0x05, 'SS_SCR': 0x06,
                   'SS_SYS': 0x07, 'SS_GRAM': 0x09, 'SS_ROW': 0x0C, 'SS_LINE': 0x0D,
                   'SS_ECS': 0x0E, 'SS_PSG2': 0x0F, 'SS_ERAM': 0x10, 'SS_VOICE': 0x18, 'SS_JLP': 0x20,
-                  'SS_TAPE': 0x22}
+                  'SS_TAPE': 0x22, 'SS_GRAMHI': 0x24, 'SS_TVRAM': 0x2A}
 
 VERSION = 6
 MAGIC = 0x494E5456                 # "INTV"
@@ -106,12 +121,16 @@ CRAM_CELLS = 16384                 # the SRAM's cart RAM area (intv_media.sv)
 JRAM_BYTE = CRAM_BYTE + 2 * CRAM_CELLS       # 40960: the end of what versions 1-4 use
 JRAM_CELLS = 8000                  # the JLP RAM ($8040-$9F7F; SRAM $1C000, intv_cart.sv)
 LIVE_END = JRAM_BYTE + 2 * JRAM_CELLS        # 56960
-PAYLOAD_BYTES = LIVE_END - MOD_BYTE          # 40896
+PAYLOAD_BYTES = LIVE_END - MOD_BYTE          # 56896
+TV_BYTE = LIVE_END                           # 1.0.8: the TutorVision segment
+TV_WORDS = sum(n for _, _, n, *_ in TV_LAYOUT)   # 1952
+TV_END = TV_BYTE + 4 * TV_WORDS              # 64768
+PAYLOAD_TV = TV_END - MOD_BYTE               # 64704
 MOD_WORDS = sum(n for _, _, n, *_ in LAYOUT)  # 1941
 
 # header words
 (H_MAGIC, H_VERSION, H_SIZE, H_LENGTH, H_CART_CRC, H_CART_WORDS, H_FLAGS, H_CRC, H_NMOD, H_NCRAM,
- H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC, H_ECS_CRC, H_NJRAM) = range(15)
+ H_EXEC_CRC, H_GROM_CRC, H_CFG_CRC, H_ECS_CRC, H_NJRAM, H_WBX_CRC) = range(16)
 HEADER = [
     (H_MAGIC, 'magic', '$494E5456 "INTV"'),
     (H_VERSION, 'version', 'format version (%d)' % VERSION),
@@ -119,7 +138,8 @@ HEADER = [
     (H_LENGTH, 'length', 'payload bytes from byte 64 (%d)' % PAYLOAD_BYTES),
     (H_CART_CRC, 'cart_crc', "the cartridge image's CRC32 (as the loader computes it; 0 with no cartridge)"),
     (H_CART_WORDS, 'cart_words', 'the cartridge image length in 16-bit words'),
-    (H_FLAGS, 'flags', 'bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 8 PAL (0 in this core)'),
+    (H_FLAGS, 'flags', 'bit 0 ECS attached (version 3), bit 1 Intellivoice on (version 4), bit 2 TutorVision '
+     'mode on, bit 3 its Full mode (1.0.8), bit 8 PAL (0 in this core)'),
     (H_CRC, 'crc', 'CRC32 of the payload (bytes 64 .. 64 + length - 1)'),
     (H_NMOD, 'mod_words', 'module state words (%d)' % MOD_WORDS),
     (H_NCRAM, 'cram_cells', 'cart RAM cells (%d)' % CRAM_CELLS),
@@ -128,13 +148,38 @@ HEADER = [
     (H_CFG_CRC, 'cfg_crc', "the CFG's CRC32 when the map came with one (0: none; version 2)"),
     (H_ECS_CRC, 'ecs_crc', "the ECS ROM slot's CRC32 while the ECS is attached, else 0 (version 3)"),
     (H_NJRAM, 'jram_cells', 'JLP RAM cells (%d; version 5)' % JRAM_CELLS),
+    (H_WBX_CRC, 'wbx_crc', "the TutorVision EXEC slot's CRC32 in Full mode, else 0 (1.0.8)"),
 ]
-H_LAST = H_NJRAM
-FLAG_ECS, FLAG_VOICE, FLAG_PAL = 1, 2, 0x100
+H_LAST = H_WBX_CRC
+FLAG_ECS, FLAG_VOICE, FLAG_TV, FLAG_TVFULL, FLAG_PAL = 1, 2, 4, 8, 0x100
 
 assert 4 * HDR_WORDS == MOD_BYTE
 assert MOD_BYTE + 4 * MOD_WORDS <= MOD_AREA_END
 assert LIVE_END <= BLOB_BYTES
+assert TV_END <= BLOB_BYTES
+
+
+def payload_bytes(flags):
+    """The payload's length for a blob with these header flags (1.0.8: longer in TutorVision mode)."""
+    return PAYLOAD_TV if flags & FLAG_TV else PAYLOAD_BYTES
+
+
+def tv_offsets():
+    """[(id, name, words, first blob word index)] of the TutorVision segment (1.0.8)."""
+    out, w = [], TV_BYTE // 4
+    for mid, name, n, *_ in TV_LAYOUT:
+        out.append((mid, name, n, w))
+        w += n
+    return out
+
+
+def tv_state_addr(i):
+    """The state-bus address of TutorVision segment word i (0 .. TV_WORDS-1)."""
+    for mid, _, n, w0 in tv_offsets():
+        k = i - (w0 - TV_BYTE // 4)
+        if 0 <= k < n:
+            return ((mid + (k >> 8)) << 8) | (k & 0xFF)
+    raise IndexError(i)
 
 
 def module_offsets():
@@ -161,9 +206,9 @@ def crc32(b):
 
 # ------------------------------------------------------------- pack / unpack
 def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_crc=0, grom_crc=0,
-         cfg_crc=0, version=VERSION, ecs_crc=0, jram=None):
-    """mods: {id: [words]} (every LAYOUT module, exact length); cram: CRAM_CELLS cells; jram:
-    JRAM_CELLS cells (None: zero)."""
+         cfg_crc=0, version=VERSION, ecs_crc=0, jram=None, wbx_crc=0):
+    """mods: {id: [words]} (every LAYOUT module, exact length; with FLAG_TV the TV_LAYOUT ones
+    too); cram: CRAM_CELLS cells; jram: JRAM_CELLS cells (None: zero)."""
     b = bytearray(BLOB_BYTES)
     for mid, name, n, w0 in module_offsets():
         ws = mods[mid]
@@ -180,8 +225,15 @@ def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_
             raise ValueError('JLP RAM: %d cells' % len(jram))
         for c, v in enumerate(jram):
             struct.pack_into('>H', b, JRAM_BYTE + 2 * c, v & 0xFFFF)
+    if flags & FLAG_TV:
+        for mid, name, n, w0 in tv_offsets():
+            ws = mods[mid]
+            if len(ws) != n:
+                raise ValueError('%s: %d words, want %d' % (name, len(ws), n))
+            for k, v in enumerate(ws):
+                struct.pack_into('>I', b, 4 * (w0 + k), v & 0xFFFFFFFF)
     h = [0] * HDR_WORDS
-    h[H_MAGIC], h[H_VERSION], h[H_SIZE], h[H_LENGTH] = MAGIC, version, BLOB_BYTES, PAYLOAD_BYTES
+    h[H_MAGIC], h[H_VERSION], h[H_SIZE], h[H_LENGTH] = MAGIC, version, BLOB_BYTES, payload_bytes(flags)
     h[H_CART_CRC], h[H_CART_WORDS], h[H_FLAGS] = cart_crc, cart_words, flags
     h[H_NMOD], h[H_NCRAM] = MOD_WORDS, CRAM_CELLS
     h[H_EXEC_CRC], h[H_GROM_CRC] = exec_crc, grom_crc
@@ -191,7 +243,8 @@ def pack(mods, cram, cart_crc=0, cart_words=0, flags=0, crc_override=None, exec_
         h[H_ECS_CRC] = ecs_crc
     if version >= 5:
         h[H_NJRAM] = JRAM_CELLS
-    h[H_CRC] = crc32(b[MOD_BYTE:MOD_BYTE + PAYLOAD_BYTES]) if crc_override is None else crc_override
+    h[H_WBX_CRC] = wbx_crc if flags & FLAG_TVFULL else 0
+    h[H_CRC] = crc32(b[MOD_BYTE:MOD_BYTE + payload_bytes(flags)]) if crc_override is None else crc_override
     for i, v in enumerate(h):
         struct.pack_into('>I', b, 4 * i, v & 0xFFFFFFFF)
     return bytes(b)
@@ -202,10 +255,13 @@ def header(blob):
 
 
 def unpack(blob):
-    """(header words, {id: [words]}, cram cells)."""
+    """(header words, {id: [words]}, cram cells); the TutorVision segment's modules with FLAG_TV."""
     mods = {}
     for mid, _, n, w0 in module_offsets():
         mods[mid] = list(struct.unpack_from('>%dI' % n, blob, 4 * w0))
+    if header(blob)[H_FLAGS] & FLAG_TV:
+        for mid, _, n, w0 in tv_offsets():
+            mods[mid] = list(struct.unpack_from('>%dI' % n, blob, 4 * w0))
     cram = list(struct.unpack_from('>%dH' % CRAM_CELLS, blob, CRAM_BYTE))
     return header(blob), mods, cram
 
@@ -216,13 +272,17 @@ def jram_of(blob):
 
 
 def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_crc=None, cfg_crc=None,
-           ecs_crc=0):
-    """The core's load checks, in its order; [] if the blob would be taken."""
+           ecs_crc=0, wbx_crc=0):
+    """The core's load checks, in its order; [] if the blob would be taken. flags: the core's (its
+    ECS, Intellivoice and TutorVision modes); wbx_crc: its WBEXEC slot's CRC in Full mode."""
     if len(blob) != BLOB_BYTES:
         return ['size %d bytes, want %d' % (len(blob), BLOB_BYTES)]
     h = header(blob)
-    want = {H_MAGIC: MAGIC, H_VERSION: VERSION, H_SIZE: BLOB_BYTES, H_LENGTH: PAYLOAD_BYTES,
-            H_FLAGS: flags, H_NMOD: MOD_WORDS, H_NCRAM: CRAM_CELLS, H_NJRAM: JRAM_CELLS}
+    pay = payload_bytes(flags)
+    live = MOD_BYTE + pay
+    want = {H_MAGIC: MAGIC, H_VERSION: VERSION, H_SIZE: BLOB_BYTES, H_LENGTH: pay,
+            H_FLAGS: flags, H_NMOD: MOD_WORDS, H_NCRAM: CRAM_CELLS, H_NJRAM: JRAM_CELLS,
+            H_WBX_CRC: wbx_crc if flags & FLAG_TVFULL else 0}
     if cart_crc is not None:
         want[H_CART_CRC] = cart_crc
     if cart_words is not None:
@@ -240,10 +300,10 @@ def verify(blob, cart_crc=None, cart_words=None, flags=0, exec_crc=None, grom_cr
         exp = want.get(i, 0 if i > H_LAST else None)
         if exp is not None and h[i] != exp:
             bad.append('header %s = $%08X, want $%08X' % (names.get(i, 'word %d' % i), h[i], exp))
-    for lo, hi in ((MOD_BYTE + 4 * MOD_WORDS, MOD_AREA_END), (LIVE_END, BLOB_BYTES)):
+    for lo, hi in ((MOD_BYTE + 4 * MOD_WORDS, MOD_AREA_END), (live, BLOB_BYTES)):
         if any(blob[lo:hi]):
             bad.append('reserved bytes %d-%d not zero' % (lo, hi - 1))
-    c = crc32(blob[MOD_BYTE:MOD_BYTE + PAYLOAD_BYTES])
+    c = crc32(blob[MOD_BYTE:MOD_BYTE + pay])
     if c != h[H_CRC]:
         bad.append('payload CRC $%08X, header says $%08X' % (c, h[H_CRC]))
     return bad
@@ -268,6 +328,9 @@ def gen_pkg():
                                                                          '' if n == 1 else 's'))
     for mid, what in RESERVED_IDS:
         L.append("    // 8'h%02X reserved: %s" % (mid, what))
+    L.append('    // 1.0.8: the TutorVision segment\'s modules')
+    for mid, name, n, *_ in TV_LAYOUT:
+        L.append("    localparam logic [7:0] SS_%-8s = 8'h%02X;   // %d words" % (name.upper(), mid, n))
     L.append('')
     L.append('    // the blob (format version %d), byte offsets' % VERSION)
     L.append("    localparam logic [31:0] SS_MAGIC      = 32'h%08X;" % MAGIC)
@@ -283,12 +346,17 @@ def gen_pkg():
     L.append("    localparam int          SS_JRAM_CELLS = %d;" % JRAM_CELLS)
     L.append("    localparam int          SS_LIVE_END   = %d;    // version %d uses bytes below" % (LIVE_END, VERSION))
     L.append("    localparam int          SS_PAYLOAD    = %d;    // payload bytes from SS_MOD_BYTE" % PAYLOAD_BYTES)
+    L.append("    localparam int          SS_TV_BYTE    = %d;    // 1.0.8: the TutorVision segment (FLAG_TV)" % TV_BYTE)
+    L.append("    localparam int          SS_TV_WORDS   = %d;" % TV_WORDS)
+    L.append("    localparam int          SS_TV_END     = %d;" % TV_END)
+    L.append("    localparam int          SS_PAYLOAD_TV = %d;    // the payload with it" % PAYLOAD_TV)
     L.append('')
     L.append('    // header words')
     for i, name, what in HEADER:
         L.append('    localparam int          SS_H_%-10s = %d;   // %s' % (name.upper(), i, what))
-    L.append("    localparam logic [31:0] SS_FLAG_ECS = 32'h%X, SS_FLAG_VOICE = 32'h%X, SS_FLAG_PAL = 32'h%X;"
-             % (FLAG_ECS, FLAG_VOICE, FLAG_PAL))
+    L.append("    localparam logic [31:0] SS_FLAG_ECS = 32'h%X, SS_FLAG_VOICE = 32'h%X, SS_FLAG_TV = 32'h%X,"
+             % (FLAG_ECS, FLAG_VOICE, FLAG_TV))
+    L.append("                            SS_FLAG_TVFULL = 32'h%X, SS_FLAG_PAL = 32'h%X;" % (FLAG_TVFULL, FLAG_PAL))
     L.append('    /* verilator lint_on UNUSEDPARAM */')
     L.append('')
     L.append('    // the state-bus address {id, word} of module word i (0 .. SS_MOD_WORDS-1),')
@@ -309,6 +377,24 @@ def gen_pkg():
     L.append('        end else begin')
     L.append("            k = 11'd0;")
     L.append("            ss_word_addr = 16'h0000;")
+    L.append('        end')
+    L.append('    endfunction')
+    L.append('')
+    L.append('    // 1.0.8: the state-bus address {id, word} of TutorVision segment word i')
+    L.append('    // (0 .. SS_TV_WORDS-1), blob byte SS_TV_BYTE + 4 i')
+    L.append('    function automatic logic [15:0] ss_tv_addr(input logic [10:0] i);')
+    L.append('        logic [10:0] k;')
+    first = True
+    for mid, name, n, w0 in tv_offsets():
+        base = w0 - TV_BYTE // 4
+        kw = 'if' if first else 'end else if'
+        L.append("        %s (i < 11'd%d) begin" % (kw, base + n))
+        L.append("            k = i - 11'd%d;" % base)
+        L.append("            ss_tv_addr = {8'h%02X + {5'd0, k[10:8]}, k[7:0]};" % mid)
+        first = False
+    L.append('        end else begin')
+    L.append("            k = 11'd0;")
+    L.append("            ss_tv_addr = 16'h0000;")
     L.append('        end')
     L.append('    endfunction')
     L.append('')
@@ -338,12 +424,21 @@ def gen_table():
           % (CRAM_BYTE, JRAM_BYTE - 1, CRAM_CELLS),
           '| %d-%d | JLP RAM: %d cells ($8040-$9F7F, the SRAM at $1C000), as the cart RAM |'
           % (JRAM_BYTE, LIVE_END - 1, JRAM_CELLS),
-          '| %d-%d | reserved for later steps, zero |' % (LIVE_END, BLOB_BYTES - 1),
+          '| %d-%d | (1.0.8) the TutorVision segment, only with header flag bit 2 (else reserved, zero): |'
+          % (TV_BYTE, TV_END - 1),
+          '| %d-%d | reserved for later steps, zero |' % (TV_END, BLOB_BYTES - 1),
           '', 'Ids kept for later steps:', '', '| Id | For |', '|---|---|']
     for mid, what in RESERVED_IDS:
         L.append('| $%02X | %s |' % (mid, what))
-    L += ['', 'Module words: %d (%d bytes); payload %d bytes (bytes %d-%d); blob %d bytes.'
-          % (MOD_WORDS, 4 * MOD_WORDS, PAYLOAD_BYTES, MOD_BYTE, LIVE_END - 1, BLOB_BYTES), '', END]
+    L += ['', 'The TutorVision segment (1.0.8; its state words, one a word, from byte %d):' % TV_BYTE, '',
+          '| Id | Module | Words | Blob bytes | RTL | Holds |', '|---|---|---|---|---|---|']
+    for (mid, name, n, w0), (_, _, _, f, _, what) in zip(tv_offsets(), TV_LAYOUT):
+        ids = '$%02X' % mid if n <= 256 else '$%02X-$%02X' % (mid, mid + (n - 1) // 256)
+        L.append('| %s | %s | %d | %d-%d | %s | %s |' % (ids, name, n, 4 * w0, 4 * (w0 + n) - 1, f, what))
+    L += ['', 'Module words: %d (%d bytes); payload %d bytes (bytes %d-%d; %d, to byte %d, in TutorVision '
+          'mode); blob %d bytes.'
+          % (MOD_WORDS, 4 * MOD_WORDS, PAYLOAD_BYTES, MOD_BYTE, LIVE_END - 1, PAYLOAD_TV, TV_END - 1,
+             BLOB_BYTES), '', END]
     return '\n'.join(L)
 
 
@@ -480,6 +575,30 @@ def selftest():
         fails.append('foreign ECS ROM taken')
     if not verify(be, 0x12345678, 4096, flags=0, ecs_crc=0x0EC5C0DE):
         fails.append('ECS blob taken without the ECS')
+    # 1.0.8: a TutorVision blob: its segment counts; refused by a core whose mode differs
+    tvm = dict(mods)
+    for mid, _, n, *_ in TV_LAYOUT:
+        tvm[mid] = [rnd.getrandbits(32) for _ in range(n)]
+    bt = pack(tvm, cram, 0x12345678, 4096, flags=FLAG_TV | FLAG_TVFULL, exec_crc=0xCAFEF00D,
+              grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE, wbx_crc=0x7558A4CF)
+    kw = dict(exec_crc=0xCAFEF00D, grom_crc=0x0BADBEEF, cfg_crc=0x5EEDC0DE)
+    if verify(bt, 0x12345678, 4096, flags=FLAG_TV | FLAG_TVFULL, wbx_crc=0x7558A4CF, **kw):
+        fails.append('own TutorVision blob refused')
+    if unpack(bt)[1] != tvm:
+        fails.append('TutorVision unpack differs')
+    for what, fl, wc in (('INTV88 core', FLAG_TV, 0), ('TutorVision off', 0, 0),
+                         ('other WBEXEC', FLAG_TV | FLAG_TVFULL, 0x7558A4CE)):
+        if not verify(bt, 0x12345678, 4096, flags=fl, wbx_crc=wc, **kw):
+            fails.append('TutorVision blob taken by: ' + what)
+    x = bytearray(bt)
+    x[TV_END - 1] ^= 1
+    if not verify(bytes(x), 0x12345678, 4096, flags=FLAG_TV | FLAG_TVFULL, wbx_crc=0x7558A4CF, **kw):
+        fails.append('TutorVision segment byte not in the CRC')
+    if not verify(b, 0x12345678, 4096, flags=FLAG_TV, **kw):
+        fails.append('a 1.0.7 blob taken in TutorVision mode')
+    taddr = [tv_state_addr(i) for i in range(TV_WORDS)]
+    if len(set(taddr)) != TV_WORDS or taddr[0] != 0x2400 or taddr[1536] != 0x2A00:
+        fails.append('TutorVision state addresses')
     # the state addresses: every word once, in id order
     addrs = [state_addr(i) for i in range(MOD_WORDS)]
     if len(set(addrs)) != MOD_WORDS or addrs != sorted(addrs):

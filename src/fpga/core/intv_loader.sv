@@ -22,6 +22,8 @@
 //   3 GROM        intv_sysrom, 2,048 x 8
 //   4 ECS ROM     SRAM words ECS_BASE + n (big-endian words; step 9 maps it)
 //   5 IVOICE      intv_sysrom, 2,048 x 8
+//   6 WBEXEC      (1.0.8) intv_sysrom, bytes 8,192-16,383 (the TutorVision EXEC's $2000-$2FFF)
+//   7 WBGROM      (1.0.8) intv_sysrom, 2,048 x 8 (the INTV88's GROM)
 //
 // The bridge delivers whole 32-bit words, so a file whose length is not a
 // multiple of 4 arrives with 1-3 pad bytes after its end. The loader never
@@ -111,7 +113,7 @@ module intv_loader #(
 
     // system ROM writes (intv_sysrom)
     output logic             rom_we,
-    output logic [1:0]       rom_wsel,
+    output logic [2:0]       rom_wsel,
     output logic [11:0]      rom_waddr,
     output logic [9:0]       rom_wdata,
 
@@ -130,6 +132,8 @@ module intv_loader #(
     output logic             res_noss,
     output logic [15:0]      res_paged,
     output logic [16:0]      res_limit,
+    output logic [1:0]       res_tv,          // 1.0.8: TutorVision Auto input: 1 on (tv_compat 2-3 or
+                                              // the CRC table's flag), 2 off (tv_compat 0), 0 neither
     output logic [1:0]       res_jlp_mode,    // build step 11: jlp_accel 0-3 (docs/JLP_NOTES.md 1)
     output logic [4:0]       res_jlp_sect,    // flash sectors, 0-16
 
@@ -142,7 +146,7 @@ module intv_loader #(
                                               // refused (fmt_err)
     output logic [7:0]       fmt_err,         // docs/CARTFORMATS.md 6
     output logic [1:0]       len_st,          // len_chk of the last finish
-    output logic [11:0]      slot_st          // per slot: 0 empty, 1 wrong, 2 ok
+    output logic [15:0]      slot_st          // per slot (0-7): 0 empty, 1 wrong, 2 ok
 );
 
     localparam logic [7:0] FLAG_ECS = 8'h01, FLAG_VOICE = 8'h02, FLAG_RAM = 8'h04, FLAG_PAGED = 8'h08,
@@ -201,7 +205,7 @@ module intv_loader #(
     logic [7:0]  b1 = 8'd0, b0 = 8'd0, b2 = 8'd0;  // the cartridge's bytes 0, 1 and 2
     logic [31:0] crc = 32'hFFFFFFFF;
     logic [31:0] crc_at [4];
-    logic [24:0] cnt [6];                      // per slot: last offset + 1
+    logic [24:0] cnt [8];                      // per slot: last offset + 1
     logic        started = 1'b0, seq_err = 1'b0, big = 1'b0, ovr = 1'b0;
     logic        rom_mode = 1'b0;              // byte 2 said .rom
     logic        lui_mode = 1'b0;              // byte 3 said LUIGI (1.0.7)
@@ -293,14 +297,15 @@ module intv_loader #(
     logic [58:0] cp_d;
     logic [5:0]  nrng;
     logic [7:0]  cp_err;
-    logic        cp_ecs, cp_ecs_off, cp_voice, cp_jlp, cp_jmset, cp_jfset;
+    logic        cp_ecs, cp_ecs_off, cp_voice, cp_jlp, cp_jmset, cp_jfset, cp_tv_on, cp_tv_off;
     logic [1:0]  cp_jmode;
     logic [7:0]  cp_jflash;
     intv_cfgparse cfgparse (
         .clk(clk), .clr(cfg_clr), .in_v(cp_in_v), .in_c(cp_in_c), .in_end(cp_end),
         .rng_we(cp_we), .rng_idx(cp_idx), .rng_d(cp_d), .nrng(nrng), .err(cp_err),
         .f_ecs(cp_ecs), .f_ecs_off(cp_ecs_off), .f_voice(cp_voice), .f_jlp(cp_jlp),
-        .f_jlp_mode(cp_jmode), .f_jlp_mset(cp_jmset), .f_jlp_flash(cp_jflash), .f_jlp_fset(cp_jfset)
+        .f_jlp_mode(cp_jmode), .f_jlp_mset(cp_jmset), .f_jlp_flash(cp_jflash), .f_jlp_fset(cp_jfset),
+        .f_tv_on(cp_tv_on), .f_tv_off(cp_tv_off)
     );
     logic [58:0] rng [32];
     logic [4:0]  rng_ra;
@@ -340,6 +345,7 @@ module intv_loader #(
     logic [8:0]  lo = 9'd0, hi = 9'd0;
     logic [7:0]  lid = 8'd0, tflg = 8'd0;
     logic        hitf = 1'b0, cfg_on = 1'b0, refused = 1'b0;
+    logic        ttv = 1'b0;                   // 1.0.8: the CRC entry's TutorVision flag
     logic [1:0]  fmt = FMT_NONE;
     logic [2:0]  src = 3'd0;                   // map source: 0 refused, 1 raw, 2 CFG, 3 .rom, 4 LUIGI
     logic [16:0] lw = 17'd0;                   // the LUIGI word pass
@@ -427,12 +433,12 @@ module intv_loader #(
     end
 
     initial begin
-        for (int i = 0; i < 6; i++) cnt[i] = 25'd0;
+        for (int i = 0; i < 8; i++) cnt[i] = 25'd0;
         for (int i = 0; i < 4; i++) begin crc_at[i] = 32'd0; wq[i] = 35'd0; end
-        rom_we = 1'b0; rom_wsel = 2'd0; rom_waddr = 12'd0; rom_wdata = 10'd0;
+        rom_we = 1'b0; rom_wsel = 3'd0; rom_waddr = 12'd0; rom_wdata = 10'd0;
         tab_we = 1'b0; tab_idx = 12'd0; tab_d = 38'd0;
         res_we = 1'b0; res_crc = 32'd0; res_words = 17'd0; res_layout = 8'd0; res_flags = 8'd0;
-        res_jlp_mode = 2'd0; res_jlp_sect = 5'd0;
+        res_jlp_mode = 2'd0; res_jlp_sect = 5'd0; res_tv = 2'd0;
         res_hit = 1'b0; res_cfg_crc = 32'd0; res_fmt = 2'd0; res_noss = 1'b0; res_paged = 16'd0;
         res_limit = 17'd0; ready = 1'b0; err = 6'd0; fmt_err = 8'd0; len_st = 2'd0;
     end
@@ -541,7 +547,7 @@ module intv_loader #(
             cov_we <= 1'b1;
         end
         if (ld_wr) begin
-            if (slot < 4'd6)
+            if (slot < 4'd8)
                 cnt[slot[2:0]] <= {1'b0, off} + 25'd1;
             if (!off[0])
                 hb <= ld_data;
@@ -589,15 +595,23 @@ module intv_loader #(
                     end
                 end
                 4'd2: if (off[0] && off < 24'd8192) begin
-                    rom_we <= 1'b1; rom_wsel <= 2'd0;
+                    rom_we <= 1'b1; rom_wsel <= 3'd0;
                     rom_waddr <= off[12:1]; rom_wdata <= {hb[1:0], ld_data};
                 end
                 4'd3: if (off < 24'd2048) begin
-                    rom_we <= 1'b1; rom_wsel <= 2'd1;
+                    rom_we <= 1'b1; rom_wsel <= 3'd1;
                     rom_waddr <= {1'b0, off[10:0]}; rom_wdata <= {2'd0, ld_data};
                 end
                 4'd5: if (off < 24'd2048) begin
-                    rom_we <= 1'b1; rom_wsel <= 2'd2;
+                    rom_we <= 1'b1; rom_wsel <= 3'd2;
+                    rom_waddr <= {1'b0, off[10:0]}; rom_wdata <= {2'd0, ld_data};
+                end
+                4'd6: if (off[0] && off >= 24'd8192 && off < 24'd16384) begin
+                    rom_we <= 1'b1; rom_wsel <= 3'd3;
+                    rom_waddr <= off[12:1]; rom_wdata <= {hb[1:0], ld_data};
+                end
+                4'd7: if (off < 24'd2048) begin
+                    rom_we <= 1'b1; rom_wsel <= 3'd4;
                     rom_waddr <= {1'b0, off[10:0]}; rom_wdata <= {2'd0, ld_data};
                 end
                 default: ;
@@ -674,13 +688,15 @@ module intv_loader #(
             F_LK_FW: st <= F_LK_F;
             F_LK_F: begin
                 if (!lo[8] && crc_q[63:32] == crc_fin && crc_q[31:24] != 8'd0
-                    && (crc_q[15:0] == 16'd0 || {1'b0, crc_q[15:0]} == size256)) begin
+                    && (crc_q[14:0] == 15'd0 || {2'b0, crc_q[14:0]} == size256)) begin
                     lid  <= crc_q[31:24];
                     tflg <= crc_q[23:16];
+                    ttv  <= crc_q[15];             // 1.0.8: the TutorVision flag
                     hitf <= 1'b1;
                 end else begin
                     lid  <= 8'd1;
                     tflg <= FLAG_EST;
+                    ttv  <= 1'b0;
                     hitf <= 1'b0;
                 end
                 st <= F_SRC;
@@ -1149,6 +1165,13 @@ module intv_loader #(
                 res_noss    <= src != 3'd0 && noss;
                 res_paged   <= src == 3'd0 ? 16'd0 : paged;
                 res_limit   <= src == 3'd0 ? 17'd0 : src >= 3'd3 ? 17'h10000 : words;
+                // 1.0.8: the TutorVision Auto input (tools/mapper/cartfmt.py tv_of): off wins, then on
+                res_tv <= src == 3'd4 ? (lp_flags[11:10] == 2'b00 ? 2'd2 : lp_flags[11] ? 2'd1 : 2'd0)
+                        : src == 3'd3 ? (!cmp_in ? 2'd0 : rp_cmp[27:26] == 2'b11 ? 2'd2
+                                         : rp_cmp[27:26] != 2'b00 ? 2'd1 : 2'd0)
+                        : (src == 3'd1 || src == 3'd2) ? ((cfg_on && cp_tv_off) ? 2'd2
+                                         : ((hitf && ttv) || (cfg_on && cp_tv_on)) ? 2'd1 : 2'd0)
+                        : 2'd0;
                 res_jlp_mode <= src == 3'd4 ? lui_jm : src == 3'd3 ? rom_jm : (src == 3'd2 || (src == 3'd1 && cfg_on)) ? cfg_jm : 2'd0;
                 res_jlp_sect <= src == 3'd4 ? lui_js : src == 3'd3 ? rom_js : (src == 3'd2 || (src == 3'd1 && cfg_on)) ? cfg_js : 5'd0;
                 if (fmt_err != 8'd0) err[5] <= 1'b1;
@@ -1179,9 +1202,10 @@ module intv_loader #(
     // refused); err[4] alone (the load went on with the table's length)
     // leaves it ok, the cartridge's second card shows the length check. The
     // CFG slot: ok when it streamed (its verdict is in err[5] / fmt_err).
-    localparam logic [24:0] SIZE [6] = '{25'd0, 25'd0, 25'd8192, 25'd2048, 25'd24576, 25'd2048};
+    localparam logic [24:0] SIZE [8] = '{25'd0, 25'd0, 25'd8192, 25'd2048, 25'd24576, 25'd2048,
+                                         25'd16384, 25'd2048};
     always_comb begin
-        for (int i = 0; i < 6; i++) begin
+        for (int i = 0; i < 8; i++) begin
             if (cnt[i] == 25'd0)
                 slot_st[2*i +: 2] = 2'd0;
             else if (i == 0)

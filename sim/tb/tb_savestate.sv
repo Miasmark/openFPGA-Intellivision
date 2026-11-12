@@ -175,9 +175,12 @@ module tb_savestate;
     logic [1:0]  voice_ovr = 2'd2;        // +voice (step 10): the menu's Intellivoice; Off by default
     logic        synth = 1'b0;
     logic        instant = 1'b0;          // +instant=1: Tape speed Instant (1.0.6)
+    logic [1:0]  tv_set = 2'd1;           // +tv=N (1.0.8): the menu's TutorVision (1 Off by default);
+    logic        bq_set = 1'b0, font_set = 1'b0;   // +bq=1, +font=1; +wbexec=F, +wbgrom=F the slots
     /* verilator lint_off UNUSEDSIGNAL */
     wire logic        ecs_full;
-    wire logic [11:0] slot_st;
+    wire logic [15:0] slot_st;
+    wire logic        tv_on;
     wire logic [1:0]  len_st;
     wire logic        ce_pix;
     wire logic [8:0]  hcnt, vline;
@@ -223,6 +226,7 @@ module tb_savestate;
         .machine_reset(mreset), .cart_crc_o(), .cart_ready_o(), .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .ecs_override(ecs_ovr), .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(instant), .ecs_full(ecs_full),
         .voice_override(voice_ovr), .voice_dac7(1'b0), .voice_level(3'd4), .voice_on(voice_on), .ecs_level(3'd2),
+        .tv_setting(tv_set), .tv_bq_set(bq_set), .font_set(font_set), .tv_on(tv_on),
         .ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vline(vline), .live(live), .colour(colour),
         .audio(audio),
         .clk_74a(clk74), .bridge_addr(bridge_addr), .bridge_rd(bridge_rd), .bridge_wr(bridge_wr),
@@ -778,6 +782,9 @@ module tb_savestate;
             if ($value$plusargs("synth=%d", p)) synth = p != 0;
             if ($value$plusargs("instant=%d", p)) instant = p != 0;
             if ($value$plusargs("voice=%d", p)) voice_ovr = 2'(p);
+            if ($value$plusargs("tv=%d", p)) tv_set = 2'(p);
+            if ($value$plusargs("bq=%d", p)) bq_set = p != 0;
+            if ($value$plusargs("font=%d", p)) font_set = p != 0;
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -790,6 +797,8 @@ module tb_savestate;
             string ecs_f;
             if ($value$plusargs("ecsrom=%s", ecs_f)) load_file(ecs_f, 4'd4, n);
             if ($value$plusargs("ivoice=%s", ecs_f)) load_file(ecs_f, 4'd5, n);
+            if ($value$plusargs("wbexec=%s", ecs_f)) load_file(ecs_f, 4'd6, n);
+            if ($value$plusargs("wbgrom=%s", ecs_f)) load_file(ecs_f, 4'd7, n);
         end
         n = 0;
         if ($value$plusargs("cart=%s", cart_f)) load_file(cart_f, 4'd0, n);

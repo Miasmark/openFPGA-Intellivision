@@ -27,6 +27,10 @@
 //                       2 Off (default); +ivoice=F its ROM (slot 5); +vlevel=N
 //                       (0-4, default 4) +vdac=1 (the chip's 7-bit DAC sound)
 //   +elevel=N           the ECS level (PSG #2 only: 0-4, default 2, the menu's)
+//   +tv=N               (1.0.8) the TutorVision item as the menu's: 0 Auto, 1 Off (the
+//                       default), 2 INTV88, 3 Full; +wbexec=F (slot 6) +wbgrom=F (slot 7)
+//                       the TutorVision ROMs; +bq=1 the STIC 1A timing; +font=1 the
+//                       TutorVision font (intv_core's rules, taken at machine reset)
 //   +log=F              the output (below)
 //   +busrq=0            BUSRQ off (the step-3 system; model mode "none")
 //   +pic=F              write every picture to F (binary, see below)
@@ -125,6 +129,8 @@ module tb_system;
     logic [1:0]  ecs_ovr = 2'd2;
     logic        synth = 1'b0;
     logic        instant = 1'b0;          // +instant=1: Tape speed Instant (1.0.6)
+    logic [1:0]  tv_set = 2'd1;           // +tv=N (1.0.8): the menu's TutorVision item (1 Off)
+    logic        bq_set = 1'b0, font_set = 1'b0;
     logic        aux_req = 1'b0, aux_we = 1'b0;
     logic [16:0] aux_addr = 17'd0;
     logic [15:0] aux_wdata = 16'd0;
@@ -145,7 +151,7 @@ module tb_system;
     wire logic [7:0]  fmt_err;
     wire logic [31:0] cfg_crc;
     wire logic [63:0] pg_sel;
-    wire logic [11:0] slot_st;
+    wire logic [15:0] slot_st;
     wire logic [31:0] crc;
     wire logic [16:0] words;
     wire logic [7:0]  layout, flags;
@@ -156,7 +162,7 @@ module tb_system;
     wire logic [15:0] aux_rdata;
     wire logic [11:0] exec_addr;
     wire logic [10:0] grom_addr, vgrom_addr;
-    wire logic [9:0]  exec_q;
+    wire logic [9:0]  exec_q, wbx_q;
     wire logic [7:0]  grom_q, vgrom_q, ivoice_q;
     wire logic [16:0] sram_a;
     wire logic [15:0] sram_dq_out, sram_dq_in;
@@ -166,7 +172,21 @@ module tb_system;
     wire logic        efull;            // intv_ecs: mode on (intv_input's key routing, step-9 review)
     wire logic [11:0] ecs_pg;
     wire logic [1:0]  ecs_auto;
-    wire logic [1:0]  ecs_mode = ecs_ovr == 2'd1 ? 2'd1 : ecs_ovr == 2'd2 ? 2'd0 : ecs_auto;
+    // the TutorVision mode (1.0.8): intv_core's rule, taken at machine reset
+    wire logic        tv_auto;
+    wire logic        wbx_ok = slot_st[13:12] == 2'd2, wbg_ok = slot_st[15:14] == 2'd2;
+    wire logic [1:0]  tv_next = tv_set == 2'd1 ? 2'd0 : tv_set == 2'd2 ? 2'd1
+                              : (tv_set == 2'd3 || tv_auto) ? (wbx_ok ? 2'd2 : 2'd1) : 2'd0;
+    logic [1:0]       tv_l = 2'd0;
+    logic             bq_l = 1'b0, font_l = 1'b0;
+    always_ff @(posedge clk)
+        if (mreset) begin
+            tv_l <= tv_next;
+            bq_l <= bq_set;
+            font_l <= font_set && wbg_ok;
+        end
+    wire logic [1:0]  ecs_mode = tv_next == 2'd2 ? 2'd0
+                               : ecs_ovr == 2'd1 ? 2'd1 : ecs_ovr == 2'd2 ? 2'd0 : ecs_auto;
     // the Intellivoice (step 10): intv_core's rule (On, or Auto and the cartridge's flag; never
     // without its ROM slot)
     logic [1:0]       voice_ovr = 2'd2;
@@ -193,7 +213,7 @@ module tb_system;
         .bus_req(c_req), .bus_we(c_we), .bus_addr(c_addr), .bus_wdata(c_wdata),
         .bus_ack(c_ack), .bus_rdata(c_rdata), .bus_hit(c_hit), .bus_attr(c_attr),
         .bus_paged(c_paged), .pg_rst(64'd0), .pg_sel,
-        .ecs_on, .ecs_pg, .ecs_auto, .ecs_rom_ok, .voice_auto,
+        .ecs_on, .ecs_pg, .ecs_auto, .ecs_rom_ok, .voice_auto, .tv_auto, .wbx_q, .font(font_l),
         .jlp_mode, .jlp_sect, .jlp_on, .jlp_busy, .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,
         .aux_req, .aux_we, .aux_addr, .aux_wdata, .aux_be(2'b11),
         .aux_ack, .aux_rdata,
@@ -241,7 +261,7 @@ module tb_system;
 
     intv_machine dut (
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
-        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en,
+        .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en, .tv(tv_l), .tv_bq(bq_l),
         .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
         .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(instant), .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
@@ -252,7 +272,7 @@ module tb_system;
         .jm_req, .jm_we, .jm_addr, .jm_wdata, .jm_ack, .jm_rdata,
         .jlp_fl_clr(1'b0), .jlp_nv_addr(14'd0), .jlp_nv_we(1'b0), .jlp_nv_wdata(16'd0), .jlp_nv_q,
         .tape_clr(1'b0), .tape_walk(1'b0), .tape_nv_addr(14'd0), .tape_nv_we(1'b0), .tape_nv_wdata(8'd0), .tape_nv_q(), .tape_busy(),
-        .exec_addr, .exec_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
+        .exec_addr, .exec_q, .wbx_q, .grom_addr, .grom_q, .vgrom_addr, .vgrom_q, .colour,
         .phase, .dout, .din, .addr, .fetch, .hold, .halted,
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_m));
 
@@ -450,9 +470,11 @@ module tb_system;
 
     // --------------------------------------------------------- state port
     // module id, word count (the order is the write order)
-    localparam int NMOD = 21;              // intv_ss_pkg's modules (1.0.5: + the tape, $22, 2 words)
-    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 32, 34};
-    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64, 28, 2};
+    // (1.0.5: + the tape, $22, 2 words; 1.0.8: + the TutorVision segment's $24-$2B, dumped and
+    // round-tripped in every mode: zero with the mode off)
+    localparam int NMOD = 29;
+    int unsigned mod_id [NMOD] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 32, 34, 36, 37, 38, 39, 40, 41, 42, 43};
+    int unsigned mod_n  [NMOD] = '{1, 8, 2, 67, 21, 256, 256, 96, 256, 256, 16, 20, 64, 1, 21, 256, 256, 24, 64, 28, 2, 256, 256, 256, 256, 256, 256, 256, 160};
     logic [31:0] saved [NMOD][256];
     // the JLP's flash store and its row bits (build step 11): not machine state (a state load
     // keeps the flash, JLP_NOTES 5.2), so the core never rolls it back; a "later state" round
@@ -585,10 +607,12 @@ module tb_system;
         // right contents through the reset), then through the state port
         // into every word, and into the cart RAM
         for (int i = 0; i < 256; i++) dut.scratch.mem[i] = 8'(~saved[5][i] ^ 32'(i * 37));
-        for (int i = 0; i < 512; i++)
-            dut.sysram.mem[i] = 16'(~(i < 256 ? saved[6][i] : saved[7][i - 256]) ^ 32'(i * 4097));
-        for (int i = 0; i < 512; i++)
-            dut.gram.mem[i] = 8'(~(i < 256 ? saved[8][i] : saved[9][i - 256]) ^ 32'(i * 41));
+        for (int i = 0; i < 1024; i++)
+            dut.sysram.mem[i] = 16'(~(i < 256 ? saved[6][i] : i < 352 ? saved[7][i - 256]
+                                      : i < 768 ? saved[27 + (i - 352) / 256][(i - 352) % 256] : 0) ^ 32'(i * 4097));
+        for (int i = 0; i < 2048; i++)
+            dut.gram.mem[i] = 8'(~(i < 256 ? saved[8][i] : i < 512 ? saved[9][i - 256]
+                                   : saved[21 + (i - 512) / 256][(i - 512) % 256]) ^ 32'(i * 41));
         for (int i = 0; i < 32; i++)
             dut.stic.rowbuf.mem[i] = 14'(~(i < 20 ? saved[11][i] : 0) ^ 32'(i * 911));
         for (int i = 0; i < 64; i++)
@@ -675,6 +699,9 @@ module tb_system;
             if ($value$plusargs("vlevel=%d", e)) vlevel = 3'(e);
             if ($value$plusargs("vdac=%d", e)) vdac = e != 0;
             if ($value$plusargs("elevel=%d", e)) elevel = 3'(e);
+            if ($value$plusargs("tv=%d", e)) tv_set = 2'(e);
+            if ($value$plusargs("bq=%d", e)) bq_set = e != 0;
+            if ($value$plusargs("font=%d", e)) font_set = e != 0;
         end
         if (!$value$plusargs("exec=%s", exec_f) || !$value$plusargs("grom=%s", grom_f))
             fail("give +exec= and +grom=");
@@ -695,6 +722,14 @@ module tb_system;
             if ($value$plusargs("ivoice=%s", ecs_f)) begin
                 load_file(ecs_f, 4'd5, n);
                 $fdisplay(fd, "L ivoice %0d", n);
+            end
+            if ($value$plusargs("wbexec=%s", ecs_f)) begin
+                load_file(ecs_f, 4'd6, n);
+                $fdisplay(fd, "L wbexec %0d", n);
+            end
+            if ($value$plusargs("wbgrom=%s", ecs_f)) begin
+                load_file(ecs_f, 4'd7, n);
+                $fdisplay(fd, "L wbgrom %0d", n);
             end
         end
         n = 0;
@@ -718,6 +753,7 @@ module tb_system;
                   err, crc, words, layout, flags, hit);
         $fdisplay(fd, "L ecs auto %0d rom %0d mode %0d", ecs_auto, ecs_rom_ok, ecs_mode);
         $fdisplay(fd, "L voice mode %0d", voice_mode);
+        $fdisplay(fd, "L tv auto %0d next %0d", tv_auto, tv_next);
         repeat (10) @(negedge clk);
         mres_tb = 1'b0;
 

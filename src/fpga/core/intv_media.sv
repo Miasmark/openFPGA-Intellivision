@@ -90,6 +90,8 @@ module intv_media #(
     output logic [1:0]       ecs_auto,        // the Auto rule's mode for this image
     output logic             ecs_rom_ok,
     output logic             voice_auto,      // the Intellivoice's Auto rule (step 10)
+    output logic             tv_auto,         // 1.0.8: the TutorVision mode's Auto rule (the loader's
+                                              // res_tv: tv_compat, the .rom / LUIGI flags, the table)
 
     // the JLP (step 11)
     output logic [1:0]       jlp_mode,
@@ -115,6 +117,8 @@ module intv_media #(
     // system ROMs
     input  wire logic [11:0] exec_addr,
     output logic      [9:0]  exec_q,
+    output logic      [9:0]  wbx_q,           // 1.0.8: the WBEXEC's $2000-$2FFF at exec_addr
+    input  wire logic        font,            // 1.0.8: the GROM ports read wbgrom.bin
     input  wire logic [10:0] grom_addr,
     output logic      [7:0]  grom_q,
     input  wire logic [10:0] vgrom_addr,      // the STIC's GROM port (step 4)
@@ -128,7 +132,7 @@ module intv_media #(
     output logic [5:0]       err,
     output logic [7:0]       fmt_err,
     output logic [1:0]       len_st,          // len_chk of the last load (test pattern)
-    output logic [11:0]      slot_st,
+    output logic [15:0]      slot_st,
     output logic [31:0]      crc,
     output logic [16:0]      words,
     output logic [7:0]       layout,
@@ -167,7 +171,8 @@ module intv_media #(
     logic [15:0] l_wdata;
     logic [1:0]  l_be;
     logic        rom_we;
-    logic [1:0]  rom_wsel;
+    logic [2:0]  rom_wsel;
+    logic [1:0]  res_tv;
     logic [11:0] rom_waddr;
     logic [9:0]  rom_wdata;
     logic        tab_we, res_we, res_hit, res_noss;
@@ -197,7 +202,7 @@ module intv_media #(
         .res_we(res_we), .res_crc(res_crc), .res_words(res_words),
         .res_layout(res_layout), .res_flags(res_flags), .res_hit(res_hit),
         .res_cfg_crc(res_cfg_crc), .res_fmt(res_fmt), .res_noss(res_noss), .res_paged(res_paged),
-        .res_limit(res_limit), .res_jlp_mode(res_jlp_mode), .res_jlp_sect(res_jlp_sect),
+        .res_limit(res_limit), .res_jlp_mode(res_jlp_mode), .res_jlp_sect(res_jlp_sect), .res_tv(res_tv),
         .busy(busy), .ready(ld_ready), .err(err), .fmt_err(fmt_err), .len_st(len_st), .slot_st(slot_st)
     );
 
@@ -221,6 +226,9 @@ module intv_media #(
     assign ready      = ld_ready && !probing && !res_we;   // res_we: the clk before probing rises
     assign ecs_rom_ok = slot_st[9:8] == 2'd2;
     assign voice_auto = flags[1] && slot_st[11:10] == 2'd2;
+    initial tv_auto = 1'b0;
+    always_ff @(posedge clk)
+        if (res_we) tv_auto <= res_tv == 2'd1;
     assign c_bus_req  = probing ? pr_req : bus_req;
     assign bus_ack    = c_bus_ack && !probing;
     assign bus_rdata  = c_bus_rdata;
@@ -280,8 +288,8 @@ module intv_media #(
     // -------------------------------------------------------- system ROMs
     intv_sysrom sysrom (
         .clk(clk),
-        .we(rom_we), .wsel(rom_wsel), .waddr(rom_waddr), .wdata(rom_wdata),
-        .exec_addr(exec_addr), .exec_q(exec_q),
+        .we(rom_we), .wsel(rom_wsel), .waddr(rom_waddr), .wdata(rom_wdata), .font(font),
+        .exec_addr(exec_addr), .exec_q(exec_q), .wbx_q(wbx_q),
         .grom_addr(grom_addr), .grom_q(grom_q),
         .vgrom_addr(vgrom_addr), .vgrom_q(vgrom_q),
         .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q)

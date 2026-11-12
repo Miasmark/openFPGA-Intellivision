@@ -59,6 +59,7 @@ LAYOUT_INVALID = 0     # entry 0: no layout (table padding)
 # CRC table padding: CRC FFFFFFFF, layout 0, so the table is sorted end to end and both a
 # linear scan (stop at layout 0) and a binary search work (tools/mapper/README.md)
 CRC_PAD_ENTRY = 0xFFFFFFFF << 32
+TV_FLAG = 0x8000       # 1.0.8: bit 15 of a CRC entry's size word: a TutorVision cartridge (Auto rule)
 LAYOUT_DEFAULT = 1     # unknown CRC: our default map, cut at the image length
 
 # Address ranges the ECS uses for itself (jzIntv doc/tech/ecs.html; MAME intv_m.cpp:616-622).
@@ -334,6 +335,7 @@ def read_softlist(path):
     listname = os.path.basename(path)
     for sw in root.findall('software'):
         info = {i.get('name'): i.get('value') for i in sw.findall('info')}
+        shared = {f.get('name'): f.get('value') for f in sw.findall('sharedfeat')}
         parts = sw.findall('part')
         if len(parts) != 1:
             raise ValueError('%s: %d parts' % (sw.get('name'), len(parts)))
@@ -351,7 +353,8 @@ def read_softlist(path):
             areas.append(dict(name=da.get('name'), size=int(da.get('size'), 0), roms=roms))
         yield dict(list=listname, name=sw.get('name'), desc=sw.findtext('description'),
                    cloneof=sw.get('cloneof', ''), supported=sw.get('supported', 'yes'),
-                   usage=info.get('usage', ''), slot=feat.get('slot', 'intv_rom'), areas=areas)
+                   usage=info.get('usage', ''), slot=feat.get('slot', 'intv_rom'), areas=areas,
+                   compat=shared.get('compatibility', ''))
 
 
 def softlist_entry(sw):
@@ -414,10 +417,13 @@ def softlist_entry(sw):
         flags |= FLAG_ECS
     if 'Intellivoice' in sw['usage']:
         flags |= FLAG_VOICE
+    # 1.0.8: MAME marks the TutorVision cartridges "compatibility WBEXEC" (hash/intv.xml:2450,
+    # 2467): the TutorVision mode's Auto rule (TV_FLAG, bit 15 of the CRC entry's size word)
+    tv = sw.get('compat') == 'WBEXEC'
     if problems:
-        return dict(layout=None, crc=crc, bytes=nbytes, flags=flags, problems=problems)
+        return dict(layout=None, crc=crc, bytes=nbytes, flags=flags, problems=problems, tv=tv)
     lay = Layout(segs, rams)
-    return dict(layout=lay, crc=crc, bytes=nbytes, flags=flags, problems=problems)
+    return dict(layout=lay, crc=crc, bytes=nbytes, flags=flags, problems=problems, tv=tv)
 
 
 def layout_flags(layout, flags):

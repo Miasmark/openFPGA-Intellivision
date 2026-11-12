@@ -169,6 +169,9 @@ module intv_stic #(
 ) (
     input  wire logic        clk,
     input  wire logic        reset,           // machine reset
+    input  wire logic        tv,              // 1.0.8: the STIC 1A's rules (docs/TUTORVISION.md 3)
+    input  wire logic        tv_bq,           // ... and its bus-request option (no frame request,
+                                              //     rows one slot shorter; a guess, unmeasured)
     input  wire logic        ce,              // CPU cycle
     input  wire logic        ce_pix,          // pixel clock (ce_stic)
     input  wire logic        live,            // the machine runs this clk
@@ -196,7 +199,7 @@ module intv_stic #(
     /* verilator lint_off UNUSEDSIGNAL */
     input  wire logic [15:0] sys_q,           // bits 14-15 are not on the graphics bus
     /* verilator lint_on UNUSEDSIGNAL */
-    output logic [8:0]       gram_addr,
+    output logic [10:0]      gram_addr,       // 1.0.8: 2K (the STIC 1A's 256 cards)
     input  wire logic [7:0]  gram_q,
     output logic [10:0]      grom_addr,
     input  wire logic [7:0]  grom_q,
@@ -253,6 +256,8 @@ module intv_stic #(
     always_comb begin
         if (!open)
             q = 16'd0;                        // the console (hw_frame2; MAME: the offset)
+        else if (tv && n == 6'h22)
+            q = 16'h3FF7;                     // the STIC 1A: bit 3 of $0022 reads 0 (Zbiciak p.14)
         else if (n < 6'(NREG))
             q = {2'b00, fixed(n) | (r[n] & keep(n))};
         else
@@ -289,9 +294,10 @@ module intv_stic #(
     wire logic [6:0]  h_n   = l_end ? 7'd0 : hcnt[8:2] + 7'd1;
     wire logic [9:0]  rp    = 10'(d[3:0]) * 10'(CPL) + 10'(h_n);
     wire logic in_rows  = en_l && d >= 0 && d[10:4] < 7'(ROWS);
-    wire logic row_rq   = in_rows && rp >= 10'(REQ_SLOT) && rp < 10'(REQ_SLOT + ROW_HOLD);
+    wire logic bq       = tv && tv_bq;
+    wire logic row_rq   = in_rows && rp >= 10'(REQ_SLOT) && rp < 10'(REQ_SLOT + ROW_HOLD) - {9'd0, bq};
     wire logic fetch_n  = in_rows && rp == 10'(REQ_SLOT + ROW_FETCH);
-    wire logic frame_rq = slot_n >= 16'(FRAME_RQ_AT) && slot_n < 16'(FRAME_RQ_AT + FRAME_RQ)
+    wire logic frame_rq = !bq && slot_n >= 16'(FRAME_RQ_AT) && slot_n < 16'(FRAME_RQ_AT + FRAME_RQ)
                        && (slot_n == 16'(WIN_CYCLES) ? hs_eff : en_l);
     assign busrq = busrq_en && (frame_rq || row_rq);
 
@@ -360,7 +366,8 @@ module intv_stic #(
     wire logic signed [10:0] yy_l = 11'(vcnt) - 11'(PF_LINE) - 11'({vdr_l, 1'b0});
     wire logic pf_line = en_l && vcnt >= 9'(PF_LINE) && vcnt < 9'(PF_LINE + 192) && yy_l >= 0
                       && !(cbr[1] && vcnt < 9'(PF_LINE + 16));
-    wire logic pf_x = xp >= $signed({8'd0, cbr[0] ? 4'd8 : {1'b0, hd}}) && xp < 12'sd159;
+    // the 2609 shows 159 columns; the STIC 1A the 160th too (Zbiciak p.15)
+    wire logic pf_x = xp >= $signed({8'd0, cbr[0] ? 4'd8 : {1'b0, hd}}) && xp < (tv ? 12'sd160 : 12'sd159);
     wire logic [11:0] xx = xp - 12'(hd);
     logic [17:0] lb_q;
     logic [3:0]  pix = 4'd0;
@@ -400,14 +407,16 @@ module intv_stic #(
     logic [7:0] u_card;
     always_comb begin
         u_card = u_a[10:3];
-        if (u_a[11] || !csmode)
-            u_card[7:6] = 2'b00;                // M2; GRAM cards 0-63
+        if ((u_a[11] || !csmode) && !tv)
+            u_card[7:6] = 2'b00;                // M2; GRAM cards 0-63 (the STIC 1A: all, Zbiciak p.17)
         if (u_y[7])
             u_card[0] = 1'b0;                   // YRES: cards 2k, 2k + 1 (M1)
     end
     wire logic [10:0] u_addr = {u_card, 3'b000} + 11'(u_row);
     assign grom_addr = cd_win ? c_grom : u_addr;
-    assign gram_addr = cd_win ? {w[8:3], py} : u_addr[8:0];
+    // Color Stack GRAM cards: bits 10:9 join the card number on the STIC 1A (256 cards; Zbiciak p.20)
+    assign gram_addr = cd_win ? (csmode && tv ? {w[10:3], py} : {2'b00, w[8:3], py})
+                     : tv ? u_addr : {2'b00, u_addr[8:0]};
     wire logic [7:0]  u_pat = u_a[11] ? gram_q : grom_q;
 
     // pattern byte -> pixel k of the MOB (bit k), XSIZE xs, XFLIP xf
@@ -529,7 +538,7 @@ module intv_stic #(
                 if (n == 6'h21)
                     csmode <= 1'b0;
             end
-            if (rd && open && a[13:0] == 14'h0021)
+            if (rd && open && (tv ? a == 16'h0021 : a[13:0] == 14'h0021))
                 csmode <= 1'b1;
             if (frame_end)
                 hs <= 1'b0;

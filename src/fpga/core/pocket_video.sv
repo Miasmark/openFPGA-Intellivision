@@ -62,6 +62,8 @@ module pocket_video #(
     input  wire logic [8:0]  hcnt,
     input  wire logic [8:0]  vline,
     input  wire logic        border_on,   // 1: border window (slot 1), 0: playfield (slot 0)
+    input  wire logic        tv,          // 1.0.8: the TutorVision mode: the STIC 1A shows the
+                                          // 160th column, so it is not drawn black
     input  wire logic        blank,       // 1: active pixels black (machine frozen)
 
     // to the picture source, for the current pixel
@@ -96,7 +98,7 @@ module pocket_video #(
     assign pf_y  = 8'(vline - 9'(PF_Y0));
 
     wire logic de_now  = border_on ? in_bd : in_pf;
-    wire logic cropped = !border_on && pf_x == 8'(PF_W - 1);   // the 160th column, black without the border
+    wire logic cropped = !border_on && !tv && pf_x == 8'(PF_W - 1);   // the 160th column, black without the border
 
     logic [23:0] pal_rgb;
     intv_palette palette (

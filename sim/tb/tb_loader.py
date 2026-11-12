@@ -730,7 +730,7 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
                 'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT',
                 'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL', 'RTRDLYRLP',
-                'VOICECFG', 'VOICECMP', 'VOICEROM', 'NOIVOICE',
+                'VOICECFG', 'VOICECMP', 'VOICEROM', 'NOIVOICE', 'TVCFG2', 'TVCFG0', 'TVROM', 'TVTAB',
                 'lui_paged', 'lui_bank', 'lui_jlp', 'lui_hdrcrc', 'lui_pcrc')
 
 

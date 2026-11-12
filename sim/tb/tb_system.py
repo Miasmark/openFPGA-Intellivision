@@ -2296,10 +2296,13 @@ def main():
             elif isinstance(zipname, tuple) and zipname[0] == 'jlp':
                 cart = jlp_image(zipname[1], work)
             elif isinstance(zipname, tuple) and zipname[0] == 'tvlib':
-                # 1.0.8: the owner's TutorVision images, BIN + CFG (game data: read in place)
+                # 1.0.8: the owner's TutorVision images, BIN + CFG, copied into WORK like every
+                # other image (the run deletes its cart file afterwards: never the library's own)
                 d = os.path.join(lib, 'TutorVision', zipname[1])
-                cart = os.path.join(d, zipname[1] + '.bin')
-                CFG_OF[cart] = os.path.join(d, zipname[1] + '.cfg')
+                cart = os.path.join(work, name + '.bin')
+                shutil.copyfile(os.path.join(d, zipname[1] + '.bin'), cart)
+                CFG_OF[cart] = os.path.join(work, name + '.cfg')
+                shutil.copyfile(os.path.join(d, zipname[1] + '.cfg'), CFG_OF[cart])
             elif isinstance(zipname, tuple) and zipname[0] == 'ib':
                 import importlib.util
                 spec = importlib.util.spec_from_file_location('ibjlp', os.path.join(TESTROMS, 'jlp', 'ibjlp.py'))

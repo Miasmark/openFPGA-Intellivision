@@ -153,10 +153,10 @@ SS_IMAGES = [
     # 1.0.8 (SS_TV, the TutorVision segment): our tvtest.asm in the EXEC slot, INTV88 with the
     # TutorVision font and Full (the WBEXEC's half mapped), saves with GRAM cards 64-255, RAM
     # $0360-$04FF and the PSG's envelope steps in use
-    ('tv88', None, 'tvtest.asm', (0xFF, 0xFF), 16, None,
+    ('tv88', None, 'tvtest.asm', (0xFF, 0xFF), 24, None,
      [(3, 'midinst'), (5, 'busrq'), (8, 'any'), (10, 'any')], (12, 2), 14),   # (no 'sound': its voices fall
                                                                              # silent after one envelope step)
-    ('tvfull', None, 'tvtest.asm', (0xFF, 0xFF), 16, None,
+    ('tvfull', None, 'tvtest.asm', (0xFF, 0xFF), 24, None,
      [(4, 'rowfetch'), (7, 'midinst'), (9, 'any'), (10, 'midinst')], (12, 2), 14),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
@@ -181,6 +181,7 @@ SS_VOICE = {'voicetest': dict(ovr=1), 'b17bomber': dict(ovr=0)}
 # setting (2 INTV88, 3 Full), the font; T (the state into a core with the mode off) and G (into a
 # core with the other font) must be refused
 SS_TV = {'tv88': dict(tv=2, font=1), 'tvfull': dict(tv=3, font=0)}
+SS_TV_FRAMES = 24          # their length (tv_matches' model run)
 FRAMES_AFTER = 24          # an L run goes on this many frames after the restore
 LOAD_AT = FRAME            # fresh cores load from machine cycle 1 frame on
 DEEP_AFTER = 40            # D: s0 loaded into a core this many frames past its save point
@@ -558,16 +559,16 @@ def check_common(run, what, drops=0):
     return probs
 
 
-_TV_EXPECT = {}
+_TV_LOG = {}
 
 
-def tv_expect(name):
-    """1.0.8: what a tvtest image's TutorVision segment holds in every save (frame 2 on: tvtest
-    fills GRAM and writes the RAM before its interrupts start, then never again): the model's GRAM
-    bytes 512-2,047 and RAM $0360-$04FF; None for other images."""
+def tv_matches(name, zc, gram, ram):
+    """1.0.8: whether a tvtest image's TutorVision segment (GRAM bytes 512-2,047, RAM $0360-$04FF)
+    is the model's at the save's freeze cycle zc, within 64 cycles (tvtest fills GRAM during its
+    first frames). None for other images. The model's writes are logged once per image."""
     if name not in SS_TV:
         return None
-    if name not in _TV_EXPECT:
+    if name not in _TV_LOG:
         sys.path.insert(0, os.path.join(ROOT, 'sim', 'check'))
         import tv_check
         bdir = os.environ.get('INTV_BIOS_DIR', os.path.expanduser('~/pocket_projects/intellivision/bios'))
@@ -575,12 +576,36 @@ def tv_expect(name):
         tv = SS_TV[name]['tv'] - 1
         bus = isys.SystemBus(tv_check.tvtest_exec(), open(os.path.join(bdir, 'grom.bin'), 'rb').read(), None,
                              stic_mode='stic', tv=tv, wbexec=isys.load_words(wbx)[4096:8192] if tv == 2 else None)
+        log, orig = [], bus.write
+
+        def wr(addr, value, cycle):
+            orig(addr, value, cycle)
+            if 0x3A00 <= addr <= 0x3FFF:
+                log.append((cycle, 0, addr - 0x3A00, bus.gram[addr - 0x3800]))
+            elif 0x0360 <= addr <= 0x04FF:
+                log.append((cycle, 1, addr - 0x0360, bus.tvram[addr - 0x0360]))
+        bus.write = wr
         cpu = isys.CP1610(bus=bus, buslog=False)
-        while cpu.cycle < 3 * isys.FRAME:
+        while cpu.cycle < SS_TV_FRAMES * isys.FRAME:
             cpu.step()
             bus.boundary(cpu.cycle)
-        _TV_EXPECT[name] = (list(bus.gram[512:2048]), list(bus.tvram))
-    return _TV_EXPECT[name]
+        _TV_LOG[name] = log
+    st = ([0] * 1536, [0] * 416)
+    for c, k, i, v in _TV_LOG[name]:
+        if c >= zc - 64:
+            break
+        st[k][i] = v
+    if (st[0], st[1]) == (gram, ram):
+        return True
+    for c, k, i, v in _TV_LOG[name]:
+        if c < zc - 64:
+            continue
+        if c > zc + 64:
+            break
+        st[k][i] = v
+        if (st[0], st[1]) == (gram, ram):
+            return True
+    return False
 
 
 def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause=True, what='S', flags=0,
@@ -652,8 +677,7 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
         if kline is None or kline.split()[2] != want_k:
             probs.append('S: blob %s: bank registers %s, the core at the freeze %s' % (
                 os.path.basename(p), want_k, kline))
-        tvw = tv_expect(img[0])
-        if tvw and (mods.get(0x24) != tvw[0] or mods.get(0x2A) != tvw[1]):
+        if tv_matches(img[0], zc, mods.get(0x24), mods.get(0x2A)) is False:
             probs.append('S: blob %s: TutorVision segment differs from the machine\'s GRAM cards 64-255 / '
                          'RAM $0360-$04FF' % os.path.basename(p))
         if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], flags=h[ss.H_FLAGS],
@@ -946,19 +970,19 @@ PLANTS = [
      [("                              ss_addr  <= in_tvs ? tv_addr : mod_addr;\n",
        "                              ss_addr  <= (in_tvs ? tv_addr : mod_addr) + 16'd1;\n")], 'sticmob', 'psgtest',
      AFTER),
-    # 1.0.8: the TutorVision segment not saved (its words not read from the state bus); the header
+    # 1.0.8: the TutorVision segment saved from the wrong words (module addresses); the header
     # without the mode (its length and flag: a TutorVision state taken by a core with the mode off);
     # the font's GROM not in the GROM CRC (a state taken by a core with the other font)
     ('ss_tv_dropped', 'intv_ss_ctl.sv',
-     [("    wire logic        in_tvs  = tv_flag && w >= 14'(W_TV0) && w < 14'(W_TVEND);",
-       "    wire logic        in_tvs  = 1'b0;")], 'tv88', 'psgtest', r' S: blob \S+: TutorVision segment'),
+     [("                              ss_addr <= in_tvs ? tv_addr : mod_addr;\n",
+       "                              ss_addr <= mod_addr;\n")], 'tv88', 'psgtest', r' S: blob \S+: TutorVision segment'),
     ('ss_tv_header', 'intv_ss_ctl.sv',
      [("hdr_exp = tv_flag ? 32'(SS_PAYLOAD_TV) : 32'(SS_PAYLOAD);", "hdr_exp = 32'(SS_PAYLOAD);"),
       ("hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, voice_flag, ecs_flag};",
        "hdr_exp = {30'd0, voice_flag, ecs_flag};")], 'tv88', 'psgtest',
-     r' T: (FAIL )?loads \[.LOAD ok'),
+     r' (T: (FAIL )?loads \[.LOAD ok|S: blob \S+: \[.header (length|flags))'),
     ('ss_tv_font_crc', 'intv_core.sv', [(".grom_crc(font_l ? ~wg_c : ~gr_c),", ".grom_crc(~gr_c),")],
-     'tv88', 'psgtest', r' G: (FAIL )?loads \[.LOAD ok'),
+     'tv88', 'psgtest', r' (G: (FAIL )?loads \[.LOAD ok|S: blob \S+: \[.header grom_crc)'),
     ('ss_crc_unchecked', 'intv_ss_ctl.sv',
      [("if (bad || resv_bad || ~crc != hdr_crc)", "if (bad || resv_bad)")], 'sticmob', 'psgtest',
      r' C: FAIL load \S+_bad_\w+\.blob: code \d+, expected err'),
@@ -1201,7 +1225,10 @@ def main():
         if a.plants or a.plants_only or a.plant:
             # the foreign states for the plants, saved by the unplanted RTL
             fbs = {}
+            want = {p[4] for p in PLANTS if not a.plant or p[0] in a.plant.split(',')}
             for fname, fr in PLANT_FOREIGN.items():
+                if fname not in want:            # (1.0.8) only the selected plants' foreign states
+                    continue
                 fbs[fname] = os.path.join(work, 'plant_foreign_%s.blob' % fname)
                 r = bench.sim('plant_foreign_' + fname, allimgs[fname], (fr + 3) * FRAME,
                               ['save %d any %s' % (fr * FRAME, fbs[fname])])

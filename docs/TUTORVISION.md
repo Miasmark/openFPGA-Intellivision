@@ -236,6 +236,13 @@ taking screenshots (`vs`); `--help` gives `-G#` / `--gramsize`: "2: 256 tiles (I
 
 So for the GRAM rules two independent implementations agree; the rest rests on [Z] alone.
 
+### 5.4 Cost (trial fit, seed 1, commit d3ddbbf)
+
+15,052 ALMs (81 %; 1.0.7's trial: 14,775, so +277), 172 RAM blocks (143, +29: the GRAM and
+System RAM blocks doubled, the WBEXEC 4K x 10, the font's GROM with two ports, the save-state
+shadow 4,096 -> 5,952 words), 25 DSP. Timing as 1.0.7: `clk_sys` worst setup +0.754 ns, worst hold
++0.039 ns, no negative slack anywhere; FIT_CROSSING pass.
+
 ## 6 Mode off
 
 Every 1.0.7 gate runs with the mode off (the benches pass `+tv=1`); the state layout, the menu's

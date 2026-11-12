@@ -461,8 +461,8 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
     if img.get('notable'):
         args.append('+notable=1')
     args += [
-            '+pad=%02X' % (0xA5, 0x00, 0xFF, 0x5A)[k % 4], '+dtfirst=%d' % img.get('dtfirst', k % 2),
-            '+gap=%d' % (40 + 7 * (k % 5)), '+jitter=%d' % (1 + 13 * (k % 3))]
+            '+pad=%02X' % img.get('pad', (0xA5, 0x00, 0xFF, 0x5A)[k % 4]), '+dtfirst=%d' % img.get('dtfirst', k % 2),
+            '+gap=%d' % img.get('gap', 40 + 7 * (k % 5)), '+jitter=%d' % img.get('jitter', 1 + 13 * (k % 3))]
     for key in ('exec', 'grom', 'ecs', 'ivoice'):
         if bios_paths.get(key) and not (key == 'ivoice' and img.get('noivoice')):
             args.append('+%s=%s' % (key, bios_paths[key]))
@@ -710,7 +710,7 @@ PLANT_IMAGES = ('C83EEA4C', '095638C0', 'synthetic:a', 'C2063C08', '00BE8BBA', '
                 'RELOAD2', 'RELOAD3', 'zoo6', 'zoo7', 'zoo8',
                 'CE8FC699', 'NEGNOCART', 'ecshook', 'ecsnohook', 'ecsavail', 'cart4000', '13FF363C',
                 'ecsoffcfg', 'ecsoffrom', 'CFGFB', 'CFGODD', 'CFGMISS', 'CFGDIRNODOT',
-                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL',
+                'NOHOSTGF', 'NOHOSTRD', 'RTRHOLD', 'NOHOSTRL', 'RTRDLY', 'RTRDLYRL', 'RTRDLYRLP',
                 'VOICECFG', 'VOICECMP', 'VOICEROM', 'NOIVOICE',
                 'lui_paged', 'lui_bank', 'lui_jlp', 'lui_hdrcrc', 'lui_pcrc')
 
@@ -847,6 +847,12 @@ def main():
                 imgs.append(dict(s8['zoo1'], name='cfg fetch: Ready to run acked late, then a reload',
                                  crc='RTRDLYRL', rtrdelay=600000, reload=byname['synthetic:b'],
                                  cfgclear2=True, dtfirst=0))
+                # (1.0.7) the same with its bridge timing pinned (gap 47, jitter 1, pad $A5: 1.0.6's
+                # draw for RTRDLYRL): the others take it from their place in the list, so a list that
+                # grew moved RTRDLYRL and RTRHOLD onto draws where fetch_before_rtr goes unseen
+                imgs.append(dict(s8['zoo1'], name='cfg fetch: Ready to run acked late, then a reload (pinned timing)',
+                                 crc='RTRDLYRLP', rtrdelay=600000, reload=byname['synthetic:b'],
+                                 cfgclear2=True, dtfirst=0, gap=47, jitter=1, pad=0xA5))
         # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
         # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),
         # the ECS incompatible tags (ecsoffcfg, ecsoffrom: off)

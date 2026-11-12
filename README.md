@@ -19,8 +19,7 @@ Its timing was measured against a real console.
 - **Cartridges:**
   - raw `.int` / `.bin`, mapped by a CRC table of known games;
   - `.bin` + `.cfg` (jzIntv's format): `NAME.cfg` beside `NAME.bin` is loaded by itself;
-  - Intellicart `.rom` (an `.itv` file loads renamed `.rom` or `.bin`: the Pocket lists four
-    extensions);
+  - Intellicart `.rom` (`.itv` files are the same format: rename `NAME.itv` to `NAME.rom`);
   - LTO Flash `.luigi` (1.0.7), the format of many newer homebrews: page flipping, bank windows,
     RAM, JLP, ECS and Intellivoice flags ([docs/CARTFORMATS.md](docs/CARTFORMATS.md) 8);
   - cartridge RAM, page switching and Intellicart bank switching.
@@ -48,7 +47,9 @@ the SD card:
 | `ecs.bin` | ECS ROM, 24,576 bytes | for ECS games |
 | `ivoice.bin` | Intellivoice SP0256-012 ROM, 2,048 bytes | for Intellivoice games |
 
-Cartridge images go in `/Assets/intv/common/` too. A `.bin` that needs a `.cfg` takes it from beside
+Cartridge images go in `/Assets/intv/common/` too. An `.itv` file is an Intellicart `.rom` image:
+rename `NAME.itv` to `NAME.rom` to load it (the Pocket's file list takes four extensions, and
+`.luigi` took `.itv`'s place in 1.0.7). A `.bin` that needs a `.cfg` takes it from beside
 it. While files load, or when a required one is missing, a test pattern shows one block per file:
 green loaded, yellow another size, red required and missing, grey optional and missing.
 

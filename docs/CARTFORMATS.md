@@ -25,7 +25,7 @@ only):
 
 | Slot | File | Use |
 |---|---|---|
-| 0x100 Cartridge | `.bin` `.int` (raw), `.rom` (Intellicart) or `.luigi` (LTO Flash, 1.0.7) | the image; a `.rom` is recognised by its first three bytes, a LUIGI by its first four, whatever its name (an `.itv` loads under another of these names: the slot lists four extensions at most, and 1.0.7 gave `.itv`'s place to `.luigi`) |
+| 0x100 Cartridge | `.bin` `.int` (raw), `.rom` (Intellicart) or `.luigi` (LTO Flash, 1.0.7) | the image; a `.rom` is recognised by its first three bytes, a LUIGI by its first four, whatever its name. An `.itv` is an Intellicart `.rom` image: renamed `NAME.rom` it loads (the slot lists four extensions at most, and 1.0.7 gave `.itv`'s place to `.luigi`; a second slot for `.itv` was tried and dropped: the Pocket streams an optional slot's remembered file on every core start, after the main slot, so it always won) |
 | 0x101 Cartridge CFG | `.cfg` | found by the core: NAME.cfg beside NAME.bin; used with a raw image only (ignored with a `.rom`) |
 
 The Pocket reloads the core when a cartridge is loaded (parameters `0x109`)

@@ -50,18 +50,20 @@ for b in 0 1; do
 		run "$WORK" +border=$b +vidph=$p || rc=1
 	done
 done
+# 1.0.8: the TutorVision mode shows the 160th column without the border
+run "$WORK" +border=0 +tv=1 || rc=1
 
 # Planted faults: each is a one-line change to a copy of the RTL, and the
 # bench must fail on it.
 plant() {
-	local name="$1" file="$2" from="$3" to="$4" d="$WORK/plant_$1"
+	local name="$1" file="$2" from="$3" to="$4" d="$WORK/plant_$1"   # $5: the run's plusargs (+border=1)
 	rm -rf "$d"; mkdir -p "$d/rtl"
 	cp "${RTL[@]/#/$CORE/}" "$d/rtl/"
 	grep -qF -- "$from" "$d/rtl/$file" || { echo "PLANT $name: pattern not found"; rc=1; return; }
 	python3 -c 'import sys; p, a, b = sys.argv[1:]; s = open(p).read(); open(p, "w").write(s.replace(a, b, 1))' \
 		"$d/rtl/$file" "$from" "$to"
 	build "$d" "$d/rtl" || { echo "PLANT $name: build failed"; rc=1; return; }
-	"$d/obj/tb_timing" +border=1 > "$d/run.log" 2>&1 || true
+	"$d/obj/tb_timing" ${5:-+border=1} > "$d/run.log" 2>&1 || true
 	if grep -q "^TB_TIMING FAIL" "$d/run.log" && ! grep -q "^TB_TIMING pass" "$d/run.log"; then
 		echo "PLANT $name: caught: $(grep "^ *FAIL" "$d/run.log" | sed 's/^ *FAIL *//' | cut -c1-60 | paste -sd';')"
 	else
@@ -80,6 +82,9 @@ plant noblank pocket_video.sv "p_rgb <= blank || cropped ? 24'd0" "p_rgb <= crop
 # an out-of-frame state word accepted: the machine would never resume
 plant ss_nocheck intv_timing.sv "else if (ss_we && ss_hit && ss_ok)" "else if (ss_we && ss_hit)"
 # live ignores sub: caught by the restore and by the skewed VBlank freeze
+# 1.0.8: the 160th column cropped in the TutorVision mode too; card 19 not drawn
+plant tv_crop pocket_video.sv "cropped = !border_on && !tv && " "cropped = !border_on && " "+border=0 +tv=1"
+plant tv_card test_pattern.sv "            colour = tv_col;" "            colour = 4'd0;"
 plant live_nosub intv_timing.sv "    assign live    = run && {vcnt, hcnt, sub} == mpos;" "    assign live    = run && {vcnt, hcnt} == mpos[21:4];"
 
 echo "TB_TIMING_ALL $([ $rc = 0 ] && echo pass || echo FAIL)"

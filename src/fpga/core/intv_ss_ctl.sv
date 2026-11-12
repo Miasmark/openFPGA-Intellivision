@@ -411,6 +411,8 @@ module intv_ss_ctl #(
     wire logic [13:0] w_endl  = tv_flag ? 14'(W_TVEND) : 14'(W_END);   // the live part's end
     wire logic [16:0] jram_a  = JRAM + {2'd0, jw, 1'b0};
     wire logic [10:0] mi      = 11'(w - 14'(W_MOD0));
+    wire logic [15:0] mod_addr = intv_ss_pkg::ss_word_addr(mi);
+    wire logic [15:0] tv_addr  = intv_ss_pkg::ss_tv_addr(ti);
     wire logic [16:0] stg_a   = STAGE + {2'd0, w, 1'b0};
     wire logic [16:0] cram_a  = CRAM + {2'd0, w - 14'(W_CRAM), 1'b0};
     wire logic        w_last  = w == w_endl - 14'd1;
@@ -587,7 +589,7 @@ module intv_ss_ctl #(
             O_SNAP: if (dly == 3'd0) begin
                 case (ph)
                     2'd0: if (in_mod || in_tvs) begin
-                              ss_addr <= in_tvs ? intv_ss_pkg::ss_tv_addr(ti) : intv_ss_pkg::ss_word_addr(mi);
+                              ss_addr <= in_tvs ? tv_addr : mod_addr;
                               dly <= 3'd2;
                               ph <= 2'd1;
                           end else if (in_gap) begin
@@ -685,7 +687,7 @@ module intv_ss_ctl #(
             O_APPLYW: begin
                 case (ph)
                     2'd0: if (in_mod || in_tvs) begin
-                              ss_addr  <= in_tvs ? intv_ss_pkg::ss_tv_addr(ti) : intv_ss_pkg::ss_word_addr(mi);
+                              ss_addr  <= in_tvs ? tv_addr : mod_addr;
                               ss_wdata <= v;
                               ss_we    <= 1'b1;
                               ph       <= 2'd2;

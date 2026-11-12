@@ -411,7 +411,7 @@ module tb_system;
             if (ce_stic && dut.stic.eng_card && dut.stic.rstart)
                 $fdisplay(fd, "C %0d %0d %0d %0d %0d", cyc, dut.stic.yy_t[8:4], dut.stic.ec[4:0],
                           dut.stic.squares ? 2 : dut.stic.w[11] ? 1 : 0,
-                          dut.stic.squares ? 14'd0 : (dut.stic.csmode && !dut.stic.w[11])
+                          dut.stic.squares ? 14'd0 : (dut.stic.csmode && (!dut.stic.w[11] || dut.stic.tv))
                           ? dut.stic.w & 14'h07F8 : dut.stic.w & 14'h01F8);
         end
     end

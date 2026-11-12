@@ -230,7 +230,9 @@ def expect(img, tab, bios):
         0 if img.get('neg') == 'nocart' else 1, tst, 1 if img.get('acdelay') else 0))
     cfgslot = (2 << 2) if fcfg is not None else 0
     iv = not img.get('noivoice')
-    slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | (2 << 10 if iv else 0)
+    # 1.0.8: loader slots 6 and 7, wbexec.bin and wbgrom.bin (the owner's, when present)
+    tvs = (2 << 12 if bios.get('wbexec') else 0) | (2 << 14 if bios.get('wbgrom') else 0)
+    slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | (2 << 10 if iv else 0) | tvs
     if img.get('late'):
         # the held command answered after the map: a read's bytes never reach the loader
         L.append('late slots %03X tstate 0' % slots)
@@ -238,6 +240,8 @@ def expect(img, tab, bios):
     L.append('ecs auto %d' % ecs_auto(ld))
     # build step 10: the Intellivoice's Auto rule (intv_media voice_auto): the flag, with ivoice.bin
     L.append('voice auto %d' % int(bool(ld.flags & m.FLAG_VOICE) and iv))
+    # 1.0.8: the TutorVision Auto rule (intv_media tv_auto): the loader's verdict "on"
+    L.append('tv auto %d' % int(ld.tv == cf.TV_ON))
     L.append('format cfgcrc %08X noss %d ferr %02X' % (ld.cfg_crc, int(ld.noss), max(ld.err, 0)))
     sram = bench_sram(ld)
     if cf.is_rom(data) and ld.err:
@@ -249,7 +253,13 @@ def expect(img, tab, bios):
     ex = bios['exec']
     L.append('exec %08X' % crc32(b''.join(struct.pack('>H', ((ex[i] << 8) | ex[i + 1]) & 0x3FF)
                                           for i in range(0, 8192, 2))))
+    if bios.get('wbexec'):
+        wx = bios['wbexec']
+        L.append('wbexec %08X' % crc32(b''.join(struct.pack('>H', ((wx[i] << 8) | wx[i + 1]) & 0x3FF)
+                                                for i in range(8192, 16384, 2))))
     L.append('grom %08X' % crc32(bios['grom']))
+    if bios.get('wbgrom'):
+        L.append('wbgrom %08X' % crc32(bios['wbgrom']))
     L.append(('ivoice %08X' % crc32(bios['ivoice'])) if iv else 'ivoice *')
     mi = cf.MapCart(ld)
     mi.sram = sram
@@ -368,8 +378,10 @@ def expect(img, tab, bios):
         L.append('reload status crc %08X words %d layout %d flags %02X hit %d err 0 lenst %d' % (
             rl.crc, rl.words, rl.layout, rl.flags, int(rl.hit), 3 if img.get('notable2') else 1))
         L.append('reload fetch res %d len %d to 0' % (rres, len(rcfg) if rcfg is not None else 0))
-        L.append('reload slots %03X' % (2 | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10))
+        L.append('reload slots %03X' % (2 | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | 2 << 10
+                                         | tvs))
         L.append('reload ecs auto %d' % ecs_auto(rl))
+        L.append('reload tv auto %d' % int(rl.tv == cf.TV_ON))
         L.append('reload image %08X' % crc32(struct.pack('>%dH' % rl.words, *[rsram[i] for i in range(rl.words)])))
         rm = cf.MapCart(rl)
         rm.sram = rsram
@@ -463,7 +475,7 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
     args += [
             '+pad=%02X' % img.get('pad', (0xA5, 0x00, 0xFF, 0x5A)[k % 4]), '+dtfirst=%d' % img.get('dtfirst', k % 2),
             '+gap=%d' % img.get('gap', 40 + 7 * (k % 5)), '+jitter=%d' % img.get('jitter', 1 + 13 * (k % 3))]
-    for key in ('exec', 'grom', 'ecs', 'ivoice'):
+    for key in ('exec', 'grom', 'ecs', 'ivoice', 'wbexec', 'wbgrom'):
         if bios_paths.get(key) and not (key == 'ivoice' and img.get('noivoice')):
             args.append('+%s=%s' % (key, bios_paths[key]))
     t0 = time.time()
@@ -621,6 +633,13 @@ PLANTS = [
      "assign voice_auto = flags[1];", 'Auto: the voice on without ivoice.bin'),
     ('voice_auto_noflag', 'intv_media.sv', "assign voice_auto = flags[1] && slot_st[11:10] == 2'd2;",
      "assign voice_auto = slot_st[11:10] == 2'd2;", 'Auto: the voice flag ignored'),
+    # 1.0.8: the TutorVision Auto rule: the CRC table's flag, the CFG's tv_compat, the .rom tag ignored
+    ('tv_table_flag', 'intv_loader.sv', "((hitf && ttv) || (cfg_on && cp_tv_on))", "((cfg_on && cp_tv_on))",
+     'TutorVision: the table flag ignored'),
+    ('tv_cfg_on', 'intv_loader.sv', "((hitf && ttv) || (cfg_on && cp_tv_on))", "((hitf && ttv))",
+     'TutorVision: the CFG tv_compat ignored'),
+    ('tv_rom_tag', 'intv_loader.sv', ": rp_cmp[27:26] != 2'b00 ? 2'd1 : 2'd0)", ": 2'd0)",
+     'TutorVision: the .rom TUTOR field ignored'),
     ('auto_flag', 'intv_media.sv', "ecs_auto <= (res_ecs || res_none) ? 2'd1", "ecs_auto <= (res_none) ? 2'd1",
      'Auto: the ECS flag ignored'),
     ('auto_4800_any', 'intv_media.sv', "code48 <= c_bus_hit && !c_bus_attr[1] && c_bus_rdata[15:10] == 6'd0;",
@@ -732,9 +751,15 @@ def main():
     bdir = os.environ.get('INTV_BIOS_DIR', os.path.expanduser('~/pocket_projects/intellivision/bios'))
     bios_paths = {'exec': os.path.join(bdir, 'exec.bin'), 'grom': os.path.join(bdir, 'grom.bin'),
                   'ecs': os.path.join(bdir, 'ECS.bin'), 'ivoice': os.path.join(bdir, 'IVOICE.BIN')}
+    # 1.0.8: the TutorVision files, optional (the owner's; their slots and ports checked when present)
+    for k, f in (('wbexec', 'wbexec.bin'), ('wbgrom', 'wbgrom.bin')):
+        if os.path.exists(os.path.join(bdir, f)):
+            bios_paths[k] = os.path.join(bdir, f)
     bios = {k: open(p, 'rb').read() for k, p in bios_paths.items()}
-    sizes = {'exec': 8192, 'grom': 2048, 'ecs': 24576, 'ivoice': 2048}
+    sizes = {'exec': 8192, 'grom': 2048, 'ecs': 24576, 'ivoice': 2048, 'wbexec': 16384, 'wbgrom': 2048}
     for k, n in sizes.items():
+        if k not in bios:
+            continue
         if len(bios[k]) != n:
             sys.exit('%s: %d bytes, expected %d' % (bios_paths[k], len(bios[k]), n))
     os.makedirs(work, exist_ok=True)
@@ -797,6 +822,21 @@ def main():
             imgs.append(dict(z, name='voice: CFG voice = 1', crc='VOICECFG', cfg=z['cfg'] + b'\n[vars]\nvoice = 1\n'))
             imgs.append(dict(z, name='voice: CFG voice_compat = 2', crc='VOICECMP',
                              cfg=z['cfg'] + b'\n[vars]\nvoice_compat = 2\n'))
+        # 1.0.8: the TutorVision Auto rule (tv auto): a CFG's tv_compat = 2 (on) and 0 (off),
+        # a .rom's compatibility tag (TUTOR "requires"), and a CRC-table title (Map Mazes' CRC)
+        if 'zoo1' in s8:
+            z = s8['zoo1']
+            imgs.append(dict(z, name='tv: CFG tv_compat = 2', crc='TVCFG2', cfg=z['cfg'] + b'\n[vars]\ntv_compat = 2\n'))
+            imgs.append(dict(z, name='tv: CFG tv_compat = 0', crc='TVCFG0', cfg=z['cfg'] + b'\n[vars]\ntv_compat = 0\n'))
+        if 'romfine' in s8:
+            acc, fine = [0] * 16, [0x07] * 32
+            acc[5] = 0x11
+            rt = build_images.rom_file([(0x50, 0x50, [(0x5000 + i) ^ 0x5A5A for i in range(0x100)])], acc, fine,
+                                       build_images.tag(0x06, [0x00, 0x08, 0]) + b'\x00')
+            imgs.append(dict(s8['romfine'], name='tv: .rom tag (TUTOR requires)', crc='TVROM', data=rt,
+                             image='tvrom'))
+        imgs.append(dict(name='tv: forced:59F5FA32 (table flag)', image='forced:59F5FA32', crc='TVTAB',
+                         data=synth_image.forced(0x59F5FA32, 32768), layout='13', flags='00'))
         if 'romfine' in s8:
             acc, fine = [0] * 16, [0x07] * 32
             acc[5] = 0x11

@@ -32,7 +32,7 @@ module tb_timing;
     localparam real HALF = 1.0e9 / (12.0 * 315.0e6 / 88.0) / 2.0;
 
     logic clk_sys = 1'b0, clk_vid = 1'b0;
-    int   vidph = 0, border = 1, frames = 3;
+    int   vidph = 0, border = 1, frames = 3, tv = 0;   // tv (1.0.8): the TutorVision mode on
     int   fails = 0;
 
     task automatic check(input bit ok, input string what);
@@ -60,12 +60,13 @@ module tb_timing;
     logic        in_pf;
     logic [7:0]  pf_x, pf_y;
     logic [3:0]  colour;
-    // slots: cart ok, cfg empty, EXEC ok, GROM other size, ECS empty, IVOICE ok
-    localparam logic [11:0] SLOT_ST = {2'd2, 2'd0, 2'd1, 2'd2, 2'd0, 2'd2};
+    // slots: cart ok, cfg empty, EXEC ok, GROM other size, ECS empty, IVOICE ok; 1.0.8: the
+    // TutorVision EXEC empty (required: the menu's Full), its GROM ok
+    localparam logic [15:0] SLOT_ST = {2'd2, 2'd0, 2'd2, 2'd0, 2'd1, 2'd2, 2'd0, 2'd2};
 
     test_pattern pattern (
         .in_pf(in_pf), .pf_x(pf_x), .pf_y(pf_y),
-        .slot_st(SLOT_ST), .slot_req(6'b001101), .len_st(2'd2), .cfg_res(3'd2),
+        .slot_st(SLOT_ST), .slot_req({1'b0, 1'b1, 6'b001101}), .len_st(2'd2), .cfg_res(3'd2),
         // the load diagnostics (0.0.14): open file timed out, waiting for Ready to run's ok,
         // all complete seen, no 0x0082, a 0x008A, waiting for the fetch
         .fetch_to(3'b010), .tstate(4'd14), .d_ac(1'b1), .d_req(1'b0), .d_upd(1'b1), .d_phase(2'd1),
@@ -78,7 +79,7 @@ module tb_timing;
 
     pocket_video video (
         .clk_sys(clk_sys), .ce_pix(ce_pix), .hcnt(hcnt), .vline(vline),
-        .border_on(border[0]), .blank(!live),
+        .border_on(border[0]), .tv(tv[0]), .blank(!live),
         .in_pf(in_pf), .pf_x(pf_x), .pf_y(pf_y), .colour(colour), .ovl(2'd0),
         .clk_vid(clk_vid),
         .video_rgb(video_rgb), .video_de(video_de), .video_skip(video_skip),
@@ -333,7 +334,8 @@ module tb_timing;
         void'($value$plusargs("vidph=%d", vidph));
         void'($value$plusargs("border=%d", border));
         void'($value$plusargs("frames=%d", frames));
-        $display("tb_timing: vidph %0d, border %0d, %0d frames", vidph, border, frames);
+        void'($value$plusargs("tv=%d", tv));
+        $display("tb_timing: vidph %0d, border %0d, tv %0d, %0d frames", vidph, border, tv, frames);
         repeat (37) @(posedge clk_sys);
         reset = 1'b0;
 
@@ -474,11 +476,12 @@ module tb_timing;
             end
             ok = 1;
             for (int y = 0; y < 192; y++) begin
-                ok &= lines_rgb[oy + y][ox] == pal(7) && lines_rgb[oy + y][ox + 159] == (border ? pal(7) : 24'd0);   // x 159: black without the border
-            end
+                ok &= lines_rgb[oy + y][ox] == pal(7) && lines_rgb[oy + y][ox + 159] == (border || tv ? pal(7) : 24'd0);
+            end                 // x 159: black without the border, but for the TutorVision mode (1.0.8)
             for (int x = 0; x < 159; x++)
                 ok &= lines_rgb[oy][ox + x] == pal(7) && lines_rgb[oy + 191][ox + x] == pal(7);
-            check(ok, border ? "playfield edge ring white (crop marks)" : "playfield edge ring white (crop marks), x 159 black");
+            check(ok, border ? "playfield edge ring white (crop marks)" : tv ? "playfield edge ring white (crop marks), x 159 shown (TutorVision)"
+                  : "playfield edge ring white (crop marks), x 159 black");
             ok = 1;
             for (int y = 1; y < 96; y++)
                 for (int x = 1; x < 159; x++)
@@ -512,6 +515,12 @@ module tb_timing;
                 for (int c = 0; c < 7; c++) ok &= lines_rgb[oy + 184][ox + (12 + c) * 8 + 3] == pal(want[c]);
             end
             check(ok, "load diagnostics: red / yellow / green / black / green / cyan, then black");
+            // 1.0.8, card 19: the TutorVision EXEC (pixels 152-155: required and missing, red) and GROM
+            // (156-158: ok, green)
+            ok = 1;
+            for (int x = 152; x < 156; x++) ok &= lines_rgb[oy + 184][ox + x] == pal(2);
+            for (int x = 156; x < 159; x++) ok &= lines_rgb[oy + 184][ox + x] == pal(5);
+            check(ok, "card 19: TutorVision EXEC red (required, missing), GROM green");
         end
 
         $display("TB_TIMING %s", fails == 0 ? "pass" : $sformatf("FAIL (%0d)", fails));

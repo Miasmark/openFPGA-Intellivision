@@ -150,6 +150,14 @@ SS_IMAGES = [
     # some inside a command's busy window), its JLP RAM rows and registers in use
     ('jlpfls', ('jlp', 'jlpfls'), None, (0xFF, 0xFF), 40, None,
      [(5, 'any'), (6, 'any'), (9, 'any'), (12, 'midinst')], (28, 8), 32),
+    # 1.0.8 (SS_TV, the TutorVision segment): our tvtest.asm in the EXEC slot, INTV88 with the
+    # TutorVision font and Full (the WBEXEC's half mapped), saves with GRAM cards 64-255, RAM
+    # $0360-$04FF and the PSG's envelope steps in use
+    ('tv88', None, 'tvtest.asm', (0xFF, 0xFF), 16, None,
+     [(3, 'midinst'), (5, 'busrq'), (8, 'any'), (10, 'any')], (12, 2), 14),   # (no 'sound': its voices fall
+                                                                             # silent after one envelope step)
+    ('tvfull', None, 'tvtest.asm', (0xFF, 0xFF), 16, None,
+     [(4, 'rowfetch'), (7, 'midinst'), (9, 'any'), (10, 'midinst')], (12, 2), 14),
 ]
 # step 9: the ECS of an image (images not listed run with the ECS Off): the menu override, the
 # ECS keys (tools/intv_system.py parse_presses "ecs:"), the Auto mode (0 off, 1 on, 2 attached)
@@ -169,6 +177,10 @@ SS_ECS = {
 # step 10: the Intellivoice of an image (images not listed run with it Off): the menu override (0
 # Auto, 1 On); B-17 Bomber under Auto (the CRC table's flag): speech in flight
 SS_VOICE = {'voicetest': dict(ovr=1), 'b17bomber': dict(ovr=0)}
+# 1.0.8: the TutorVision mode of an image (images not listed run with it Off, +tv=1): the menu
+# setting (2 INTV88, 3 Full), the font; T (the state into a core with the mode off) and G (into a
+# core with the other font) must be refused
+SS_TV = {'tv88': dict(tv=2, font=1), 'tvfull': dict(tv=3, font=0)}
 FRAMES_AFTER = 24          # an L run goes on this many frames after the restore
 LOAD_AT = FRAME            # fresh cores load from machine cycle 1 frame on
 DEEP_AFTER = 40            # D: s0 loaded into a core this many frames past its save point
@@ -331,8 +343,23 @@ def prepare(work, img, lib, bdir):
         rom = [os.path.join(bdir, n) for n in ('ivoice.bin', 'IVOICE.BIN') if os.path.exists(os.path.join(bdir, n))][0]
         eargs += ['+voice=%d' % SS_VOICE[name]['ovr'], '+ivoice=' + rom]
         flags |= ss.FLAG_VOICE
+    grom_crc = ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read())
+    wcrc = 0
+    t = SS_TV.get(name)
+    if t:
+        wbx, wbg = isys.tv_paths(bdir)
+        if wbx is None or wbg is None:
+            sys.exit('%s: needs wbexec.bin and wbgrom.bin in %s' % (name, bdir))
+        eargs += ['+tv=%d' % t['tv'], '+font=%d' % t['font'], '+wbexec=' + wbx, '+wbgrom=' + wbg]
+        flags |= ss.FLAG_TV | (ss.FLAG_TVFULL if t['tv'] == 3 else 0)
+        if t['tv'] == 3:
+            wcrc = ss.crc32(open(wbx, 'rb').read())
+        if t['font']:
+            grom_crc = ss.crc32(open(wbg, 'rb').read())
+    else:
+        eargs += ['+tv=1']
     return (ex, cart, kf, crc, words, ss.crc32(open(ex, 'rb').read()),
-            ss.crc32(open(os.path.join(bdir, 'grom.bin'), 'rb').read()), cfgp, cfgcrc, flags, ecrc, eargs)
+            grom_crc, cfgp, cfgcrc, flags, ecrc, eargs, wcrc)
 
 
 class Run:
@@ -531,8 +558,33 @@ def check_common(run, what, drops=0):
     return probs
 
 
+_TV_EXPECT = {}
+
+
+def tv_expect(name):
+    """1.0.8: what a tvtest image's TutorVision segment holds in every save (frame 2 on: tvtest
+    fills GRAM and writes the RAM before its interrupts start, then never again): the model's GRAM
+    bytes 512-2,047 and RAM $0360-$04FF; None for other images."""
+    if name not in SS_TV:
+        return None
+    if name not in _TV_EXPECT:
+        sys.path.insert(0, os.path.join(ROOT, 'sim', 'check'))
+        import tv_check
+        bdir = os.environ.get('INTV_BIOS_DIR', os.path.expanduser('~/pocket_projects/intellivision/bios'))
+        wbx, _ = isys.tv_paths(bdir)
+        tv = SS_TV[name]['tv'] - 1
+        bus = isys.SystemBus(tv_check.tvtest_exec(), open(os.path.join(bdir, 'grom.bin'), 'rb').read(), None,
+                             stic_mode='stic', tv=tv, wbexec=isys.load_words(wbx)[4096:8192] if tv == 2 else None)
+        cpu = isys.CP1610(bus=bus, buslog=False)
+        while cpu.cycle < 3 * isys.FRAME:
+            cpu.step()
+            bus.boundary(cpu.cycle)
+        _TV_EXPECT[name] = (list(bus.gram[512:2048]), list(bus.tvram))
+    return _TV_EXPECT[name]
+
+
 def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause=True, what='S', flags=0,
-                   ecscrc=0):
+                   ecscrc=0, wbxcrc=0):
     probs = check_common(run, what)
     nframes = img[4]
     probs += compare_frames(ref, run.frames, 0, nframes, what)
@@ -587,7 +639,7 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
         regs = [int(x, 16) for x in zt[3:11]]
         blob = open(p, 'rb').read()
         bad = ss.verify(blob, crc, words, flags=flags, exec_crc=ecrc, grom_crc=gcrc, cfg_crc=cfgcrc,
-                        ecs_crc=ecscrc)
+                        ecs_crc=ecscrc, wbx_crc=wbxcrc)
         if bad:
             probs.append('S: blob %s: %s' % (os.path.basename(p), bad[:3]))
             continue
@@ -600,9 +652,13 @@ def check_save_run(img, ref, run, blobs, crc, words, ecrc, gcrc, cfgcrc=0, pause
         if kline is None or kline.split()[2] != want_k:
             probs.append('S: blob %s: bank registers %s, the core at the freeze %s' % (
                 os.path.basename(p), want_k, kline))
+        tvw = tv_expect(img[0])
+        if tvw and (mods.get(0x24) != tvw[0] or mods.get(0x2A) != tvw[1]):
+            probs.append('S: blob %s: TutorVision segment differs from the machine\'s GRAM cards 64-255 / '
+                         'RAM $0360-$04FF' % os.path.basename(p))
         if ss.pack(mods, cram, h[ss.H_CART_CRC], h[ss.H_CART_WORDS], flags=h[ss.H_FLAGS],
                    exec_crc=h[ss.H_EXEC_CRC], grom_crc=h[ss.H_GROM_CRC], cfg_crc=h[ss.H_CFG_CRC],
-                   ecs_crc=h[ss.H_ECS_CRC], jram=ss.jram_of(blob)) != blob:
+                   ecs_crc=h[ss.H_ECS_CRC], jram=ss.jram_of(blob), wbx_crc=h[ss.H_WBX_CRC]) != blob:
             probs.append('S: blob %s: pack(unpack) differs' % os.path.basename(p))
         cpu = mods[0x02]
         want = [(regs[1] << 16) | regs[0], (regs[3] << 16) | regs[2], (regs[5] << 16) | regs[4],
@@ -693,8 +749,12 @@ def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
         refs[name] = ref
         p, info = check_save_run(img, ref, srun, saves[name], *bench.prep[name][3:7],
                                  cfgcrc=bench.prep[name][8], flags=bench.prep[name][9],
-                                 ecscrc=bench.prep[name][10])
+                                 ecscrc=bench.prep[name][10], wbxcrc=bench.prep[name][12])
         want_v = 'L voice mode %d' % (name in SS_VOICE)
+        tv = SS_TV.get(name)
+        want_t = 'L tv mode %d font %d' % ((tv['tv'] - 1, tv['font']) if tv else (0, 0))
+        if want_t not in ref.lines:
+            p.append('R: %s, want %s' % ([x for x in ref.lines if x.startswith('L tv')], want_t))
         if want_v not in ref.lines:
             p.append('R: %s, want %s' % ([x for x in ref.lines if x.startswith('L voice')], want_v))
         if name in SS_ECS:
@@ -714,7 +774,7 @@ def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
             else:
                 p += check_save_run(img, ref, r0, b0, *bench.prep[name][3:7], cfgcrc=bench.prep[name][8],
                                     pause=False, what='S0', flags=bench.prep[name][9],
-                                    ecscrc=bench.prep[name][10])[0]
+                                    ecscrc=bench.prep[name][10], wbxcrc=bench.prep[name][12])[0]
         if (name, 'N') in futs:
             prep, fn = futs[(name, 'N')]
             rn = fn.result()
@@ -774,6 +834,14 @@ def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
             end = 20 * FRAME
             lf.append((img, 'V', None, end, None, sub('V', end, ['load %d %s err -1' % (LOAD_AT, p0)],
                                                          ['+voice=2'])))
+        # 1.0.8, T: the image's own TutorVision state into a core with the mode off; G: into a core
+        # with the other font (the header's TV flag, the GROM CRC): refused, no state set
+        if name in SS_TV:
+            end = 12 * FRAME
+            lf.append((img, 'T', None, end, None, sub('T', end, ['load %d %s err -1' % (LOAD_AT, p0)],
+                                                         ['+tv=1'])))
+            lf.append((img, 'G', None, end, None, sub('G', end, ['load %d %s err -1' % (LOAD_AT, p0)],
+                                                         ['+font=%d' % (1 - SS_TV[name]['font'])])))
         # X (step-9 review): the image's own state into a core whose ECS ROM file differs from the
         # saving core's by one byte: refused (header word 13, the ECS ROM's CRC), the run untouched
         if SS_ECS.get(name, {}).get('mode'):
@@ -820,7 +888,8 @@ def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
                     q.append('burst save %s' % sv)
                 elif ss.verify(open(blob, 'rb').read(), *bench.prep[name][3:5], flags=bench.prep[name][9],
                                exec_crc=bench.prep[name][5], grom_crc=bench.prep[name][6],
-                               cfg_crc=bench.prep[name][8], ecs_crc=bench.prep[name][10]):
+                               cfg_crc=bench.prep[name][8], ecs_crc=bench.prep[name][10],
+                               wbx_crc=bench.prep[name][12]):
                     q.append('burst save: blob does not verify')
                 rw = run.tagged('RW')
                 if len(rw) != 1 or int(rw[0].split()[1]) < 1 or int(rw[0].split()[2]) != 0:
@@ -829,7 +898,8 @@ def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
             elif zc is None:                   # F: untouched all the way
                 if run.set_cycle is not None or applied:
                     q.append('state set by a refused load')
-                if tag not in ('E', 'X', 'V'):  # E: the ECS off, X: another ECS ROM, V: the voice off
+                if tag not in ('E', 'X', 'V', 'T', 'G'):  # E: the ECS off, X: another ECS ROM, V: the
+                    # voice off, T: the TutorVision mode off, G: the other font (other pictures)
                     q += compare_frames(ref, run.frames, 0, end // FRAME, tag)
             else:
                 if run.set_cycle != zc:
@@ -851,7 +921,7 @@ def run_image_set(bench, imgs, other_blob, tagp='', stop=None):
             if tag == 'C':
                 if [x.split()[1] for x in loads] != ['err'] * 6 + ['ok']:
                     q.append('loads %s' % loads)
-            if tag in ('F', 'E', 'X', 'V') and loads != ['LOAD err EXPECT err']:
+            if tag in ('F', 'E', 'X', 'V', 'T', 'G') and loads != ['LOAD err EXPECT err']:
                 q.append('loads %s' % loads)
         print('%s %s: %s' % (name, tag, 'pass' if not q else 'FAIL ' + '; '.join(q[:3])), flush=True)
         probs += ['%s %s: %s' % (name, tag, x) for x in q]
@@ -873,9 +943,22 @@ PLANTS = [
        "                              v <= ss_addr[15:8] == 8'h04 ? 32'd0 : ss_rdata;\n")], 'sticmob', 'psgtest',
      AFTER),
     ('ss_word_off_by_one', 'intv_ss_ctl.sv',
-     [("                              ss_addr  <= intv_ss_pkg::ss_word_addr(mi);\n",
-       "                              ss_addr  <= intv_ss_pkg::ss_word_addr(mi + 11'd1);\n")], 'sticmob', 'psgtest',
+     [("                              ss_addr  <= in_tvs ? tv_addr : mod_addr;\n",
+       "                              ss_addr  <= (in_tvs ? tv_addr : mod_addr) + 16'd1;\n")], 'sticmob', 'psgtest',
      AFTER),
+    # 1.0.8: the TutorVision segment not saved (its words not read from the state bus); the header
+    # without the mode (its length and flag: a TutorVision state taken by a core with the mode off);
+    # the font's GROM not in the GROM CRC (a state taken by a core with the other font)
+    ('ss_tv_dropped', 'intv_ss_ctl.sv',
+     [("    wire logic        in_tvs  = tv_flag && w >= 14'(W_TV0) && w < 14'(W_TVEND);",
+       "    wire logic        in_tvs  = 1'b0;")], 'tv88', 'psgtest', r' S: blob \S+: TutorVision segment'),
+    ('ss_tv_header', 'intv_ss_ctl.sv',
+     [("hdr_exp = tv_flag ? 32'(SS_PAYLOAD_TV) : 32'(SS_PAYLOAD);", "hdr_exp = 32'(SS_PAYLOAD);"),
+      ("hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, voice_flag, ecs_flag};",
+       "hdr_exp = {30'd0, voice_flag, ecs_flag};")], 'tv88', 'psgtest',
+     r' T: (FAIL )?loads \[.LOAD ok'),
+    ('ss_tv_font_crc', 'intv_core.sv', [(".grom_crc(font_l ? ~wg_c : ~gr_c),", ".grom_crc(~gr_c),")],
+     'tv88', 'psgtest', r' G: (FAIL )?loads \[.LOAD ok'),
     ('ss_crc_unchecked', 'intv_ss_ctl.sv',
      [("if (bad || resv_bad || ~crc != hdr_crc)", "if (bad || resv_bad)")], 'sticmob', 'psgtest',
      r' C: FAIL load \S+_bad_\w+\.blob: code \d+, expected err'),

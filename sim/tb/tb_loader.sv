@@ -235,12 +235,15 @@ module tb_loader;
     wire  logic [7:0]  fmt_err;
     wire  logic [31:0] cfg_crc;
     wire  logic [1:0]  len_st;
-    wire  logic [11:0] slot_st;
+    wire  logic [15:0] slot_st;
     wire  logic [31:0] crc;
     wire  logic [16:0] words;
     wire  logic [7:0]  layout, flags;
     wire  logic [1:0]  ecs_auto;              // step 9: the Auto rule's mode
     wire  logic        voice_auto;            // step 10: the Intellivoice's Auto rule
+    wire  logic        tv_auto;               // 1.0.8: the TutorVision mode's Auto rule
+    wire  logic [9:0]  wbx_q;                 // 1.0.8: the WBEXEC's $2000-$2FFF
+    logic              font = 1'b0;           // 1.0.8: the GROM ports read wbgrom.bin
     /* verilator lint_off UNUSEDSIGNAL */
     wire  logic        ecs_rom_ok;
     /* verilator lint_on UNUSEDSIGNAL */
@@ -263,6 +266,7 @@ module tb_loader;
         .bus_ack(bus_ack), .bus_rdata(bus_rdata), .bus_hit(bus_hit),
         .bus_attr(bus_attr), .bus_paged(bus_paged), .pg_rst(64'd0), .pg_sel(pg_sel),
         .ecs_on(1'b0), .ecs_pg(12'd0), .ecs_auto(ecs_auto), .ecs_rom_ok(ecs_rom_ok), .voice_auto(voice_auto),
+        .tv_auto(tv_auto), .wbx_q(wbx_q), .font(font),
         .jlp_mode(), .jlp_sect(), .jlp_on(1'b0), .jlp_busy(1'b0),
         .jm_req(1'b0), .jm_we(1'b0), .jm_addr(17'd0), .jm_wdata(16'd0), .jm_ack(), .jm_rdata(),
         .aux_req(aux_req), .aux_we(1'b0), .aux_addr(aux_addr), .aux_wdata(16'd0), .aux_be(2'b11),
@@ -347,12 +351,14 @@ module tb_loader;
 
     // files
     localparam int FMAX = 262144;             // bytes per slot file in this bench
-    byte unsigned fdata [6][FMAX];
-    int           fsize [6];
-    logic         floaded [6];
-    string        fname [6];
-    localparam logic [31:0] SLOT_ADDR [6] = '{32'h0000_0000, 32'h0100_0000, 32'h0200_0000,
-                                               32'h0300_0000, 32'h0400_0000, 32'h0500_0000};
+    byte unsigned fdata [8][FMAX];
+    int           fsize [8];
+    logic         floaded [8];
+    string        fname [8];
+    // 1.0.8: loader slots 6 and 7 are the data slots 0x108 (wbexec.bin) and 0x109 (wbgrom.bin)
+    localparam logic [31:0] SLOT_ADDR [8] = '{32'h0000_0000, 32'h0100_0000, 32'h0200_0000,
+                                               32'h0300_0000, 32'h0400_0000, 32'h0500_0000,
+                                               32'h0600_0000, 32'h0700_0000};
     task automatic read_file(input int s, input string plus);
         int fd, c;
         floaded[s] = 1'b0;
@@ -372,7 +378,7 @@ module tb_loader;
         int n;
         logic [31:0] w;
         n = fsize[s];
-        host_cmd(16'h0082, 32'h100 + s, n + (s == 0 ? reqadj : 0));
+        host_cmd(16'h0082, s < 6 ? 32'h100 + s : 32'h102 + s, n + (s == 0 ? reqadj : 0));
         for (int i = 0; i < n; i += 4) begin
             w = 32'd0;
             for (int k = 0; k < 4; k++)
@@ -609,8 +615,10 @@ module tb_loader;
         read_file(3, "grom");
         read_file(4, "ecs");
         read_file(5, "ivoice");
+        read_file(6, "wbexec");
+        read_file(7, "wbgrom");
         if ($test$plusargs("debug"))
-            for (int s = 0; s < 6; s++)
+            for (int s = 0; s < 8; s++)
                 $display("slot %0d loaded %0d size %0d first %02X", s, floaded[s], fsize[s],
                          fsize[s] > 0 ? fdata[s][0] : 8'h00);
 
@@ -624,7 +632,7 @@ module tb_loader;
         end
         host_cmd(16'h0010, 32'd0, 32'd0);
         if (dtfirst != 0) send_table();
-        for (int s = 0; s < 6; s++) if (floaded[s] && (s != 1 || cfgpush != 0)) send_slot(s);
+        for (int s = 0; s < 8; s++) if (floaded[s] && (s != 1 || cfgpush != 0)) send_slot(s);
         if (dtfirst == 0) send_table();
         early = dt_setup_done;
         host_cmd(16'h008F, 32'd0, 32'd0);
@@ -660,6 +668,7 @@ module tb_loader;
         $fdisplay(outf, "slots %03X", slot_st);
         $fdisplay(outf, "ecs auto %0d", ecs_auto);
         $fdisplay(outf, "voice auto %0d", voice_auto);
+        $fdisplay(outf, "tv auto %0d", tv_auto);
         $fdisplay(outf, "format cfgcrc %08X noss %0d ferr %02X", cfg_crc, noss, fmt_err);
         image_crc("image");
         if (floaded[4]) begin
@@ -673,6 +682,14 @@ module tb_loader;
             c = crc_word(c, {6'd0, exec_q});
         end
         $fdisplay(outf, "exec %08X", ~c);
+        if (floaded[6]) begin                       // 1.0.8: the WBEXEC's second 4K words
+            c = 32'hFFFFFFFF;
+            for (int i = 0; i < 4096; i++) begin
+                @(negedge clk_sys); exec_addr = 12'(i); @(negedge clk_sys); @(negedge clk_sys);
+                c = crc_word(c, {6'd0, wbx_q});
+            end
+            $fdisplay(outf, "wbexec %08X", ~c);
+        end
         c = 32'hFFFFFFFF;
         for (int i = 0; i < 2048; i++) begin
             @(negedge clk_sys); grom_addr = 11'(i); ivoice_addr = 11'(i); @(negedge clk_sys); @(negedge clk_sys);
@@ -681,6 +698,18 @@ module tb_loader;
         end
         check(vgrom_bad == 0, $sformatf("STIC GROM port differs in %0d bytes", vgrom_bad));
         $fdisplay(outf, "grom %08X", ~c);
+        if (floaded[7]) begin                       // 1.0.8: the font option: both GROM ports
+            font = 1'b1;
+            c = 32'hFFFFFFFF;
+            for (int i = 0; i < 2048; i++) begin
+                @(negedge clk_sys); grom_addr = 11'(i); @(negedge clk_sys); @(negedge clk_sys);
+                c = crc_byte(c, grom_q);
+                if (vgrom_q !== grom_q) vgrom_bad++;
+            end
+            font = 1'b0;
+            check(vgrom_bad == 0, $sformatf("STIC GROM port differs in %0d bytes (font)", vgrom_bad));
+            $fdisplay(outf, "wbgrom %08X", ~c);
+        end
         c = 32'hFFFFFFFF;
         for (int i = 0; i < 2048; i++) begin
             @(negedge clk_sys); ivoice_addr = 11'(i); @(negedge clk_sys); @(negedge clk_sys);
@@ -812,6 +841,7 @@ module tb_loader;
                       fetch_res == 3'd1 || fetch_res == 3'd2 ? fetch_len : 0, fetch_to);
             $fdisplay(outf, "reload slots %03X", slot_st);
             $fdisplay(outf, "reload ecs auto %0d", ecs_auto);
+            $fdisplay(outf, "reload tv auto %0d", tv_auto);
             image_crc("reload image");
             for (int i = 0; i < NSS; i++) begin ss_rd(i, ssq); $fdisplay(outf, "rss %0d %08X", i, ssq); end
             machine_reset();

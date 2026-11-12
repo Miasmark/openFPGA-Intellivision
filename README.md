@@ -31,6 +31,11 @@ Its timing was measured against a real console.
   sound.
 - **JLP:** 8,000 words of extra RAM, multiply / divide, CRC, random numbers and flash saves, kept in
   a `.sav` file per game.
+- **TutorVision / INTV88 (experimental, 1.0.8):** the INTV88 board of the TutorVision and of
+  some INTV Super Pro consoles (2K GRAM with 256 cards, more System RAM, the STIC 1A's rules), with
+  the TutorVision EXEC for World Book's TutorVision cartridges, and the TutorVision font. Built
+  from J. Zbiciak's reverse-engineering notes and checked against jzIntv; **never checked on a
+  unit** ([docs/TUTORVISION.md](docs/TUTORVISION.md)). Off unless a cartridge asks for it.
 - **Save states, sleep and a menu pause.**
 - **Controls:** keypad modes for the Pocket's buttons, an on-screen keypad, game profiles, two
   players (a docked controller) and Swap Controllers.
@@ -46,6 +51,8 @@ the SD card:
 | `grom.bin` | Graphics ROM, 2,048 bytes | always |
 | `ecs.bin` | ECS ROM, 24,576 bytes | for ECS games |
 | `ivoice.bin` | Intellivoice SP0256-012 ROM, 2,048 bytes | for Intellivoice games |
+| `wbexec.bin` | TutorVision EXEC, 16,384 bytes (CRC32 7558A4CF) | for TutorVision cartridges (Full) |
+| `wbgrom.bin` | TutorVision GROM, 2,048 bytes (CRC32 82736456) | for the TutorVision font |
 
 Cartridge images go in `/Assets/intv/common/` too. An `.itv` file is an Intellicart `.rom` image:
 rename `NAME.itv` to `NAME.rom` to load it (the Pocket's file list takes four extensions, and
@@ -130,8 +137,16 @@ button is which side action. Without a profile, Auto is Layer.
 | Voice Sound | Clean, Chip DAC (7-bit) |
 | Tape speed | Normal (the ECS's own pace), Instant |
 | Erase ECS tape | blanks the game's ECS tape (its `.ecs` file) |
+| TutorVision | Auto (by cartridge), Off, INTV88, Full (WBEXEC) (experimental; taken at the next reset or load) |
+| INTV88 Bus Timing | As the 2609, STIC 1A (12 a frame): an unmeasured guess at the INTV88's bus requests |
+| Font | Original, TutorVision (`wbgrom.bin`) |
 
 ## Known limits
+
+- **TutorVision is experimental:** from documents and emulator comparison only. The INTV88's
+  interrupt bug is not modelled, and some stock games break on it as on the real board (Worm
+  Whomper, Space Patrol: junk card numbers). A save state loads only into the same TutorVision
+  mode and font.
 
 - **Colours:** MAME's palette. A palette calibrated to the console is future work.
 - **No PAL machine:** the PAL console's timing has not been measured.

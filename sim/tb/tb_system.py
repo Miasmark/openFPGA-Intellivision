@@ -1707,6 +1707,35 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
 # ------------------------------------------------------------------ plants
 # Each is one change to a copy of the RTL; the bench must fail on it.
 PLANTS = [
+    # 1.0.8, the TutorVision mode (tvtest.asm in each mode; docs/TUTORVISION.md 5): the GRAM
+    # mirrored again, the write aliases kept, the extra RAM not answering, the closed reads $0000,
+    # $0022 as the 2609's, Color Stack GRAM cards 0-63 only, MOBs masked to 63, the 160th column
+    # border, the PSG's modes 01/10 as the 2609's, R7 bits 7:6 kept, no WBEXEC half, the STIC 1A
+    # timing option ignored, the font ignored
+    ('tv_gram_mirror', 'intv_bus.sv', [("assign gram_idx = tv_on ? a[10:0] : {2'b00, a[8:0]};",
+                                        "assign gram_idx = {2'b00, a[8:0]};")], 'tvtest_88', None),
+    ('tv_gram_alias', 'intv_bus.sv', [("(tv_on ? a[15:11] == 5'b00111 : a[13:11] == 3'b111)", "a[13:11] == 3'b111")],
+     'tvtest_88', None),
+    ('tv_stic_alias', 'intv_bus.sv', [("(tv_on ? a[15:6] == 10'd0 : a[13:6] == 8'd0)", "a[13:6] == 8'd0")],
+     'tvtest_88', None),
+    ('tv_no_ram', 'intv_bus.sv', [("    assign sys_we  = wr && (sel_sys || sel_tvr);", "    assign sys_we  = wr && sel_sys;")],
+     'tvtest_88', None),
+    ('tv_closed_0', 'intv_bus.sv', [("stic_open ? {8'h00, gram_q} : tv_on ? 16'h00FF : 16'd0;",
+                                     "stic_open ? {8'h00, gram_q} : 16'd0;")], 'tvtest_88', None),
+    ('tv_0022', 'intv_stic.sv', [("        else if (tv && n == 6'h22)", "        else if (1'b0)")], 'tvtest_88', None),
+    ('tv_cs_card63', 'intv_stic.sv', [("(csmode && tv ? {w[10:3], py} : {2'b00, w[8:3], py})", "{2'b00, w[8:3], py}")],
+     'tvtest_88', None),
+    ('tv_mob_mask', 'intv_stic.sv', [("if ((u_a[11] || !csmode) && !tv)", "if (u_a[11] || !csmode)")],
+     'tvtest_88', None),
+    ('tv_col160', 'intv_stic.sv', [("xp < (tv ? 12'sd160 : 12'sd159)", "xp < 12'sd159")], 'tvtest_88', None),
+    ('tv_psg_env', 'intv_psg.sv', [("2'd1: l = tv ? (efirst ? ev : 4'd0) : ev >> 2;", "2'd1: l = ev >> 2;")],
+     'tvtest_88', None),
+    ('tv_psg_r7', 'intv_psg.sv', [("4'd8:    q = tv ? r[8] & 8'h3F : r[8];", "4'd8:    q = r[8];")], 'tvtest_88', None),
+    ('tv_no_wbx', 'intv_bus.sv', [("            if (sel_wbx)  din = {6'd0, wbx_q};\n", "")], 'tvtest_full', None),
+    ('tv_bq_off', 'intv_stic.sv', [("    wire logic bq       = tv && tv_bq;", "    wire logic bq       = 1'b0;")],
+     'tvtest_bq', None),
+    ('tv_font_off', 'intv_sysrom.sv', [("    assign vgrom_q = font ? vwg_q : vg_q;", "    assign vgrom_q = vg_q;")],
+     'tvtest_font', None),
     # behaviour (the plain lockstep)
     ('pullup_zero', 'intv_bus.sv', [("            if (cart_hit) din &= cart_q;\n",
      "            if (cart_hit) din &= cart_q;\n            if (!(sel_stic || sel_scr || sel_psg || sel_sys"

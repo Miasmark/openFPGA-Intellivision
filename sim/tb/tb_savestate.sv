@@ -840,6 +840,7 @@ module tb_savestate;
         $fdisplay(fd, "L ready crc %08x words %0d", core.media.crc, core.media.words);
         $fdisplay(fd, "L ecs mode %0d", core.ecs_mode);
         $fdisplay(fd, "L voice mode %0d", core.voice_mode);
+        $fdisplay(fd, "L tv mode %0d font %0d", core.tv_l, core.font_l);
         repeat (10) @(negedge clk);
         if (hold_on == 0) hold_req = 1'b0;
 

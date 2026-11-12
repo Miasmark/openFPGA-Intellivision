@@ -68,7 +68,8 @@ cartridge does not fetch again.
 - `[vars]`: `name = decimal`; names case sensitive (as1600.txt). Used:
   `ecs` (1: ECS flag), `ecs_compat` (3: ECS, 0: ECS_OFF), `voice` (1),
   `voice_compat` (2, 3: VOICE), `jlp` / `jlp_accel` (not 0: JLP flag, for
-  step 11), `lto_mapper` (not 0: refused). Everything else in `[vars]`,
+  step 11), `lto_mapper` (not 0: refused), **(1.0.8)** `tv_compat` (2, 3: the
+  TutorVision Auto rule on; 0: off; docs/TUTORVISION.md 2.3). Everything else in `[vars]`,
   strings and malformed lines included, is ignored.
 - Anything else in the four map sections refuses the CFG.
 
@@ -170,7 +171,8 @@ lower 2K windows first), CRC-16. Then metadata tags (id_tag.txt) until a NUL
 tag or the end of the file: length (1-4 bytes), type, body, CRC-16; the
 first compatibility tag ($06, at least 3 bytes) with a good CRC sets ECS
 (requires), ECS_OFF (incompatible), VOICE (supports or requires) and JLP;
-its LTOM bit refuses the image. Other tags, tags with a bad CRC and a
+its LTOM bit refuses the image. **(1.0.8)** Byte 1 bits 3:2 (TUTOR): 01 / 10 turn
+the TutorVision Auto rule on, 11 off. Other tags, tags with a bad CRC and a
 partial tag at the end are ignored. CRC-16: poly $1021, init $FFFF, MSB
 first.
 
@@ -328,7 +330,8 @@ $02: a data hunk (a 24-bit Locutus word address, then 8-bit, 10-bit and 16-bit p
 words). Block $03: metadata (skipped), other types skipped, $FF the end (what follows is
 ignored; a file may also just end after a block). DOWCRC: poly $98, right shifting, init 0.
 CRC32/4: poly $82F63B78, right shifting, init 0. The flags the core uses: voice_compat (bits
-1:0), ecs_compat (3:2), jlp_accel (17:16), jlp_flash (31:22: 1.5 KiB sectors), lto_mapper (32).
+1:0), ecs_compat (3:2), **(1.0.8)** tv_compat (11:10: 10 or 11 the TutorVision Auto rule on, 00
+off), jlp_accel (17:16), jlp_flash (31:22: 1.5 KiB sectors), lto_mapper (32).
 
 ### 8.2 Mapping
 

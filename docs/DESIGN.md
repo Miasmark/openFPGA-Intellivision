@@ -372,6 +372,8 @@ Correction to the owner's project list (PJ): the PD and CC0 CRC lists do not giv
 | 0x105 | Intellivoice ROM | ivoice.bin (2,048 bytes) | optional |
 | 0x106 | JLP flash | .sav | nonvolatile |
 | 0x107 | ECS tape | .ecs | nonvolatile, 16 KiB while the ECS is on (1.0.5, the owner's decision of 2026-11-06: the cassette as a file; docs/ECS_NOTES.md 5) |
+| 0x108 | TutorVis. EXEC | wbexec.bin (16,384 bytes) | optional; **(1.0.8)** loader slot 6: its second 8 KiB, the WBEXEC's $2000-$2FFF (docs/TUTORVISION.md 2.2) |
+| 0x109 | TutorVis. GROM | wbgrom.bin (2,048 bytes) | optional; **(1.0.8)** loader slot 7: the Font option's GROM |
 
 File sizes are the owner's files [measured]. They match MAME's expected CRCs: EXEC cbce86f7, GROM 683a4158, Intellivoice 0de7579d, and the three ECS parts [from L-TA].
 
@@ -635,7 +637,7 @@ The lanes' reports and supporting files are under `research/<lane>/` in the proj
 ### Scope and formats
 
 9. **Machine variants.** The design targets Model 2609. Intellivision II has a different EXEC (extra ROM at $0400-$04FF and a cartridge check that breaks some titles), and the $0360-$03FF "garbage" may be INTV II only [from wiki Memory_Map:23-24, 53]. Decision for the owner: 2609 only (proposed), with the CFG `intv2` variable ignored.
-10. **Keyboard Component** (6502, TMS9927 CRT controller, 16K x 10 shared RAM, tape drive) [from wiki Keyboard_Component]: not in the design; propose an explicit non-goal, with `kc_compat` ignored. Same for TutorVision/INTV88 (`tv_compat`) and PlayCable.
+10. **Keyboard Component** (6502, TMS9927 CRT controller, 16K x 10 shared RAM, tape drive) [from wiki Keyboard_Component]: not in the design; propose an explicit non-goal, with `kc_compat` ignored. Same for PlayCable. **(1.0.8)** TutorVision/INTV88 (`tv_compat`) is no longer a non-goal: an experimental mode, off unless a cartridge or the menu asks for it (docs/TUTORVISION.md).
 11. **LTO Flash mapper and CC3.** `lto_mapper` exists in the CFG and .ROM tag formats [from S9 as1600.txt:1048; id_tag.txt:640-657], but the 2020 jzIntv docs do not specify it, and a web search found no technical description (only LTO Flash user pages at intvfunhouse.com). CC3 (Cuttle Cart 3) adds serial ports (jzIntv examples/cc3serial) that no game needs. *Settle:* fetch the LTO Flash manual or newer jzIntv docs into `research/<lane>/downloads/`, then decide.
 12. **ECS-style page flipping.** MAME implements only what ECS and WSMLB need (its own TODO, ecs.cpp:8-14); the spec is "write $xA5y to $xFFF, 16 pages per 4K range" [from S9 doc/tech/ecs.html]. Whether newer homebrew uses 2K-granular flipping (as some later documents may describe) was not confirmed. The page selects of all 16 ranges go in the save state. Note the $7000 ECS ROM is switched *off* by selecting page 1 ($7A51), not by a separate enable [from S9 doc/jzintv/debugger.txt:302-303].
 13. **ECS UART** ($00E0-$00E3, cassette and printer) was missing from the map. ECS BASIC uses it for CSAV/CLOD and printing [from S9 doc/tech/ecs.html]. Propose: model status as "never ready" (or ready, data discarded) so ECS BASIC does not hang; real tape support is a non-goal. Its few registers go in the save state. **(1.0.5)** Done otherwise: the owner wanted the cassette, so it is a file (`GAME.ecs`, data slot 0x107; docs/ECS_NOTES.md 5; tools/ecs_tape.py, intv_tape.sv). **(1.0.6)** Core Settings' Tape speed: Normal or Instant (the ECS ROM's own tape routine called again at once inside the frame; docs/ECS_NOTES.md 5).

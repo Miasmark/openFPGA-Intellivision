@@ -683,6 +683,7 @@ class Stic:
         coll = [0] * 8
         log = []
         claimed = None if mame else bytearray(W * H)
+        tv = self.tv()
         # MAME draws 7 to 0, each MOB over the last (stic.cpp:786-851); the
         # hardware rules take the lowest-numbered visible pixel (M3)
         order = range(7, -1, -1) if mame else range(8)
@@ -707,6 +708,15 @@ class Stic:
                         px = x + k
                         if px < x0 or px > COL_X1 or py < y0 or py > COL_Y1:
                             bord = True
+                            # the STIC 1A shows the 160th column, MOBs too; the collision
+                            # area stays the 2609's (a MOB there touches the border, never
+                            # the background: TUTORVISION.md, open question 5)
+                            if (px == COL_X1 + 1 and vis and tv and y0 <= py <= COL_Y1
+                                    and not (fg[py * W + px] and prio)):
+                                if mame or not claimed[py * W + px]:
+                                    if not mame:
+                                        claimed[py * W + px] = 1
+                                    pic[py * W + px] = colour
                         else:
                             idx = py * W + px
                             on = fg[idx]

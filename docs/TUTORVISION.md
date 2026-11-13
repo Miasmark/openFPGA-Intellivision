@@ -112,6 +112,13 @@ mode off (DESIGN.md 2.6, STIC_NOTES.md).
   GROM ("STIC1A only applies the restriction to BACKTAB cards. MOBs always see the full GRAM and
   full GROM" [Z p.17]).
 - Foreground/Background BACKTAB stays cards 0-63 (bits 8:3).
+- GRAM starts at zero at power-on and reset, as in mode off. A stock game that leaves junk in bits
+  10:9 (Worm Whomper, Space Patrol: "displays corrupted graphics" [Z p.23, Misc Observations])
+  therefore picks blank cards 64-255 here, so those objects go invisible or flicker (the owner's
+  test of 1.0.8: Worm Whomper's worms invisible; Space Patrol's rocks flicker and its UFOs are
+  invisible). On the board those cards hold the RAM's power-on contents, so it draws
+  random-looking garbage instead. Power-on RAM is not reproducible, and zero keeps save states and
+  the benches repeatable.
 
 ### 3.2 System RAM $0360-$04FF
 

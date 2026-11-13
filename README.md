@@ -145,7 +145,8 @@ button is which side action. Without a profile, Auto is Layer.
 
 - **TutorVision is experimental:** from documents and emulator comparison only. The INTV88's
   interrupt bug is not modelled, and some stock games break on it as on the real board (Worm
-  Whomper, Space Patrol: junk card numbers). A save state loads only into the same TutorVision
+  Whomper, Space Patrol: junk card numbers; here those objects go invisible or flicker, where the
+  board draws random-looking garbage). A save state loads only into the same TutorVision
   mode and font.
 
 - **Colours:** MAME's palette. A palette calibrated to the console is future work.

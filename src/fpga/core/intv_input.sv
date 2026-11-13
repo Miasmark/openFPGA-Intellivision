@@ -20,8 +20,10 @@
 // - mode 2 Right stick: Layer, plus the right stick = ring key (8 sectors),
 //   R3 = 5;
 // - mode 3 Auto (build step 13): the game profile's mode (intv_profile;
-//   Layer without one), and in its Layer modes the profile's side actions
-//   on A / B / X (prof_sides) instead of lower right / lower left / top;
+//   Layer without one), and in its Layer modes the profile's buttons on
+//   A / B / X (prof_sides, 4 bits each, btn_code: a side action or, 1.0.8,
+//   a keypad key) instead of lower right / lower left / top; R + a face
+//   button stays the number pad, and the fixed modes use no profile;
 // - the on-screen keypads (build step 13, tools/osk.py): Select opens a
 //   player's keypad, Select or B closes it; while open the D-pad moves the
 //   cursor over the 3 x 4 grid (wrapping) and a press of A presses the
@@ -113,7 +115,7 @@ module intv_input #(
     input  wire logic        frame,         // clk: the video frame's start (one clk): the keypads step
     input  wire logic        prof_ok,       // clk: the cartridge has a profile (intv_profile)
     input  wire logic [1:0]  prof_mode,     //   its keypad mode for Auto
-    input  wire logic [5:0]  prof_sides,    //   its side actions of A [1:0], B [3:2], X [5:4]: 0 lr, 1 ll, 2 top
+    input  wire logic [11:0] prof_sides,    //   its buttons A [3:0], B [7:4], X [11:8] (btn_code)
     output logic      [1:0]  osk_open,      // clk: the keypads, player 1 [0], player 2 [1]
     output logic      [7:0]  osk_cur,       //   cursor cells 0-11 (player 1 [3:0])
     output logic      [7:0]  osk_held,      //   the pressed cell + 1, 0 none
@@ -148,6 +150,17 @@ module intv_input #(
             4'd0: key_code = 8'h48;
             default: key_code = 8'h00;
         endcase
+    endfunction
+
+    // (1.0.8) a profile button (tools/osk.py button_code): 0-2 the side actions lower right, lower
+    // left, top; 3 nothing; 4 + n the keypad cell n's key (1-9, Clear, 0, Enter: cell_code's order)
+    function automatic logic [7:0] btn_code(input logic [3:0] c);
+        if (c < 4'd3)       btn_code = side_code(c[1:0]);
+        else if (c == 4'd3) btn_code = 8'h00;
+        else if (c < 4'd13) btn_code = key_code(c - 4'd3);
+        else if (c == 4'd13) btn_code = K_CLEAR;
+        else if (c == 4'd14) btn_code = key_code(4'd0);
+        else                btn_code = K_ENTER;
     endfunction
 
     // disc direction d (0 = N, clockwise)
@@ -264,7 +277,7 @@ module intv_input #(
     // (key bits 10-12, 14-15 and 27:16 are not used: L2, R2, L3, Select, Start)
     /* verilator lint_off UNUSEDSIGNAL */
     function automatic logic [7:0] player(input logic [31:0] key, input logic [31:0] joy,
-                                          input logic [1:0] mode, input logic [5:0] sides);
+                                          input logic [1:0] mode, input logic [11:0] sides);
         logic [3:0] t;
         logic up, dn, lt, rt, ba, bb, bx, by, l1, r1, r3, an;
         logic [7:0] p;
@@ -284,8 +297,8 @@ module intv_input #(
                   | (ba ? K_ENTER : 8'h00) | (bx ? key_code(4'd5) : 8'h00);
             else                                                // L: only the D-pad's 1/16 turn
                 p = dpad_code(up, dn, lt, rt, l1)
-                  | (ba ? side_code(sides[1:0]) : 8'h00) | (bb ? side_code(sides[3:2]) : 8'h00)
-                  | (bx ? side_code(sides[5:4]) : 8'h00);
+                  | (ba ? btn_code(sides[3:0]) : 8'h00) | (bb ? btn_code(sides[7:4]) : 8'h00)
+                  | (bx ? btn_code(sides[11:8]) : 8'h00);
             if (mode == 2'd2 && an)
                 p = p | stick8_code(joy[23:16], joy[31:24]) | (r3 ? key_code(4'd5) : 8'h00);
         end
@@ -602,10 +615,10 @@ module intv_input #(
                               | (kb_md[0] ? 64'd1 << 55 : 64'd0)                // SHIFT: row 6, column 7
                               | (kb_md[1] ? 64'd1 << 46 : 64'd0);               // CTL: row 5, column 6
 
-    // Auto (3): the profile's mode and sides; the fixed modes: the usual sides
+    // Auto (3): the profile's mode and buttons; the fixed modes: the usual side actions
     wire logic       auto = md == 2'd3;
     wire logic [1:0] pmd  = auto ? (prof_ok ? prof_mode : 2'd0) : md;
-    wire logic [5:0] psd  = auto && prof_ok ? prof_sides : 6'b10_01_00;
+    wire logic [11:0] psd = auto && prof_ok ? prof_sides : 12'h210;
 
     logic [7:0]  p1, p2;
     always_comb begin

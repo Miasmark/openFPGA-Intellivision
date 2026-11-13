@@ -65,7 +65,10 @@ green loaded, yellow another size, red required and missing, grey optional and m
 Keypad Mode (Core Settings) chooses how the Pocket's buttons play the hand controller.
 
 **Auto (by game)** is the default: the game's profile picks the mode and, where it helps, which
-button is which side action. Without a profile, Auto is Layer.
+button is which side action, or puts a keypad key on a button: in the TutorVision titles Map
+Mazes, Shapes in Space and Geo Graphics, A is the keypad's Enter, B its Clear and X the top side
+button (1.0.8). R with a button stays the number pad in every profile. Without a profile, Auto is
+Layer.
 
 | Input | Layer (default) |
 |---|---|
@@ -159,7 +162,7 @@ button is which side action. Without a profile, Auto is Layer.
   ECS keyboard, one key at a time; a USB keyboard on the Dock is quicker.
 - **The on-screen keypad** shows text labels, not overlay pictures.
 - **Game profiles** (the on-screen keypad's labels) exist for 67 games: every overlay of the
-  owner's set that names key functions ([docs/KEYPAD_NOTES.md](docs/KEYPAD_NOTES.md) 3).
+  owner's set that names key functions, plus button-only profiles for the three TutorVision titles ([docs/KEYPAD_NOTES.md](docs/KEYPAD_NOTES.md) 3).
 - **LUIGI:** encrypted files (sold games for LTO Flash) and the LTO Flash's own memory mapper are
   refused; 8-bit RAM preloaded with upper bytes reads them as 0 (CARTFORMATS 8.2).
 - **Library sweep:** a run of 188 library images through the core's model found one fault, now

@@ -312,11 +312,28 @@ def step_all(players, kb, k1, k2, ecs_ok):
 
 # ---------------------------------------------------------------------- profiles
 # crc: the cartridge's CRC-32 (the loader's, as tools/gen_crc_table.py); mode: Auto's keypad
-# mode (0 Layer, 1 Face-button ring, 2 Right stick); sides: the side actions of A, B, X in
-# Auto's Layer mode ("lr" lower right, "ll" lower left, "top"); labels: key -> text. From the
-# overlays' function facts (the owner's scans, research/test-assets/overlay_index.csv), in our
-# own words.
+# mode (0 Layer, 1 Face-button ring, 2 Right stick); sides: what A, B, X press in Auto's Layer
+# mode: a side action ("lr" lower right, "ll" lower left, "top") or (1.0.8) a keypad key (1-9, 0,
+# "C" Clear, "E" Enter; KEYS); labels: key -> text. From the overlays' function facts (the
+# owner's scans, research/test-assets/overlay_index.csv), in our own words.
 SIDES = ("lr", "ll", "top")
+BUTTON_KEYS = SIDES + (None,)       # a button's code 0-3: the side actions, 3 nothing; 4 + cell: KEYS[cell]
+
+
+def button_code(k):
+    """1.0.8: a profile button's 4-bit code (osk_prof.hex): 0 lr, 1 ll, 2 top, 3 nothing, 4 + n the
+    keypad key KEYS[n] (intv_input.sv btn_code)."""
+    return BUTTON_KEYS.index(k) if k in BUTTON_KEYS else 4 + KEYS.index(k)
+
+
+def button_key(c):
+    """The inverse of button_code: what a 4-bit code presses (None: nothing)."""
+    return BUTTON_KEYS[c] if c < 4 else KEYS[c - 4]
+
+
+def sides_code(sides):
+    """The 12-bit field of A [3:0], B [7:4], X [11:8] (intv_profile.sv sides)."""
+    return sum(button_code(k) << (4 * i) for i, k in enumerate(sides))
 PROFILES = [
     dict(name="B-17 Bomber", crcs=[0x8AD19AB3], mode=0, sides=("top", "ll", "lr"),
          labels={1: "PILOT", 2: "12:00 GUN", 3: "BOMB BAY", 4: "GAUGES", 6: "PREVIEW",
@@ -333,6 +350,13 @@ PROFILES = [
          labels={1: "SHOOT UP-LEFT", 2: "SHOOT UP", 3: "SHOOT UP-RIGHT", 4: "SHOOT LEFT",
                  6: "SHOOT RIGHT", 7: "SHOOT DN-LEFT", 8: "SHOOT DOWN", 9: "SHOOT DN-RIGHT",
                  "C": "PICK UP", 0: "COUNT ARROWS", "E": "EXIT"}),
+    # 1.0.8: World Book's TutorVision titles (the owner's choice, 2026-11-12: Enter is needed most
+    # of the time, and the side buttons leave for the main menu): A = Enter, B = Clear, X the top
+    # side action (the exit), Y as everywhere (nothing; R + Y Clear). No labels: no manual or screen
+    # of theirs is at hand to state the keys' functions from.
+    dict(name="Map Mazes (TutorVision)", crcs=[0x59F5FA32], mode=0, sides=("E", "C", "top"), labels={}),
+    dict(name="Shapes in Space (TutorVision)", crcs=[0x714ECD51], mode=0, sides=("E", "C", "top"), labels={}),
+    dict(name="Geo Graphics (TutorVision)", crcs=[0x10BBDB07], mode=0, sides=("E", "C", "top"), labels={}),
 ]
 # 1.0.7: the overlays' key functions for 63 more games (tools/osk_profiles.py), Layer mode and the
 # usual side actions
@@ -459,8 +483,9 @@ def crc_hex():
 
 
 def prof_hex():
-    """osk_prof.hex: 128 records of 116 bits: mode (2), sides (A, B, X: 2 bits each, 0 lr, 1 ll,
-    2 top), 12 label indices (LBITS = 9 bits each, cell 0 at the low end; 0 = none)."""
+    """osk_prof.hex: 128 records of 122 bits: mode (2), the buttons A, B, X (4 bits each,
+    button_code: a side action or, 1.0.8, a keypad key; 2 bits each until 1.0.7), 12 label
+    indices (LBITS = 9 bits each, cell 0 at the low end; 0 = none)."""
     pool = label_pool()
     assert len(pool) < MAX_LABELS and len(PROFILES) <= MAX_PROFILES
     recs = []
@@ -469,8 +494,7 @@ def prof_hex():
         for cell in range(NCELL):
             t = label(p, cell)
             v |= (pool.index(t) + 1 if t else 0) << (LBITS * cell)
-        sides = sum(SIDES.index(s) << (2 * i) for i, s in enumerate(p["sides"]))
-        recs.append((p["mode"] << (12 * LBITS + 6)) | (sides << (12 * LBITS)) | v)
+        recs.append((p["mode"] << (12 * LBITS + 12)) | (sides_code(p["sides"]) << (12 * LBITS)) | v)
     return recs + [0] * (MAX_PROFILES - len(recs))
 
 
@@ -515,7 +539,7 @@ def font_hex():
 
 def tables():
     return {"osk_crc.hex": ["%010x" % e for e in crc_hex()],
-            "osk_prof.hex": ["%029x" % e for e in prof_hex()],
+            "osk_prof.hex": ["%031x" % e for e in prof_hex()],
             "osk_label.hex": ["%02x" % e for e in label_hex()],
             "osk_llen.hex": ["%x" % e for e in llen_hex()],
             "osk_font.hex": ["%02x" % e for e in font_hex()],
@@ -551,9 +575,23 @@ def self_check():
     for p in PROFILES:
         for t in p["labels"].values():
             chk(0 < len(t) <= LABEL_MAX and all(ch in CHARS for ch in t), "label %r" % t)
-        chk(p["mode"] in (0, 1, 2) and all(s in SIDES for s in p["sides"]), p["name"])
+        chk(p["mode"] in (0, 1, 2) and len(p["sides"]) == 3
+            and all(k in SIDES or k in KEYS for k in p["sides"]), p["name"])
     crcs = [c for p in PROFILES for c in p["crcs"]]
     chk(len(crcs) == len(set(crcs)), "a CRC in two profiles")
+    # 1.0.8: the buttons' codes: all 16 decode and encode back; the record's fields where
+    # intv_profile.sv reads them (mode [121:120], A [111:108], B [115:112], X [119:116])
+    chk(all(button_code(button_key(c)) == c for c in range(16)), "button codes 0-15 round trip")
+    recs = prof_hex()
+    for i, p in enumerate(PROFILES):
+        r = recs[i]
+        got = tuple(button_key(r >> (12 * LBITS + 4 * n) & 15) for n in range(3))
+        chk(r >> (12 * LBITS + 12) == p["mode"] and got == tuple(p["sides"]) and r < 1 << 122,
+            "record of %s: mode %d buttons %r" % (p["name"], r >> (12 * LBITS + 12), got))
+    wb = [p for p in PROFILES if p["name"].endswith("(TutorVision)")]
+    chk(len(wb) == 3 and all(tuple(p["sides"]) == ("E", "C", "top") and p["mode"] == 0 for p in wb)
+        and sorted(c for p in wb for c in p["crcs"]) == [0x10BBDB07, 0x59F5FA32, 0x714ECD51],
+        "the three TutorVision titles: Layer, A Enter, B Clear, X top")
     # the state machine
     T = 1 << 28
     pl = Player()

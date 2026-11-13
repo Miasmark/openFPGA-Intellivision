@@ -53,7 +53,7 @@ module tb_osk;
     wire logic [7:0]  osk_cur, osk_held;
     wire logic        prof_ok;
     wire logic [1:0]  prof_mode;
-    wire logic [5:0]  prof_sides;
+    wire logic [11:0] prof_sides;
     wire logic [107:0] labels;
     wire logic [1:0]  ovl;
     wire logic        kb_open;

@@ -822,7 +822,7 @@ end
     // the on-screen keypads and the game profile (build step 13, below)
     wire            osk_frame, prof_ok;
     wire    [1:0]   prof_mode, osk_open;
-    wire    [5:0]   prof_sides;
+    wire    [11:0]  prof_sides;
     wire    [7:0]   osk_cur, osk_held;
     // the on-screen ECS keyboard (1.0.4, Start with the ECS on)
     wire            kb_open;

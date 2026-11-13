@@ -39,7 +39,13 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
      numpad is the keypad (MAME's keypad names);
   11 every usage code in each byte with and without the ECS and the
      synthesizer, and 20,000 random reports with modifiers (expected: the
-     model). Every vector also carries the ECS settings (Auto / On / Off,
+     model);
+  12 (1.0.8) the game profile's buttons, written out by hand with MAME's
+     names: in Keypad Mode Auto the TutorVision titles' profile (A Enter, B
+     Clear, X top) and B-17 Bomber's; R's number pad and L's turn with it;
+     the fixed modes and Auto without a profile ignore it; a Face-button-ring
+     profile uses its ring. Every vector carries the profile (class 7: a
+     random one, any button code, on every other vector). Every vector also carries the ECS settings (Auto / On / Off,
      synthesizer), which must come out of the crossing unchanged.
   9  L + D-pad (the owner's Precision controls, 2026-10-26: in the Layer
      modes L turns the D-pad one notch, 22.5 degrees, clockwise; in
@@ -89,6 +95,7 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import intv_input as m  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, 'sim', 'tb'))
 import tbcommon  # noqa: E402
+import osk  # noqa: E402  (1.0.8: the profile buttons' codes)
 
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 RTL = ['intv_input.sv']
@@ -319,10 +326,16 @@ def l_oracle(btns, mode, stick_dir):
     return out
 
 
+def prof_word(prof):
+    """(1.0.8) the bench's profile field: {ok, mode [13:12], buttons [11:0]} (intv_profile's outputs)."""
+    return 0 if prof is None else 1 << 14 | prof['mode'] << 12 | osk.sides_code(prof['sides'])
+
+
 def vec_line(cls, v, r, l, keys=0):
-    return '%x %08x %08x %08x %08x %08x %08x %04x %x %x %x %x %x %02x %02x %08x %08x' % (
+    return '%x %08x %08x %08x %08x %08x %08x %04x %x %x %x %x %x %02x %02x %08x %08x %04x' % (
         cls, v['key1'], v['joy1'], v['key2'], v['joy2'], v['key3'], v['joy3'], v['trig3'], v['mode'], v['swap'],
-        v.get('ovr', 0), v.get('synth', 0), v.get('ecs', 0), r, l, keys >> 32, keys & 0xFFFFFFFF)
+        v.get('ovr', 0), v.get('synth', 0), v.get('ecs', 0), r, l, keys >> 32, keys & 0xFFFFFFFF,
+        prof_word(v.get('prof')))
 
 
 def tear_line(v, r, l):
@@ -331,9 +344,9 @@ def tear_line(v, r, l):
 
 
 def vec(key1=0, joy1=0x80808080, key2=0, joy2=0x80808080, key3=0, joy3=0, trig3=0, mode=0, swap=0, ovr=0,
-        synth=0, ecs=0):
+        synth=0, ecs=0, prof=None):
     return dict(key1=key1, joy1=joy1, key2=key2, joy2=joy2, key3=key3, joy3=joy3, trig3=trig3, mode=mode, swap=swap,
-                ovr=ovr, synth=synth, ecs=ecs)
+                ovr=ovr, synth=synth, ecs=ecs, prof=prof)
 
 
 def generate(path):
@@ -343,8 +356,8 @@ def generate(path):
     counts = {}
 
     def add(cls, v, want=None, want_keys=None):
-        r, l = m.ports(v)
-        mr, ml = m.ports(v, mame=True)
+        r, l = m.ports(v, prof=v.get('prof'))
+        mr, ml = m.ports(v, mame=True, prof=v.get('prof'))
         k = m.ecs_keys(v)
         if (r, l) != (mr, ml):
             problems.append(f'class {cls}: model {r:02X} {l:02X} != MAME read_ctrl {mr:02X} {ml:02X} for {v}')
@@ -412,11 +425,14 @@ def generate(path):
                 trig3=rng.getrandbits(16), mode=i % 4, swap=(i >> 2) & 1)
         v[('key1', 'key2', 'key3')[slot]] = (t << 28) | rng.getrandbits(28)
         add(6, v)
-    # 7 random
+    # 7 random (1.0.8: every other vector with a random profile: mode 0-2, any of the 16 button
+    # codes on A, B and X)
     for i in range(50000):
+        pr = None if i % 2 else dict(mode=rng.randint(0, 2),
+                                     sides=tuple(osk.button_key(rng.getrandbits(4)) for _ in range(3)))
         add(7, vec(key1=rng.getrandbits(32), joy1=rng.getrandbits(32), key2=rng.getrandbits(32),
                    joy2=rng.getrandbits(32), key3=rng.getrandbits(32), joy3=rng.getrandbits(32),
-                   trig3=rng.getrandbits(16), mode=rng.getrandbits(2), swap=rng.getrandbits(1)))
+                   trig3=rng.getrandbits(16), mode=rng.getrandbits(2), swap=rng.getrandbits(1), prof=pr))
     # 8 MAME's analog grid
     for gy in range(5):
         for gx in range(5):
@@ -520,6 +536,51 @@ def generate(path):
         add(11, vec(key1=rkey() if i % 2 else 0, joy1=rng.getrandbits(32), key3=kb | rng.getrandbits(16),
                     joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24, trig3=cs[4] | cs[5] << 8,
                     mode=i % 4, swap=(i >> 2) & 1, ecs=(i >> 3) % 3, synth=(i >> 4) & 1, ovr=i % 3))
+    # 12 (1.0.8) the game profile's buttons, written out by hand with MAME's names: the TutorVision
+    # titles' profile (A Enter, B Clear, X top) and B-17 Bomber's (A top, B lower left, X lower
+    # right) in Auto; R's number pad and L's turn unchanged; the fixed modes and Auto without a
+    # profile ignore it; a Face-button-ring profile uses its ring, not the buttons
+    tvp = dict(mode=0, sides=('E', 'C', 'top'))
+    b17 = dict(mode=0, sides=('top', 'll', 'lr'))
+    ring = dict(mode=1, sides=('E', 'C', 'top'))
+    rows12 = [
+        ('Auto TV: A = Enter', 3, tvp, ['A'], ['Enter']),
+        ('Auto TV: B = Clear', 3, tvp, ['B'], ['Clear']),
+        ('Auto TV: X = Upper', 3, tvp, ['X'], ['Upper']),
+        ('Auto TV: Y = nothing', 3, tvp, ['Y'], []),
+        ('Auto TV: A+B+X', 3, tvp, ['A', 'B', 'X'], ['Enter', 'Clear', 'Upper']),
+        ('Auto TV: R+Y = Clear', 3, tvp, ['R', 'Y'], ['Clear']),
+        ('Auto TV: R+B = 0', 3, tvp, ['R', 'B'], ['0']),
+        ('Auto TV: R+A = Enter', 3, tvp, ['R', 'A'], ['Enter']),
+        ('Auto TV: R+X = 5', 3, tvp, ['R', 'X'], ['5']),
+        ('Auto TV: R+up = 2', 3, tvp, ['R', 'up'], ['2']),
+        ('Auto TV: L+up+A = NNE + Enter', 3, tvp, ['L', 'up', 'A'], [DIRS[1], 'Enter']),
+        ('Auto TV: up+B = Up + Clear', 3, tvp, ['up', 'B'], [DIRS[0], 'Clear']),
+        ('Auto B-17: A = Upper', 3, b17, ['A'], ['Upper']),
+        ('Auto B-17: B = Lower-Left', 3, b17, ['B'], ['Lower-Left']),
+        ('Auto B-17: X = Lower-Right', 3, b17, ['X'], ['Lower-Right']),
+        ('Auto B-17: R+A = Enter', 3, b17, ['R', 'A'], ['Enter']),
+        ('Auto, no profile: A = Lower-Right', 3, None, ['A'], ['Lower-Right']),
+        ('Layer + TV profile: A = Lower-Right (ignored)', 0, tvp, ['A'], ['Lower-Right']),
+        ('Layer + TV profile: B = Lower-Left (ignored)', 0, tvp, ['B'], ['Lower-Left']),
+        ('Right stick + TV profile: X = Upper', 2, tvp, ['X'], ['Upper']),
+        ('Right stick + TV profile: A = Lower-Right (ignored)', 2, tvp, ['A'], ['Lower-Right']),
+        ('Face ring + TV profile: A = 6 (ignored)', 1, tvp, ['A'], ['6']),
+        ('Auto, ring profile: A = 6', 3, ring, ['A'], ['6']),
+        ('Auto, ring profile: X+A = 3', 3, ring, ['X', 'A'], ['3']),
+    ]
+    for desc, mode, pr, btns, want in rows12:
+        for t in (1, 2):
+            for p2 in (0, 1):
+                for swap in (0, 1):
+                    k = keys(*btns, t=t)
+                    w = mame_read_ctrl(want)
+                    v = vec(key1=0 if p2 else k, key2=k if p2 else 0, mode=mode, swap=swap, prof=pr)
+                    e = (0xFF, w) if swap ^ p2 == 0 else (w, 0xFF)
+                    before = len(problems)
+                    add(12, v, e)
+                    if len(problems) > before:
+                        problems[-1] = f'profile "{desc}" type {t} p{p2 + 1} swap {swap}: ' + problems[-1]
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
@@ -670,8 +731,8 @@ PLANTS = [
      '            if (r1 && !l1)                                      // R: the number pad\n'),
     # the owner's mapping of 2026-11-03: R + A = Enter (not 1 as until 0.0.21), L leaves A/B/X alone
     ('r_keys_old', 'intv_input.sv', "(ba ? K_ENTER : 8'h00)", "(ba ? key_code(4'd1) : 8'h00)"),
-    ('l_chord_back', 'intv_input.sv', "(ba ? side_code(sides[1:0]) : 8'h00)",
-     "(ba ? (l1 ? key_code(4'd5) : side_code(sides[1:0])) : 8'h00)"),
+    ('l_chord_back', 'intv_input.sv', "(ba ? btn_code(sides[3:0]) : 8'h00)",
+     "(ba ? (l1 ? key_code(4'd5) : btn_code(sides[3:0])) : 8'h00)"),
     ('ring_nocancel', 'intv_input.sv', "uu = u & ~d;  dd = d & ~u;  ll = l & ~r;  rr = r & ~l;\n        unique case ({uu, dd, ll, rr})\n            4'b1010: ring_code",
      "uu = u;  dd = d & ~u;  ll = l & ~r;  rr = r & ~l;\n        unique case ({uu, dd, ll, rr})\n            4'b1010: ring_code"),
     ('face_lr_swapped', 'intv_input.sv', 'ring_code(bx, bb, by, ba)', 'ring_code(bx, bb, ba, by)'),
@@ -717,6 +778,18 @@ PLANTS = [
     # the decode round: a word loaded at any step (the outputs mix two words: the tear check)
     ('round_any_load', 'intv_input.sv', "if (req_s[1] != ack && ph == 3'd7) begin", "if (req_s[1] != ack) begin"),
     ('ovr_swapped', 'intv_input.sv', "    assign ecs_ovr   = eo;", "    assign ecs_ovr   = {eo[0], eo[1]};"),
+    # 1.0.8, the profile's keypad keys on the face buttons: keys taken as side actions, Enter and
+    # Clear swapped, code 3 (nothing) pressing a side action, B read from X's field, the profile
+    # used in the fixed modes, the profile's B pressed with R held (R's number pad must win)
+    ('prof_keys_as_sides', 'intv_input.sv', "        if (c < 4'd3)       btn_code = side_code(c[1:0]);",
+     "        if (1'b1)           btn_code = side_code(c[1:0]);"),
+    ('prof_enter_clear', 'intv_input.sv', "else if (c == 4'd13) btn_code = K_CLEAR;", "else if (c == 4'd13) btn_code = K_ENTER;"),
+    ('prof_code3_side', 'intv_input.sv', "else if (c == 4'd3) btn_code = 8'h00;", "else if (c == 4'd3) btn_code = S_LR;"),
+    ('prof_b_field', 'intv_input.sv', "(bb ? btn_code(sides[7:4]) : 8'h00)", "(bb ? btn_code(sides[11:8]) : 8'h00)"),
+    ('prof_fixed_modes', 'intv_input.sv', "wire logic [11:0] psd = auto && prof_ok ? prof_sides : 12'h210;",
+     "wire logic [11:0] psd = prof_ok ? prof_sides : 12'h210;"),
+    ('prof_under_r', 'intv_input.sv', "| (ba ? K_ENTER : 8'h00) | (bx ? key_code(4'd5) : 8'h00);",
+     "| (ba ? K_ENTER : 8'h00) | (bx ? key_code(4'd5) : 8'h00) | (bb ? btn_code(sides[7:4]) : 8'h00);"),
     # the crossing as it was before 0.0.5: every bit through two clk flip-flops on its own
     ('bitwise_sync', 'intv_input.sv',
      [("    logic [W-1:0] word;\n", "    logic [W-1:0] word, w_s;\n    initial w_s = '0;\n"),

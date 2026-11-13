@@ -57,11 +57,14 @@ and the RTL's tables). `sim/tb/tb_osk.py` compares the RTL with it.
 - its cartridge CRC-32s;
 - the keypad mode for Keypad Mode **Auto**: the new default, setting value 3, which used to work
   as Layer;
-- the side actions of A / B / X in Auto's Layer mode;
+- what A / B / X press in Auto's Layer mode: each a side action, or (1.0.8) a keypad key;
 - the labels: function facts from the game's overlay, in our own words, at most 14 characters.
 
 Without a profile, Auto is Layer with the usual side actions. The fixed modes (Layer, Face-button
-ring, Right stick) ignore the profile's mode and sides, but the labels are still shown.
+ring, Right stick) ignore the profile's mode and buttons, but the labels are still shown. R held
+is always the number pad (R + D-pad the ring, R+Y/B/A Clear/0/Enter, R+X 5), whatever the
+profile gives the buttons; L only turns the D-pad. The on-screen keypad (Select) and the ECS
+keyboard (Start) take the buttons as before while open.
 
 | Game | Auto's mode | A / B / X | Labels |
 |---|---|---|---|
@@ -69,6 +72,15 @@ ring, Right stick) ignore the profile's mode and sides, but the labels are still
 | Space Spartans | Layer | as usual | all 12 |
 | TRON Deadly Discs | Face-button ring | as usual | throws in 8 directions, 5 = block |
 | AD&D Cloudy Mountain (two CRCs) | Layer | as usual | 8 arrow directions, Clear / 0 / Enter |
+| Map Mazes, Shapes in Space, Geo Graphics (World Book's TutorVision titles, 1.0.8) | Layer | keypad Enter / keypad Clear / top | none |
+
+**1.0.8: keypad keys on the face buttons.** In World Book's TutorVision titles the side buttons
+leave for the main menu and the keypad's Enter is needed most of the time, so their profiles put
+Enter on A and Clear on B and keep the top side action (the exit) on X (the owner's choice,
+2026-11-12). They have no labels: no manual or screen of theirs was at hand to state the keys'
+functions from. A profile button is 4 bits (`tools/osk.py button_code`; 2 bits until 1.0.7):
+0 lower right, 1 lower left, 2 top, 3 nothing, 4 + n the keypad cell n's key (1-9, Clear, 0,
+Enter).
 
 **1.0.7: 63 more games** (`tools/osk_profiles.py`; the owner, 2026-11-11: "you have the overlay
 scans already"). Their labels are typed from the owner's 97 overlay scans, matched to the games
@@ -93,7 +105,7 @@ Second scans of a game (`auto-101`, `bump-100`, `buzz-100`, `hrac-100`, `mlbb-10
 | File | Holds |
 |---|---|
 | `osk_crc.hex` | 128 entries of valid, CRC, profile (64 until 1.0.6) |
-| `osk_prof.hex` | mode, sides and 12 label indices (9 bits each; 6 until 1.0.6) per profile, 128 profiles |
+| `osk_prof.hex` | mode, the A / B / X buttons (4 bits each; 2 until 1.0.7) and 12 label indices (9 bits each; 6 until 1.0.6) per profile, 128 profiles of 122 bits |
 | `osk_label.hex` | 512 labels of 16 bytes (length, then character codes; 64 until 1.0.6) |
 | `osk_llen.hex` | the labels' lengths |
 | `osk_font.hex` | 64 glyphs of 8 rows |
@@ -118,8 +130,13 @@ frames choose among all 70 CRCs; the tables are the model's (`osk.py gen --check
   key, Auto's sides and mode, the profile scan's first entry, the shadow, player 2's label row,
   the cursor's outline, the shadow's row, the pressed fill, the label's character address) must
   each fail.
-- `tb_input`: unchanged. Its keypads never step (`frame` = 0), and mode 3 without a profile is
-  Layer, as before.
+- `tb_input`: its keypads never step (`frame` = 0). Since 1.0.8 every vector carries a profile
+  (ok, mode, buttons): class 12 writes out the profile rows by hand (the TutorVision titles' and
+  B-17 Bomber's buttons in Auto, R's number pad and L's turn with them, the fixed modes and a
+  ring profile ignoring the buttons), class 7 gives every other random vector a random profile
+  (any of the 16 button codes); six plants (keys taken as side actions, Enter and Clear swapped,
+  code 3 pressing a side action, B read from X's field, the profile in the fixed modes, the
+  profile's B under R) must each fail.
 - `apf_json_check`: Keypad Mode's options and its power-up value Auto (core_top's
   `set_kp_mode`).
 

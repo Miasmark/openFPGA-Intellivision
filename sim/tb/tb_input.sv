@@ -7,10 +7,11 @@
 // the next one.
 //
 // Part 1, +vec=FILE: each line is class key1 joy1 key2 joy2 key3 joy3 trig3
-// mode swap ecs_ovr synth ecs pad_r pad_l keys_hi keys_lo, in hex (step 9:
+// mode swap ecs_ovr synth ecs pad_r pad_l keys_hi keys_lo prof, in hex (step 9:
 // the ECS settings, ecs = the ECS mode on the clk side (0 off, 1 on, 2
 // attached; ecs_full = mode 1), and the ECS keyboard's switches ecs_keys;
-// ecs_ovr and ecs_synth must come out as they went in). The bench drives
+// ecs_ovr and ecs_synth must come out as they went in; 1.0.8: prof, the game
+// profile on the clk side, {ok, mode [13:12], buttons [11:0]}). The bench drives
 // the inputs 1 ns after a clk_74a edge, waits 48 clocks (the crossing's
 // handshake takes at most about 7 clk + 4 clk_74a periods plus up to 8 clk
 // for the decode round's load step, twice when a transfer was in flight,
@@ -67,6 +68,9 @@ module tb_input;
     logic [W-1:0] bus = '0;          // {key1, joy1, key2, joy2, key3, joy3, trig3, mode, swap, ecs_ovr, synth}
     wire  [7:0]  pad_r, pad_l;
     logic        ecs_full = 1'b0;    // clk side: the ECS fully on, mode 1 (step 9)
+    logic        prof_ok = 1'b0;     // clk side (1.0.8): a game profile, its mode and buttons (intv_profile)
+    logic [1:0]  prof_mode = 2'd0;
+    logic [11:0] prof_sides = 12'd0;
     wire  [63:0] ecs_keys;
     wire         ecs_synth;
     wire  [1:0]  ecs_ovr;
@@ -197,9 +201,9 @@ module tb_input;
         .synth_74   ( bus[0] ),
         .ecs_full   ( ecs_full ),
         .frame      ( 1'b0 ),           // the keypads never step here (tb_osk tests them)
-        .prof_ok    ( 1'b0 ),
-        .prof_mode  ( 2'd0 ),
-        .prof_sides ( 6'd0 ),
+        .prof_ok    ( prof_ok ),
+        .prof_mode  ( prof_mode ),
+        .prof_sides ( prof_sides ),
         .osk_open   ( ),
         .osk_cur    ( ),
         .osk_held   ( ),
@@ -214,7 +218,7 @@ module tb_input;
         .ecs_ovr    ( ecs_ovr )
     );
 
-    function automatic logic [W-1:0] pack(input logic [31:0] f [17]);
+    function automatic logic [W-1:0] pack(input logic [31:0] f [18]);
         pack = {f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0], f[10][1:0], f[11][0]};
     endfunction
 
@@ -240,7 +244,7 @@ module tb_input;
 
     int fd, n, cls, nvec, nbad, ngrp, nchk, nchg, ntear;
     int cnt [16], bad [16];
-    logic [31:0] f [17];
+    logic [31:0] f [18];
     logic [W-1:0] gv [16];
     logic [15:0]  ge [16];
     logic [15:0]  prev;
@@ -268,10 +272,10 @@ module tb_input;
                 $finish;
             end
             while (!$feof(fd)) begin
-                n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h\n",
+                n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h\n",
                             f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11],
-                            f[12], f[13], f[14], f[15], f[16]);
-                if (n != 17) begin
+                            f[12], f[13], f[14], f[15], f[16], f[17]);
+                if (n != 18) begin
                     if (n > 0) begin
                         $display("  FAIL  vector %0d: %0d fields", nvec, n);
                         nbad++;
@@ -282,6 +286,7 @@ module tb_input;
                 @(posedge clk_74a);
                 #1 bus = pack(f);
                 ecs_full = f[12][1:0] == 2'd1;
+                {prof_ok, prof_mode, prof_sides} = f[17][14:0];   // (1.0.8) the profile
                 repeat (48) @(posedge clk);
                 #1;
                 cnt[cls & 15]++;
@@ -322,6 +327,7 @@ module tb_input;
                     break;
                 end
                 ecs_full = 1'b0;
+                {prof_ok, prof_mode, prof_sides} = 15'd0;
                 for (int i = 0; i < gn; i++) begin
                     f[0] = 0;
                     n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h\n",

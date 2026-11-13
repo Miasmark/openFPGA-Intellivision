@@ -65,8 +65,11 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   with the computer keyboard (1.0.4, tools/osk.py Keyboard: hands() masks the
   buttons it takes, ecs_keys() adds its keys).
 - Keypad mode Auto (3, the default from step 13): the game profile's mode,
-  and in its Layer modes the profile's side actions on A / B / X; Layer
-  without a profile.
+  and in its Layer modes the profile's buttons on A / B / X: each a side
+  action or (1.0.8) a keypad key (the TutorVision titles: A Enter, B Clear,
+  X top); Layer without a profile. R + a face button stays the number pad
+  (R+Y/B/A = Clear/0/Enter, R+X = 5) whatever the profile; the fixed modes
+  (0-2) never use a profile.
 - Keypad mode Face-button ring (1): D-pad = disc; the face buttons are a
   second D-pad on the ring, by position on the Pocket (X up = 2, B down = 8,
   Y left = 4, A right = 6; X+A = 3, X+Y = 1, B+A = 9, B+Y = 7); L = top side
@@ -223,8 +226,9 @@ class Hand:
 
 
 def virtual(key, joy, mode, hand=None, sides=("lr", "ll", "top")):
-    """One Pocket controller slot in keypad mode `mode` -> Hand; sides: the side actions of
-    A, B, X in the Layer modes (a game profile's in Auto, build step 13)."""
+    """One Pocket controller slot in keypad mode `mode` -> Hand; sides: what A, B, X press in
+    the Layer modes (a game profile's in Auto, build step 13): a side action, a keypad key (1.0.8)
+    or None (nothing)."""
     h = hand or Hand()
     if key >> 28 not in (1, 2, 3):
         return h
@@ -247,7 +251,7 @@ def virtual(key, joy, mode, hand=None, sides=("lr", "ll", "top")):
         else:
             h.dpad(*dp, turn=TURN_L if b[L1] else 0)
             for btn, k in ((A, sides[0]), (B, sides[1]), (X, sides[2])):   # L only turns the D-pad
-                if b[btn]:
+                if b[btn] and k is not None:
                     h.key(k)
         if mode == RSTICK and analog:
             r = stick8((joy >> 16) & 0xFF, (joy >> 24) & 0xFF)
@@ -441,6 +445,22 @@ def self_check():
     ok(ports(dict(base, key3=4 << 28, joy3=0x1E, ecs=2)) == ports(dict(base, key3=4 << 28, joy3=0x1E, ecs=0)) != (0xFF, 0xFF),
        "ECS attached: the number row is the keypad, as with the ECS off")
     ok(sorted(SYNTH_HID.values()) == list(range(12, 37)), "synthesizer: 25 notes C3-C5")
+    # 1.0.8: a profile's keypad keys on the face buttons (the TutorVision titles), in Auto only
+    tv = dict(mode=LAYER, sides=("E", "C", "top"))
+
+    def p1(btns, mode=AUTO, prof=tv):
+        k = (1 << 28) | sum(1 << n for n in btns)
+        return hands(dict(base, key1=k, key3=0, mode=mode), prof=prof)[0]
+    want = Hand()
+    ok(p1([A]).kp == 1 << KP_BIT["E"] and p1([B]).kp == 1 << KP_BIT["C"] and p1([X]).kp == 1 << KP_BIT["top"]
+       and p1([Y]).kp == 0, "Auto + TutorVision profile: A Enter, B Clear, X top, Y nothing")
+    ok(all(p1([R1, b]).kp == 1 << KP_BIT[k] for b, k in ((Y, "C"), (B, 0), (A, "E"), (X, 5))),
+       "Auto + TutorVision profile: R+Y/B/A/X = Clear/0/Enter/5 (the number pad unchanged)")
+    h = p1([L1, UP, A])
+    want.dir(TURN_L)
+    ok(h.kp == 1 << KP_BIT["E"] and h.disc == want.disc, "Auto + TutorVision profile: L+up+A = disc NNE + Enter")
+    ok(all(p1([A, B, X], mode=md).kp == p1([A, B, X], mode=md, prof=None).kp for md in (LAYER, FACE, RSTICK)),
+       "the fixed modes ignore the profile")
     return fails
 
 

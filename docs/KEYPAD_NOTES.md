@@ -72,13 +72,13 @@ keyboard (Start) take the buttons as before while open.
 | Space Spartans | Layer | as usual | all 12 |
 | TRON Deadly Discs | Face-button ring | as usual | throws in 8 directions, 5 = block |
 | AD&D Cloudy Mountain (two CRCs) | Layer | as usual | 8 arrow directions, Clear / 0 / Enter |
-| Map Mazes, Shapes in Space, Geo Graphics (World Book's TutorVision titles, 1.0.8) | Layer | keypad Enter / keypad Clear / top | none |
+| Map Mazes, Shapes in Space, Geo Graphics (World Book's TutorVision titles, 1.0.8) | Layer | keypad Enter / keypad Clear / lower right | none |
 
-**1.0.8: keypad keys on the face buttons.** In World Book's TutorVision titles the side buttons
-leave for the main menu and the keypad's Enter is needed most of the time, so their profiles put
-Enter on A and Clear on B and keep the top side action (the exit) on X (the owner's choice,
-2026-11-12). They have no labels: no manual or screen of theirs was at hand to state the keys'
-functions from. A profile button is 4 bits (`tools/osk.py button_code`; 2 bits until 1.0.7):
+**1.0.8: keypad keys on the face buttons.** In World Book's TutorVision titles the keypad's
+Enter is needed most of the time, and their help screen says "Use any LOWER SIDE KEY to return to
+the Main Menu at any time", so their profiles put Enter on A and Clear on B, and the lower right
+side action on X: X returns to the Main Menu (the owner's choice, 2026-11-12). They have no
+labels: the keypad keys' functions are not stated in anything at hand. A profile button is 4 bits (`tools/osk.py button_code`; 2 bits until 1.0.7):
 0 lower right, 1 lower left, 2 top, 3 nothing, 4 + n the keypad cell n's key (1-9, Clear, 0,
 Enter).
 

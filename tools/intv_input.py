@@ -67,7 +67,7 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
 - Keypad mode Auto (3, the default from step 13): the game profile's mode,
   and in its Layer modes the profile's buttons on A / B / X: each a side
   action or (1.0.8) a keypad key (the TutorVision titles: A Enter, B Clear,
-  X top); Layer without a profile. R + a face button stays the number pad
+  X lower right: a lower side key returns to their Main Menu); Layer without a profile. R + a face button stays the number pad
   (R+Y/B/A = Clear/0/Enter, R+X = 5) whatever the profile; the fixed modes
   (0-2) never use a profile.
 - Keypad mode Face-button ring (1): D-pad = disc; the face buttons are a
@@ -446,14 +446,14 @@ def self_check():
        "ECS attached: the number row is the keypad, as with the ECS off")
     ok(sorted(SYNTH_HID.values()) == list(range(12, 37)), "synthesizer: 25 notes C3-C5")
     # 1.0.8: a profile's keypad keys on the face buttons (the TutorVision titles), in Auto only
-    tv = dict(mode=LAYER, sides=("E", "C", "top"))
+    tv = dict(mode=LAYER, sides=("E", "C", "lr"))
 
     def p1(btns, mode=AUTO, prof=tv):
         k = (1 << 28) | sum(1 << n for n in btns)
         return hands(dict(base, key1=k, key3=0, mode=mode), prof=prof)[0]
     want = Hand()
-    ok(p1([A]).kp == 1 << KP_BIT["E"] and p1([B]).kp == 1 << KP_BIT["C"] and p1([X]).kp == 1 << KP_BIT["top"]
-       and p1([Y]).kp == 0, "Auto + TutorVision profile: A Enter, B Clear, X top, Y nothing")
+    ok(p1([A]).kp == 1 << KP_BIT["E"] and p1([B]).kp == 1 << KP_BIT["C"] and p1([X]).kp == 1 << KP_BIT["lr"]
+       and p1([Y]).kp == 0, "Auto + TutorVision profile: A Enter, B Clear, X lower right, Y nothing")
     ok(all(p1([R1, b]).kp == 1 << KP_BIT[k] for b, k in ((Y, "C"), (B, 0), (A, "E"), (X, 5))),
        "Auto + TutorVision profile: R+Y/B/A/X = Clear/0/Enter/5 (the number pad unchanged)")
     h = p1([L1, UP, A])

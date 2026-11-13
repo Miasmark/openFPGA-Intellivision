@@ -66,8 +66,8 @@ Keypad Mode (Core Settings) chooses how the Pocket's buttons play the hand contr
 
 **Auto (by game)** is the default: the game's profile picks the mode and, where it helps, which
 button is which side action, or puts a keypad key on a button: in the TutorVision titles Map
-Mazes, Shapes in Space and Geo Graphics, A is the keypad's Enter, B its Clear and X the top side
-button (1.0.8). R with a button stays the number pad in every profile. Without a profile, Auto is
+Mazes, Shapes in Space and Geo Graphics, A is the keypad's Enter, B its Clear, and X returns to
+the Main Menu (a lower side key) (1.0.8). R with a button stays the number pad in every profile. Without a profile, Auto is
 Layer.
 
 | Input | Layer (default) |

@@ -42,7 +42,7 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
      model);
   12 (1.0.8) the game profile's buttons, written out by hand with MAME's
      names: in Keypad Mode Auto the TutorVision titles' profile (A Enter, B
-     Clear, X top) and B-17 Bomber's; R's number pad and L's turn with it;
+     Clear, X lower right) and B-17 Bomber's; R's number pad and L's turn with it;
      the fixed modes and Auto without a profile ignore it; a Face-button-ring
      profile uses its ring. Every vector carries the profile (class 7: a
      random one, any button code, on every other vector). Every vector also carries the ECS settings (Auto / On / Off,
@@ -537,18 +537,18 @@ def generate(path):
                     joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24, trig3=cs[4] | cs[5] << 8,
                     mode=i % 4, swap=(i >> 2) & 1, ecs=(i >> 3) % 3, synth=(i >> 4) & 1, ovr=i % 3))
     # 12 (1.0.8) the game profile's buttons, written out by hand with MAME's names: the TutorVision
-    # titles' profile (A Enter, B Clear, X top) and B-17 Bomber's (A top, B lower left, X lower
+    # titles' profile (A Enter, B Clear, X lower right) and B-17 Bomber's (A top, B lower left, X lower
     # right) in Auto; R's number pad and L's turn unchanged; the fixed modes and Auto without a
     # profile ignore it; a Face-button-ring profile uses its ring, not the buttons
-    tvp = dict(mode=0, sides=('E', 'C', 'top'))
+    tvp = dict(mode=0, sides=('E', 'C', 'lr'))
     b17 = dict(mode=0, sides=('top', 'll', 'lr'))
-    ring = dict(mode=1, sides=('E', 'C', 'top'))
+    ring = dict(mode=1, sides=('E', 'C', 'lr'))
     rows12 = [
         ('Auto TV: A = Enter', 3, tvp, ['A'], ['Enter']),
         ('Auto TV: B = Clear', 3, tvp, ['B'], ['Clear']),
-        ('Auto TV: X = Upper', 3, tvp, ['X'], ['Upper']),
+        ('Auto TV: X = Lower-Right', 3, tvp, ['X'], ['Lower-Right']),
         ('Auto TV: Y = nothing', 3, tvp, ['Y'], []),
-        ('Auto TV: A+B+X', 3, tvp, ['A', 'B', 'X'], ['Enter', 'Clear', 'Upper']),
+        ('Auto TV: A+B+X', 3, tvp, ['A', 'B', 'X'], ['Enter', 'Clear', 'Lower-Right']),
         ('Auto TV: R+Y = Clear', 3, tvp, ['R', 'Y'], ['Clear']),
         ('Auto TV: R+B = 0', 3, tvp, ['R', 'B'], ['0']),
         ('Auto TV: R+A = Enter', 3, tvp, ['R', 'A'], ['Enter']),

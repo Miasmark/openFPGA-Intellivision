@@ -99,10 +99,10 @@ does too: Full is a superset of INTV88, and LMC runs on it (it never touches $20
 
 ### 2.4 Controls (1.0.8)
 
-In Map Mazes, Shapes in Space and Geo Graphics the side buttons leave for the main menu and the
-keypad's Enter is needed most of the time. Under Keypad Mode Auto their game profiles put the
-keypad's Enter on A and Clear on B, and keep the top side action (the exit) on X; Y and R's number
-pad as everywhere (KEYPAD_NOTES.md 3). A fixed Keypad Mode ignores the profiles. Little Man
+In Map Mazes, Shapes in Space and Geo Graphics the keypad's Enter is needed most of the time, and
+"any LOWER SIDE KEY" returns to the Main Menu (their help screen). Under Keypad Mode Auto their
+game profiles put the keypad's Enter on A and Clear on B, and the lower right side action on X:
+X returns to the Main Menu (a lower side key); Y and R's number pad as everywhere (KEYPAD_NOTES.md 3). A fixed Keypad Mode ignores the profiles. Little Man
 Computer has no profile.
 
 ## 3 The rules the mode changes

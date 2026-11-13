@@ -351,12 +351,13 @@ PROFILES = [
                  6: "SHOOT RIGHT", 7: "SHOOT DN-LEFT", 8: "SHOOT DOWN", 9: "SHOOT DN-RIGHT",
                  "C": "PICK UP", 0: "COUNT ARROWS", "E": "EXIT"}),
     # 1.0.8: World Book's TutorVision titles (the owner's choice, 2026-11-12: Enter is needed most
-    # of the time, and the side buttons leave for the main menu): A = Enter, B = Clear, X the top
-    # side action (the exit), Y as everywhere (nothing; R + Y Clear). No labels: no manual or screen
-    # of theirs is at hand to state the keys' functions from.
-    dict(name="Map Mazes (TutorVision)", crcs=[0x59F5FA32], mode=0, sides=("E", "C", "top"), labels={}),
-    dict(name="Shapes in Space (TutorVision)", crcs=[0x714ECD51], mode=0, sides=("E", "C", "top"), labels={}),
-    dict(name="Geo Graphics (TutorVision)", crcs=[0x10BBDB07], mode=0, sides=("E", "C", "top"), labels={}),
+    # of the time; their help screen: "Use any LOWER SIDE KEY to return to the Main Menu at any
+    # time"): A = Enter, B = Clear, X the lower right side action (back to the Main Menu), Y as
+    # everywhere (nothing; R + Y Clear). No labels: the keypad keys' functions are not stated in
+    # anything at hand.
+    dict(name="Map Mazes (TutorVision)", crcs=[0x59F5FA32], mode=0, sides=("E", "C", "lr"), labels={}),
+    dict(name="Shapes in Space (TutorVision)", crcs=[0x714ECD51], mode=0, sides=("E", "C", "lr"), labels={}),
+    dict(name="Geo Graphics (TutorVision)", crcs=[0x10BBDB07], mode=0, sides=("E", "C", "lr"), labels={}),
 ]
 # 1.0.7: the overlays' key functions for 63 more games (tools/osk_profiles.py), Layer mode and the
 # usual side actions
@@ -589,9 +590,9 @@ def self_check():
         chk(r >> (12 * LBITS + 12) == p["mode"] and got == tuple(p["sides"]) and r < 1 << 122,
             "record of %s: mode %d buttons %r" % (p["name"], r >> (12 * LBITS + 12), got))
     wb = [p for p in PROFILES if p["name"].endswith("(TutorVision)")]
-    chk(len(wb) == 3 and all(tuple(p["sides"]) == ("E", "C", "top") and p["mode"] == 0 for p in wb)
+    chk(len(wb) == 3 and all(tuple(p["sides"]) == ("E", "C", "lr") and p["mode"] == 0 for p in wb)
         and sorted(c for p in wb for c in p["crcs"]) == [0x10BBDB07, 0x59F5FA32, 0x714ECD51],
-        "the three TutorVision titles: Layer, A Enter, B Clear, X top")
+        "the three TutorVision titles: Layer, A Enter, B Clear, X lower right")
     # the state machine
     T = 1 << 28
     pl = Player()

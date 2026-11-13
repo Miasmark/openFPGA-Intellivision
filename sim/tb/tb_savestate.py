@@ -1043,7 +1043,8 @@ PLANTS = [
     # first and the image stops there, so either counts); the ECS RAM not restored (ECS BASIC's
     # typed line lost)
     ('ss_ecs_unchecked', 'intv_ss_ctl.sv',
-     [("4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, 1'b0};")],
+     [("hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, voice_flag, ecs_flag};",
+       "hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, voice_flag, 1'b0};")],
      'ecsavail', 'psgtest', r' (E: (FAIL load|loads |state set)|S: blob \S+: \[.header flags = \$00000000, want \$00000001)'),
     # the step-9 review: the header's ECS ROM CRC not checked (an ECS state loads into a core with
     # another ECS ROM: the X run)
@@ -1063,7 +1064,8 @@ PLANTS = [
     # accumulator not restored (the voice's samples after a load move); the quiet point not
     # waiting for a voice sample (a save in the middle of one: the chip's sequencer state lost)
     ('ss_voice_unchecked', 'intv_ss_ctl.sv',
-     [("4'(SS_H_FLAGS):      hdr_exp = {30'd0, voice_flag, ecs_flag};", "4'(SS_H_FLAGS):      hdr_exp = {31'd0, ecs_flag};")],
+     [("hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, voice_flag, ecs_flag};",
+       "hdr_exp = {28'd0, tv_flag && tv_full, tv_flag, 1'b0, ecs_flag};")],
      'voicetest', 'psgtest', r' (V: (FAIL load|loads |state set)|S: blob \S+: \[.header flags = \$00000000, want \$00000002)'),
     ('ss_voice_acc_lost', 'intv_voice.sv', [("if (ss_w20) acc <= ss_wdata;", "if (ss_w20) acc <= 32'd0;")],
      'voicetest', 'psgtest', AFTER),

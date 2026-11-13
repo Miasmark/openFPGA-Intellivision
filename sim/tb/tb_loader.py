@@ -231,7 +231,9 @@ def expect(img, tab, bios):
     cfgslot = (2 << 2) if fcfg is not None else 0
     iv = not img.get('noivoice')
     # 1.0.8: loader slots 6 and 7, wbexec.bin and wbgrom.bin (the owner's, when present)
-    tvs = (2 << 12 if bios.get('wbexec') else 0) | (2 << 14 if bios.get('wbgrom') else 0)
+    # (img['notv']: the files not sent, as before 1.0.8: a case whose host timing is pinned)
+    tv_files = {} if img.get('notv') else bios
+    tvs = (2 << 12 if tv_files.get('wbexec') else 0) | (2 << 14 if tv_files.get('wbgrom') else 0)
     slots = cslot | cfgslot | 2 << 4 | 2 << 6 | (2 << 8 if bios.get('ecs') else 0) | (2 << 10 if iv else 0) | tvs
     if img.get('late'):
         # the held command answered after the map: a read's bytes never reach the loader
@@ -253,12 +255,12 @@ def expect(img, tab, bios):
     ex = bios['exec']
     L.append('exec %08X' % crc32(b''.join(struct.pack('>H', ((ex[i] << 8) | ex[i + 1]) & 0x3FF)
                                           for i in range(0, 8192, 2))))
-    if bios.get('wbexec'):
+    if tv_files.get('wbexec'):
         wx = bios['wbexec']
         L.append('wbexec %08X' % crc32(b''.join(struct.pack('>H', ((wx[i] << 8) | wx[i + 1]) & 0x3FF)
                                                 for i in range(8192, 16384, 2))))
     L.append('grom %08X' % crc32(bios['grom']))
-    if bios.get('wbgrom'):
+    if tv_files.get('wbgrom'):
         L.append('wbgrom %08X' % crc32(bios['wbgrom']))
     L.append(('ivoice %08X' % crc32(bios['ivoice'])) if iv else 'ivoice *')
     mi = cf.MapCart(ld)
@@ -437,7 +439,7 @@ def pocket_paths(img, data, tag=''):
 
 def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cpath=None):
     out = os.path.join(work, 'out_%s.txt' % img['crc'])
-    args = [binary, '+out=' + out, '+seed=%d' % (k + 1)]
+    args = [binary, '+out=' + out, '+seed=%d' % img.get('seed', k + 1)]   # (1.0.8: a pinned seed)
     if cpath:
         args.append('+cfg=' + cpath)
     cart_p, cfg_p = pocket_paths(img, img['data'])
@@ -476,7 +478,8 @@ def run_one(binary, img, path, bios_paths, work, k, timeout=1500, path2=None, cp
             '+pad=%02X' % img.get('pad', (0xA5, 0x00, 0xFF, 0x5A)[k % 4]), '+dtfirst=%d' % img.get('dtfirst', k % 2),
             '+gap=%d' % img.get('gap', 40 + 7 * (k % 5)), '+jitter=%d' % img.get('jitter', 1 + 13 * (k % 3))]
     for key in ('exec', 'grom', 'ecs', 'ivoice', 'wbexec', 'wbgrom'):
-        if bios_paths.get(key) and not (key == 'ivoice' and img.get('noivoice')):
+        if bios_paths.get(key) and not (key == 'ivoice' and img.get('noivoice')) \
+                and not (key in ('wbexec', 'wbgrom') and img.get('notv')):
             args.append('+%s=%s' % (key, bios_paths[key]))
     t0 = time.time()
     r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
@@ -558,7 +561,7 @@ PLANTS = [
     ('ss_no_sel', 'intv_cart.sv', ".ss_we0(ss_hit && ss_addr[7:0] == 8'd5)", ".ss_we0(1'b0)",
      'state restore drops the selects of ranges 0-7'),
     ('no_size_check', 'intv_loader.sv',
-     "&& (crc_q[15:0] == 16'd0 || {1'b0, crc_q[15:0]} == size256)) begin", ") begin",
+     "&& (crc_q[14:0] == 15'd0 || {2'b0, crc_q[14:0]} == size256)) begin", ") begin",
      'a table hit whatever the image size'),
     ('len_xcheck_off', 'apf_datatable.sv',
      "len_chk  <= !req_seen ? 2'd0 : dt_q == req_len ? 2'd1 : 2'd2;", "len_chk  <= req_seen ? 2'd1 : 2'd0;",
@@ -892,7 +895,12 @@ def main():
                 # grew moved RTRDLYRL and RTRHOLD onto draws where fetch_before_rtr goes unseen
                 imgs.append(dict(s8['zoo1'], name='cfg fetch: Ready to run acked late, then a reload (pinned timing)',
                                  crc='RTRDLYRLP', rtrdelay=600000, reload=byname['synthetic:b'],
-                                 cfgclear2=True, dtfirst=0, gap=47, jitter=1, pad=0xA5))
+                                 cfgclear2=True, dtfirst=0, gap=47, jitter=1, pad=0xA5, seed=43, notv=True))
+                # (1.0.8) and the rest of 1.0.7's host sequence: its bench seed (+seed, k + 1 from its
+                # place in the list; 1.0.7's plant run had it at k = 42, the TutorVision cases moved it
+                # to 46) and no TutorVision files streamed (slots 6 and 7 move the load's timing). In
+                # gate30 fetch_before_rtr went unseen; seed 43 alone did not bring it back, seed 43
+                # without the TutorVision files did
         # build step 9: the ECS Auto rule's cartridges (sim/testroms/step9): the ECS flag and the
         # $4800 hook (ecssound), the hook alone (ecshook), attached (ecsavail), $4000 mapped (cart4000),
         # the ECS incompatible tags (ecsoffcfg, ecsoffrom: off)

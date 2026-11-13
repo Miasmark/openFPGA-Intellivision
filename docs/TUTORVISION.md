@@ -256,7 +256,9 @@ So for the GRAM rules two independent implementations agree; the rest rests on [
 15,052 ALMs (81 %; 1.0.7's trial: 14,775, so +277), 172 RAM blocks (143, +29: the GRAM and
 System RAM blocks doubled, the WBEXEC 4K x 10, the font's GROM with two ports, the save-state
 shadow 4,096 -> 5,952 words), 25 DSP. Timing as 1.0.7: `clk_sys` worst setup +0.754 ns, worst hold
-+0.039 ns, no negative slack anywhere; FIT_CROSSING pass.
++0.039 ns, no negative slack anywhere; FIT_CROSSING pass. Test build 2 (commit 00c5a1d, the
+TutorVision titles' button profiles, 122-bit profile records): 15,029 ALMs, 173 RAM blocks,
+`clk_sys` worst setup +0.757 ns, worst hold +0.044 ns; FIT_CROSSING pass.
 
 ## 6 Mode off
 

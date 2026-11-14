@@ -95,7 +95,10 @@ game code reads:
 
 Access logs (model, every bus access): the original read nothing at `$6FCA-$6FFF` in six runs
 (three courts, singles and doubles, page fix above), and in a jzIntv run of the original with
-memory attributes logged, its last code in the `$E000` segment ends at `$EF59`. In the
+memory attributes logged, its last code in the `$E000` segment ends at `$EF59`. Over a long
+original two-player singles game in the model (60,000 frames, ECS off: 17 games, a 5-7 set and the
+start of the next), nothing at all touched `$6FCA-$6FFF` or `$EF5A-$EFFF`, and `$0178`/`$0179`
+were only cleared at start-up. In the
 patched game's full four-player match (below) the only accesses to `$EF5A-$EFFF` and
 `$6FE0-$6FFF` were the patch's own code, and `$0178`/`$0179` were written only by the disc
 handler's claim (`$D038`) and read only by the handlers (`$D030`, `$DD50`) and the
@@ -131,11 +134,14 @@ Model (tools/intv_system.py, with the ECS's hand controllers 3 and 4 added on th
   hand-controller call for controllers 3 or 4 outside their own input once the held-disc fix was in.
 - **Four humans, ECS Auto with the `.cfg`** (ECS attached, no ECS menu): placed, mode 0, first
   game played.
-- **Two players, unchanged**: singles and computer doubles (keypad 0), ECS off (against the
-  original) and ECS on (against the page-fixed-only image): same screens and the same course of
-  play (positioning, points, games, faults). The exact frames of later points and the computer
-  players' moves drift by a few frames, as the game's play depends on CPU timing and the patch
-  adds a few dozen cycles per main-loop pass. ECS Auto: singles plays the same way.
+- **Two players, unchanged**: singles and computer doubles (keypad 0), with the ECS off, on and
+  on Auto, played by the same serving script against the original (ECS off) and the
+  page-fixed-only image (ECS on): the same screens and the same kind of play (positioning,
+  points, faults and games counted as usual). Which serves go in, and so the scores and the frames
+  of later points, differ, because the game's play depends on CPU timing: the page fix alone (a few
+  cycles at the title) already changes singles against the original exactly as the whole patch
+  does (ECS off, page-fixed and patched runs score the same points on the same frames). With the
+  ECS on, the per-pass work for controllers 3 and 4 shifts the timing a little more.
 
 jzIntv (black box, its own ECS emulation, `-s1`; four hand controllers bound to keys, driven under
 Xvfb): ECS on: the ECS menu, the game's title, all four players placed with controllers 1-4, points,

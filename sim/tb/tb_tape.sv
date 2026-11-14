@@ -12,6 +12,8 @@
 //   L c w0 w1   a state load before CPU cycle c (word 0, then word 1)
 //   Z           wait until the engine is idle
 //   D           the whole store through port B                          -> D i byte (16,384 lines)
+//   H v         (1.0.9) the save chooser (Tape: next load) = v
+// The tape line's pulse (1.0.9, tl_go, at a load's first byte read) logs T k n after that read's Q.
 // A CPU cycle is CE clocks (one ce; cyc counts them). A cycle already past is a FAIL (the driver
 // leaves room for the engine). IDLE (the rewind's motor-off time) is TB_IDLE.
 //
@@ -34,12 +36,16 @@ module tb_tape;
     logic [15:0] ss_addr = 16'd0;
     logic        ss_we = 1'b0;
     logic [31:0] ss_wdata = 32'd0, ss_rdata;
+    logic [2:0]  choose = 3'd0;
+    logic        tl_go;
+    logic [3:0]  tl_k;
+    logic [6:0]  tl_n;
 
 `ifndef TB_IDLE
 `define TB_IDLE 3000
 `endif
     intv_tape #(.SS_ID(8'h22), .IDLE(`TB_IDLE)) dut (
-        .clk, .mreset, .ce, .on(1'b1), .a, .rd, .wr, .wdata, .q, .clr, .walk, .busy,
+        .clk, .mreset, .ce, .on(1'b1), .a, .rd, .wr, .wdata, .q, .clr, .walk, .busy, .choose, .tl_go, .tl_k, .tl_n,
         .fetch(1'b0), .hcnt(9'd0), .vcnt(9'd0), .instant(1'b0), .rom_ok(1'b0), .ovr_hit(), .ovr_q(),
         .nv_addr, .nv_we, .nv_wdata, .nv_q, .ss_addr, .ss_we, .ss_wdata, .ss_rdata);
 
@@ -54,6 +60,9 @@ module tb_tape;
 
     logic [7:0] file_b [16384];
     int fo, fd, n = 0;
+
+    always @(posedge clk)
+        if (tl_go) $fdisplay(fo, "T %0d %0d", tl_k, tl_n);
 
     int late = 0;
     // to the clock whose ce is CPU cycle c (cyc == c while it lasts)
@@ -113,6 +122,7 @@ module tb_tape;
                 end
                 "K": begin walk = 1'b1; @(negedge clk); walk = 1'b0; end
                 "C": begin clr = 1'b1; @(negedge clk); clr = 1'b0; end
+                "H": begin void'($fscanf(fd, "%d", cnt)); choose = 3'(cnt); end
                 "M": begin
                     void'($fscanf(fd, "%d", cnt));
                     repeat (cnt) @(negedge clk);

@@ -23,6 +23,8 @@
 //   +ekeys=F            scripted ECS keyboard: lines "k K", the pressed
 //                       switches K (hex, bit 8 row + column) from frame k on
 //   +synth=1            the music synthesizer instead of the keyboard
+//   +epads=F            (1.0.9) scripted ECS hand controllers: lines "k AABB",
+//                       controller 4 (port A) and 3 (port B) from frame k on
 //   +voice=N            the Intellivoice (step 10) as the menu's: 0 Auto, 1 On,
 //                       2 Off (default); +ivoice=F its ROM (slot 5); +vlevel=N
 //                       (0-4, default 4) +vdac=1 (the chip's 7-bit DAC sound)
@@ -248,6 +250,17 @@ module tb_system;
             if (cyc >= key_c[i]) kpads = key_v[i];
     end
 
+    // +epads (1.0.9): the ECS's hand controllers 4 (port A) / 3 (port B) by model cycle
+    int          nep = 0;
+    longint      ep_c[256];
+    logic [15:0] ep_v[256];
+    logic [15:0] epads;
+    always_comb begin
+        epads = 16'hFFFF;
+        for (int i = 0; i < nep; i++)
+            if (cyc >= ep_c[i]) epads = ep_v[i];
+    end
+
     // +ekeys: the ECS keyboard's switches by model cycle
     int          nek = 0;
     longint      ek_c[512];
@@ -262,8 +275,9 @@ module tb_system;
     intv_machine dut (
         .clk, .mreset, .ce(ce_cpu), .ce_pix(ce_stic), .live, .hcnt, .vcnt,
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en, .tv(tv_l), .tv_bq(bq_l),
-        .pad_r(kpads[15:8]), .pad_l(kpads[7:0]),
-        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(instant), .ecs_on, .ecs_full(efull), .ecs_pg,
+        .pad_r(kpads[15:8]), .pad_l(kpads[7:0]), .ecs_pa(epads[15:8]), .ecs_pb(epads[7:0]),
+        .ecs_mode, .ecs_keys(ekeys), .ecs_synth(synth), .tape_instant(instant), .tape_choose(3'd0), .tl_go(), .tl_k(), .tl_n(),
+        .ecs_on, .ecs_full(efull), .ecs_pg,
         .cart_req(c_req), .cart_we(c_we), .cart_addr(c_addr), .cart_wdata(c_wdata),
         .cart_ack(c_ack), .cart_rdata(c_rdata), .cart_hit(c_hit),
         .voice_mode, .voice_dac7(vdac), .voice_level(vlevel), .ecs_level(elevel), .voice_on, .voice_busy, .voice_late,
@@ -674,6 +688,20 @@ module tb_system;
                 end
                 if (kf != 0) $fclose(kf);
                 $fdisplay(fd, "L keys %0d", nkeys);
+            end
+            if ($value$plusargs("epads=%s", keys_f)) begin
+                int     kf;
+                longint k;
+                logic [15:0] v;
+                kf = $fopen(keys_f, "r");
+                if (kf == 0) fail($sformatf("cannot open %s", keys_f));
+                while (kf != 0 && nep < 256 && $fscanf(kf, "%d %h", k, v) == 2) begin
+                    ep_c[nep] = k * FRAME;
+                    ep_v[nep] = v;
+                    nep++;
+                end
+                if (kf != 0) $fclose(kf);
+                $fdisplay(fd, "L epads %0d", nep);
             end
             if ($value$plusargs("ekeys=%s", keys_f)) begin
                 int     kf;

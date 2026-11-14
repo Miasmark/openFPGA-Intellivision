@@ -37,8 +37,9 @@ Its timing was measured against a real console.
   from J. Zbiciak's reverse-engineering notes and checked against jzIntv; **never checked on a
   unit** ([docs/TUTORVISION.md](docs/TUTORVISION.md)). Off unless a cartridge asks for it.
 - **Save states, sleep and a menu pause.**
-- **Controls:** keypad modes for the Pocket's buttons, an on-screen keypad, game profiles, two
-  players (a docked controller) and Swap Controllers.
+- **Controls:** keypad modes for the Pocket's buttons, an on-screen keypad, game profiles, up to
+  four players (docked controllers; players 3 and 4 on the ECS's hand-controller ports, 1.0.9) and
+  Swap Controllers.
 
 ## Setup
 
@@ -102,6 +103,20 @@ Layer.
 - It is player 1's: it takes that controller's buttons while open. It and the keypad never open
   together. With the ECS off, or the ECS Keyboard setting on the synthesizer, Start does nothing.
 
+**Players 3 and 4 (1.0.9).**
+- The ECS has two more hand-controller ports. Docked controllers 3 and 4 are players 3 and 4
+  there, read only while the ECS is fully on (ECS games under Auto, or ECS set to On); a game must
+  read them itself (World Cup Football does, for four players).
+- **Swap Controllers** puts the Pocket's own buttons in seat 1, 2, 3 or 4: the Pocket takes that
+  player's port and the controller that had it moves to seat 1 (Player 2 is the old swap). With
+  no docked controller, set the game up as player 1, then switch the Pocket to its player; the
+  setting takes effect at once.
+- **Select** and **Start** stay the Pocket's: Select's keypad presses the keys of the player the
+  Pocket is (player 3's keypad with Player 3), Start's ECS keyboard is the ECS's (one keyboard for
+  everyone). Docked controllers 3 and 4 have no on-screen keypad (use their own buttons in
+  Keypad Mode's layout).
+- A USB keyboard in the Dock takes the place of controller 3: then there is no player 3.
+
 **ECS cassette.**
 - Each ECS game has its own tape, kept by the Pocket as a `.ecs` file beside the game's saves (in
   jzIntv's `.ecs` format: a jzIntv tape file loads as a one-program tape). Games without the ECS
@@ -110,7 +125,12 @@ Layer.
   `CSAV NAME`) replaces the older copy, and when the tape is full the oldest saves go. `CLOD NAME`
   finds a program by its name; `CLOD` alone loads the newest. A game's save made of several parts
   (Game Factory) keeps its parts together and in order. Games that do not name their saves load
-  the newest one.
+  the newest one, or the one **Tape: next load** picks (1.0.9, below).
+- **Tape: next load** (Core Settings): Newest, 2nd ... 8th. Each load starts at that save (the
+  oldest when the tape has fewer); `CLOD NAME` searches from there on. At the start of a load the
+  picture shows **TAPE: SAVE k OF n** for 2 seconds, when the setting is not Newest or the tape
+  holds more than one save. It is back on Newest each time the core starts, and it never changes
+  where a save goes: a new save is always the newest.
 - At ECS BASIC's SET and GO prompts press a hand-controller button (A, say; the ECS ROM waits for
   the hand controller there, not the keyboard: close the on-screen keyboard first). The tape rewinds
   by itself, and loads at about twice a real tape's speed.
@@ -131,7 +151,7 @@ Layer.
 |---|---|
 | Border | Show (168 x 210) or Hide (the 160 x 192 picture only) |
 | Keypad Mode | Auto (by game), Layer, Face-button ring, Right stick |
-| Swap Controllers | player 1 on the left (default) or right controller |
+| Swap Controllers | the Pocket's seat: Player 1 (left, default), 2 (right), 3 or 4 (the ECS's ports) |
 | Pause in Menu | On / Off |
 | ECS | Auto (by cartridge), On, Off (taken at the next reset or load) |
 | ECS Keyboard | Computer keyboard, Music synthesizer (two rows: Z-M and Q-I) |
@@ -139,9 +159,9 @@ Layer.
 | Voice Level, ECS Level | the Intellivoice's and the ECS sound chip's volume |
 | Voice Sound | Clean, Chip DAC (7-bit) |
 | Tape speed | Normal (the ECS's own pace), Instant |
+| Tape: next load | Newest, 2nd ... 8th: the save the next load starts at (not kept) |
 | Erase ECS tape | blanks the game's ECS tape (its `.ecs` file) |
-| TutorVision | Auto (by cartridge), Off, INTV88, Full (WBEXEC) (experimental; taken at the next reset or load) |
-| INTV88 Bus Timing | As the 2609, STIC 1A (12 a frame): an unmeasured guess at the INTV88's bus requests |
+| TutorVision | Auto (by cartridge), Off, INTV88, Full (WBEXEC), INTV88 12-request, Full 12-request (experimental; taken at the next reset or load; "12-request": an unmeasured guess at the INTV88's bus requests, the STIC 1A's 12 a frame) |
 | Font | Original, TutorVision (`wbgrom.bin`) |
 
 ## Known limits
@@ -156,7 +176,9 @@ Layer.
 - **No PAL machine:** the PAL console's timing has not been measured.
 - **ECS printer:** its output is discarded.
 - **Unnamed tape saves:** games that do not name their saves (World Series Major League Baseball,
-  Game Factory) load the newest save on their tape.
+  Game Factory) load the newest save unless Tape: next load picks another. The core marks a save's
+  second and later parts (Game Factory's) with one more lead-in byte, which the ECS ROM and jzIntv
+  read as usual; on a tape from jzIntv or from 1.0.5-1.0.8 every part counts as a save of its own.
 - **The music synthesizer needs the Dock:** it plays only from a USB keyboard there. Typing games
   (ECS BASIC, Game Factory, Scooby Doo's Maze Chase, Super NFL Football) work with the on-screen
   ECS keyboard, one key at a time; a USB keyboard on the Dock is quicker.

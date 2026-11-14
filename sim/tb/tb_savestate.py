@@ -1057,7 +1057,8 @@ PLANTS = [
      'ecsbasic', 'psgtest', AFTER),
     # 1.0.6: a state made inside Tape speed Instant's loop: its bits not restored
     ('ss_tape_loop_lost', 'intv_tape.sv',
-     [("            {fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];\n", "\n")],
+     [("            {cont, fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[27:20];\n",
+       "            cont <= ss_wdata[27];\n")],
      'ecstape', 'psgtest', AFTER),
     # build step 10: the header's voice flag not checked (a state with the Intellivoice loads into a
     # core with it off: the V run, or the S run's blob check first); the sample enable's

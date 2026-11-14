@@ -56,6 +56,8 @@ module intv_core #(
 
     input  wire logic [7:0]  pad_r,
     input  wire logic [7:0]  pad_l,
+    input  wire logic [7:0]  ecs_pa,          // 1.0.9: the ECS's hand controllers 4 (port A) / 3 (port B), $FF: none
+    input  wire logic [7:0]  ecs_pb,
 
     // the ECS (build step 9): the menu's override (0 Auto, 1 On, 2 Off; taken
     // at the next machine reset), the keyboard from intv_input
@@ -63,6 +65,10 @@ module intv_core #(
     input  wire logic [63:0] ecs_keys,
     input  wire logic        ecs_synth,
     input  wire logic        tape_instant,    // Tape speed: Instant (1.0.6)
+    input  wire logic [2:0]  tape_choose,     // Tape: next load (1.0.9)
+    output logic             tl_go,           // a load's first byte: show "TAPE: SAVE k OF n"
+    output logic [3:0]       tl_k,
+    output logic [6:0]       tl_n,
     output logic             ecs_full,        // the ECS fully on, mode on (intv_input's key routing)
     // the Intellivoice (build step 10): the menu's override (0 Auto, 1 On, 2 Off; taken at the next
     // machine reset), its sound (7-bit DAC or clean) and level
@@ -318,8 +324,8 @@ module intv_core #(
         .clk(clk), .mreset(machine_reset), .ce(ce_cpu), .ce_pix(ce_stic), .live(live),
         .hcnt(hcnt), .vcnt(vcnt),
         .cfg_hlt_imm(1'b0), .cfg_sdbd_r6_mame(1'b0), .busrq_en(1'b1), .tv(tv_l), .tv_bq(bq_l),
-        .pad_r(pad_r), .pad_l(pad_l),
-        .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .tape_instant(tape_instant), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
+        .pad_r(pad_r), .pad_l(pad_l), .ecs_pa(ecs_pa), .ecs_pb(ecs_pb),
+        .ecs_mode(ecs_mode), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .tape_instant(tape_instant), .tape_choose(tape_choose), .tl_go(tl_go), .tl_k(tl_k), .tl_n(tl_n), .ecs_on(ecs_on), .ecs_full(ecs_full), .ecs_pg(ecs_pg),
         .voice_mode(voice_mode), .voice_dac7(voice_dac7), .voice_level(voice_level), .voice_on(voice_on), .ecs_level(ecs_level),
         .voice_busy(voice_busy), .voice_late(voice_late), .ivoice_addr(ivoice_addr), .ivoice_q(ivoice_q),
         .jlp_mode(jlp_mode), .jlp_sect(jlp_sect), .jlp_on(jlp_on), .jlp_busy(jlp_busy), .jlp_eng_busy(jlp_eng_busy),

@@ -331,11 +331,11 @@ def prof_word(prof):
     return 0 if prof is None else 1 << 14 | prof['mode'] << 12 | osk.sides_code(prof['sides'])
 
 
-def vec_line(cls, v, r, l, keys=0):
-    return '%x %08x %08x %08x %08x %08x %08x %04x %x %x %x %x %x %02x %02x %08x %08x %04x' % (
+def vec_line(cls, v, r, l, keys=0, epads=0xFFFF):
+    return '%x %08x %08x %08x %08x %08x %08x %04x %x %x %x %x %x %02x %02x %08x %08x %04x %08x %08x %04x' % (
         cls, v['key1'], v['joy1'], v['key2'], v['joy2'], v['key3'], v['joy3'], v['trig3'], v['mode'], v['swap'],
         v.get('ovr', 0), v.get('synth', 0), v.get('ecs', 0), r, l, keys >> 32, keys & 0xFFFFFFFF,
-        prof_word(v.get('prof')))
+        prof_word(v.get('prof')), v.get('key4', 0), v.get('joy4', 0x80808080), epads)
 
 
 def tear_line(v, r, l):
@@ -344,9 +344,9 @@ def tear_line(v, r, l):
 
 
 def vec(key1=0, joy1=0x80808080, key2=0, joy2=0x80808080, key3=0, joy3=0, trig3=0, mode=0, swap=0, ovr=0,
-        synth=0, ecs=0, prof=None):
+        synth=0, ecs=0, prof=None, key4=0, joy4=0x80808080):
     return dict(key1=key1, joy1=joy1, key2=key2, joy2=joy2, key3=key3, joy3=joy3, trig3=trig3, mode=mode, swap=swap,
-                ovr=ovr, synth=synth, ecs=ecs, prof=prof)
+                ovr=ovr, synth=synth, ecs=ecs, prof=prof, key4=key4, joy4=joy4)
 
 
 def generate(path):
@@ -355,9 +355,13 @@ def generate(path):
     problems = []
     counts = {}
 
-    def add(cls, v, want=None, want_keys=None):
-        r, l = m.ports(v, prof=v.get('prof'))
-        mr, ml = m.ports(v, mame=True, prof=v.get('prof'))
+    def add(cls, v, want=None, want_keys=None, want_e=None):
+        r, l, ea, eb = m.ports4(v, prof=v.get('prof'))
+        mr, ml, mea, meb = m.ports4(v, mame=True, prof=v.get('prof'))
+        if (ea, eb) != (mea, meb):
+            problems.append(f'class {cls}: model ECS ports {ea:02X} {eb:02X} != MAME read_ctrl {mea:02X} {meb:02X} for {v}')
+        if want_e is not None and want_e != (ea, eb):
+            problems.append(f'class {cls}: model ECS ports {ea:02X} {eb:02X} != expected {want_e[0]:02X} {want_e[1]:02X} for {v}')
         k = m.ecs_keys(v)
         if (r, l) != (mr, ml):
             problems.append(f'class {cls}: model {r:02X} {l:02X} != MAME read_ctrl {mr:02X} {ml:02X} for {v}')
@@ -366,7 +370,8 @@ def generate(path):
         if want_keys is not None and want_keys != k:
             problems.append(f'class {cls}: model ECS keys {k:016X} != expected {want_keys:016X} for {v}')
         e = want if want is not None else (r, l)
-        lines.append(vec_line(cls, v, *e, keys=want_keys if want_keys is not None else k))
+        we = want_e if want_e is not None else (ea, eb)
+        lines.append(vec_line(cls, v, *e, keys=want_keys if want_keys is not None else k, epads=we[0] << 8 | we[1]))
         counts[cls] = counts.get(cls, 0) + 1
 
     def rkey(t=None):
@@ -581,6 +586,35 @@ def generate(path):
                     add(12, v, e)
                     if len(problems) > before:
                         problems[-1] = f'profile "{desc}" type {t} p{p2 + 1} swap {swap}: ' + problems[-1]
+    # 13 (1.0.9): players 3 / 4 on the ECS's ports and Swap Controllers' four seats, written out:
+    # each controller presses one button of its own, so its byte shows where it went
+    one = {1: ['A'], 2: ['B'], 3: ['X'], 4: ['up']}
+    want1 = {n: mame_read_ctrl({1: ['Lower-Right'], 2: ['Lower-Left'], 3: ['Upper'], 4: [DIRS[0]]}[n]) for n in one}
+    seat_of = {0: (1, 2, 3, 4), 1: (2, 1, 3, 4), 2: (3, 2, 1, 4), 3: (4, 2, 3, 1)}
+    for seat in range(4):
+        for ecs in (0, 1, 2):
+            for t in (1, 2, 3):
+                v = vec(key1=keys(*one[1], t=t), key2=keys(*one[2], t=t), key3=keys(*one[3], t=t), joy3=0x80808080,
+                        key4=keys(*one[4], t=t), swap=seat, ecs=ecs)
+                pl = seat_of[seat]
+                we = (want1[pl[3]], want1[pl[2]]) if ecs == 1 else (0xFF, 0xFF)
+                before = len(problems)
+                add(13, v, (want1[pl[1]], want1[pl[0]]), want_e=we)
+                if len(problems) > before:
+                    problems[-1] = f'seat {seat} ecs {ecs} type {t}: ' + problems[-1]
+    # the USB keyboard in slot 3: no player 3 (its port reads $FF), player 4 still there
+    for seat in range(4):
+        v = vec(key1=keys('A'), key3=4 << 28, joy3=0x59, key4=keys('up'), swap=seat, ecs=1)
+        add(13, v)
+    # random: four controllers of any type, any seat, mode, ECS mode, profile
+    for i in range(1200):
+        k3 = rkey() if i % 5 else (4 << 28) | rng.getrandbits(8)
+        pr = rng.choice((None, None, tvp, b17))
+        v = vec(key1=rkey(), joy1=rng.getrandbits(32), key2=rkey() if i % 3 else 0, joy2=rng.getrandbits(32),
+                key3=k3, joy3=rng.getrandbits(32), trig3=rng.getrandbits(16), key4=rkey() if i % 4 else 0,
+                joy4=rng.getrandbits(32), mode=rng.getrandbits(2), swap=rng.getrandbits(2), ecs=rng.choice((0, 1, 1, 2)),
+                prof=pr)
+        add(13, v)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
@@ -663,8 +697,8 @@ def generate_tear(path, groups=2000):
     return kinds
 
 
-SKEW_DECL = ("    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;\n",
-             "    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;\n"
+SKEW_DECL = ("    localparam int W = 8 * 32 + 16 + 2 + 2 + 3;\n",
+             "    localparam int W = 8 * 32 + 16 + 2 + 2 + 3;\n"
              "    logic [W-1:0] hold_v;      // tb_input skew build: the clk side's view of hold_74\n"
              "    logic         req_v;       // and of req_74, driven by tb_input.sv\n")
 CLK_BLOCK = re.compile(r'(    always_ff @\(posedge clk\) begin\n)(.*?)(\n    end\n)', re.S)
@@ -722,7 +756,14 @@ def run(binary, vectors, tear, log):
 # Planted faults: (name, file, from, to), or (name, file, [(from, to), ...], None); each must make the
 # bench fail.
 PLANTS = [
-    ('swap_ignored', 'intv_input.sv', 'pad_l <= ~(sw ? p2 : p1);', 'pad_l <= ~p1;'),
+    ('swap_ignored', 'intv_input.sv', 'pad_l <= ~s1;', 'pad_l <= ~p1;'),
+    # 1.0.9: players 3 / 4 and the four seats
+    ('ecs_ports_swapped', 'intv_input.sv', "ecs_pb <= ecs_full ? ~s3 : 8'hFF;", "ecs_pb <= ecs_full ? ~s4 : 8'hFF;"),
+    ('ecs_ports_always', 'intv_input.sv', "ecs_pa <= ecs_full ? ~s4 : 8'hFF;", "ecs_pa <= ~s4;"),
+    ('kbd_as_player3', 'intv_input.sv', "p3 = player(k3, j3, pmd, psd);", "p3 = player({4'd1, k3[27:0]}, j3, pmd, psd);"),
+    ('seat3_no_trade', 'intv_input.sv', "wire logic [7:0] s3 = sw == 2'd2 ? p1 : p3;", "wire logic [7:0] s3 = p3;"),
+    ('seat4_as_seat3', 'intv_input.sv', "sw == 2'd3 ? p4 : p1;", "sw == 2'd3 ? p3 : p1;"),
+    ('p4_from_cont3', 'intv_input.sv', "p4 = player(k4, j4, pmd, psd);", "p4 = player(k3, j4, pmd, psd);"),
     ('disc_ssw', 'intv_input.sv', "4'd9:  disc_code = 8'h11;", "4'd9:  disc_code = 8'h19;"),
     ('deadzone_le', 'intv_input.sv', '< 17\'(DZ_DISC * DZ_DISC)', '<= 17\'(DZ_DISC * DZ_DISC)'),
     ('slope_171', 'intv_input.sv', "b171  = 18'(b) * 18'd171;", "b171  = 18'(b) * 18'd180;"),

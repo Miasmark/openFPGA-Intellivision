@@ -418,7 +418,7 @@ localparam [31:0] SS_SIZE = 32'd153600;
 // Settings, written by the host from interact.json (clk_74a).
     reg             set_border = 1'b1;      // Border: 1 = show (slot 1), 0 = playfield only (slot 0)
     reg     [1:0]   set_kp_mode = 2'd3;     // Keypad Mode: 0 Layer, 1 Face-button ring, 2 Right stick, 3 Auto (by game)
-    reg             set_swap = 1'b0;        // Swap Controllers: 1 = player 1 on the right controller
+    reg     [1:0]   set_swap = 2'd0;        // Swap Controllers: the Pocket's (cont1's) seat, players 1-4 (1.0.9)
     reg             set_pause = 1'b1;       // Pause in Menu: 1 = the machine freezes while the menu is open
     reg     [1:0]   set_ecs = 2'd0;         // ECS: 0 Auto, 1 On, 2 Off (taken at the next reset or load; step 9)
     reg             set_synth = 1'b0;       // ECS Keyboard: 0 computer keyboard, 1 music synthesizer
@@ -427,8 +427,10 @@ localparam [31:0] SS_SIZE = 32'd153600;
     reg             set_vdac = 1'b0;        // Voice sound: 0 clean (14 bits), 1 the chip's 7-bit DAC
     reg     [2:0]   set_elevel = 3'd2;      // ECS level: PSG #2 only, 0 off, 1-4: x 1/2, 1, 3/2, 2 (2: as 0.0.9; the ECS has its own knob)
     reg             set_tfast = 1'b0;       // Tape speed: 0 Normal, 1 Instant (1.0.6; intv_tape)
-    reg     [1:0]   set_tv = 2'd0;          // TutorVision: 0 Auto, 1 Off, 2 INTV88, 3 Full (1.0.8; at reset)
-    reg             set_bq = 1'b0;          // STIC 1A timing: 0 Off, 1 On (1.0.8; at reset)
+    reg     [2:0]   set_tv = 3'd0;          // TutorVision: 0 Auto, 1 Off, 2 INTV88, 3 Full (1.0.8; at reset);
+                                            // 1.0.9: 4 INTV88 and 5 Full with the STIC 1A timing (12 a frame),
+                                            // until 1.0.8 the item at 0x238 (now ignored)
+    reg     [2:0]   set_choose = 3'd0;      // Tape: next load: 0 Newest ... 7 the 8th (1.0.9; intv_tape)
     reg             set_font = 1'b0;        // Font: 0 Original, 1 TutorVision (1.0.8; at reset)
     reg     [7:0]   menu_reset_cnt = 8'd0;
     reg             tape_erase_t = 1'b0;    // the menu's Erase ECS tape: a toggle into clk_sys
@@ -442,7 +444,7 @@ always @(posedge clk_74a) begin
             12'h200: menu_reset_cnt <= 8'hFF;
             12'h204: set_border     <= bridge_wr_data[0];
             12'h208: set_kp_mode    <= bridge_wr_data[1:0];
-            12'h20C: set_swap       <= bridge_wr_data[0];
+            12'h20C: set_swap       <= bridge_wr_data[1:0];
             12'h210: set_pause      <= bridge_wr_data[0];
             12'h214: set_ecs        <= bridge_wr_data[1:0];
             12'h218: set_synth      <= bridge_wr_data[0];
@@ -452,8 +454,8 @@ always @(posedge clk_74a) begin
             12'h228: set_elevel     <= bridge_wr_data[2:0];
             12'h22C: tape_erase_t   <= ~tape_erase_t;
             12'h230: set_tfast      <= bridge_wr_data[0];
-            12'h234: set_tv         <= bridge_wr_data[1:0];
-            12'h238: set_bq         <= bridge_wr_data[0];
+            12'h234: set_tv         <= bridge_wr_data[2:0];
+            12'h240: set_choose     <= bridge_wr_data[2:0];
             12'h23C: set_font       <= bridge_wr_data[0];
             default: ;
         endcase
@@ -788,8 +790,9 @@ data_loader #(
     reg     [1:0]   vdac_s = 2'b00;
     reg     [2:0]   terase_s = 3'd0;        // the tape erase toggle
     reg     [1:0]   tfast_s = 2'b00;        // Tape speed (any time)
-    reg     [1:0]   tv_s0 = 2'd0, tv_s1 = 2'd0;    // TutorVision (taken at a machine reset)
-    reg     [1:0]   bq_s = 2'b00, font_s = 2'b00;
+    reg     [2:0]   tv_s0 = 3'd0, tv_s1 = 3'd0;    // TutorVision (taken at a machine reset)
+    reg     [2:0]   choose_s0 = 3'd0, choose_s1 = 3'd0;    // Tape: next load (any time)
+    reg     [1:0]   font_s = 2'b00;
     reg             timing_reset = 1'b1;
 
 always @(posedge clk_sys) begin
@@ -804,7 +807,7 @@ always @(posedge clk_sys) begin
     terase_s <= {terase_s[1:0], tape_erase_t};
     tfast_s  <= {tfast_s[0], set_tfast};
     tv_s0    <= set_tv;  tv_s1 <= tv_s0;
-    bq_s     <= {bq_s[0], set_bq};
+    choose_s0 <= set_choose; choose_s1 <= choose_s0;
     font_s   <= {font_s[0], set_font};
     // The picture runs from PLL lock, through loading and resets, so the
     // Pocket always has a stable frame.
@@ -819,6 +822,7 @@ end
 ////////////////////////////////////////////////////////////////////////////////
 
     wire    [7:0]   pad_r, pad_l;
+    wire    [7:0]   ecs_pa, ecs_pb;     // 1.0.9: the ECS's hand controllers 4 (port A) and 3 (port B)
     // the on-screen keypads and the game profile (build step 13, below)
     wire            osk_frame, prof_ok;
     wire    [1:0]   prof_mode, osk_open;
@@ -842,8 +846,10 @@ intv_input input_map (
     .cont3_key  ( cont3_key ),
     .cont3_joy  ( cont3_joy ),
     .cont3_trig ( cont3_trig ),
+    .cont4_key  ( cont4_key ),
+    .cont4_joy  ( cont4_joy ),
     .kp_mode    ( set_kp_mode ),
-    .swap       ( set_swap ),
+    .seat       ( set_swap ),
     .ecs_ovr_74 ( set_ecs ),
     .synth_74   ( set_synth ),
     .ecs_full   ( ecs_full ),
@@ -860,6 +866,8 @@ intv_input input_map (
     .kb_mods    ( kb_mods ),
     .pad_r      ( pad_r ),
     .pad_l      ( pad_l ),
+    .ecs_pa     ( ecs_pa ),
+    .ecs_pb     ( ecs_pb ),
     .ecs_keys   ( ecs_keys ),
     .ecs_synth  ( ecs_synth ),
     .ecs_ovr    ( ecs_ovr )
@@ -885,6 +893,9 @@ intv_input input_map (
     wire    [8:0]   hcnt, vcnt, vline;
     wire    [3:0]   stic_colour;
     wire    [15:0]  psg_audio;
+    wire            tl_go;                  // the tape line (1.0.9; below)
+    wire    [3:0]   tl_k;
+    wire    [6:0]   tl_n;
 
 intv_core machine_side (
     .clk                ( clk_sys ),
@@ -905,12 +916,18 @@ intv_core machine_side (
     .cart_ready_o       ( cart_ready ),
     .pad_r              ( pad_r ),
     .pad_l              ( pad_l ),
+    .ecs_pa             ( ecs_pa ),
+    .ecs_pb             ( ecs_pb ),
     .ecs_override       ( ecs_ovr ),
     .ecs_keys           ( ecs_keys ),
     .ecs_synth          ( ecs_synth ),
     .tape_instant       ( tfast_s[1] ),
-    .tv_setting         ( tv_s1 ),
-    .tv_bq_set          ( bq_s[1] ),
+    .tv_setting         ( tv_s1 >= 3'd4 ? tv_s1[1:0] ^ 2'b10 : tv_s1[1:0] ),     // 4, 5: INTV88, Full
+    .tv_bq_set          ( tv_s1 >= 3'd4 ),                                      //   with the 1A timing
+    .tape_choose        ( choose_s1 ),
+    .tl_go              ( tl_go ),
+    .tl_k               ( tl_k ),
+    .tl_n               ( tl_n ),
     .font_set           ( font_s[1] ),
     .tv_on              ( tv_on ),
     .ecs_full           ( ecs_full ),
@@ -980,7 +997,7 @@ test_pattern pattern (
     .pf_x       ( pf_x ),
     .pf_y       ( pf_y ),
     .slot_st    ( slot_st ),
-    .slot_req   ( {1'b0, tv_s1 == 2'd3, 6'b001101} ),
+    .slot_req   ( {1'b0, tv_s1 == 3'd3 || tv_s1 == 3'd5, 6'b001101} ),
     .len_st     ( cart_len_st ),
     .cfg_res    ( cfg_res_s2 ),
     .fetch_to   ( diag_s2[13:11] ),
@@ -999,6 +1016,18 @@ test_pattern pattern (
     wire    [107:0] prof_labels;
     wire    [1:0]   osk_ovl;
     assign osk_frame = ce_pix && hcnt == 9'd0 && vline == 9'd0;
+
+// 1.0.9: "TAPE: SAVE k OF n" for 120 frames (2 s) from an ECS tape load's first byte (intv_tape
+// tl_go: the chooser not on Newest, or more than one save on the tape)
+    reg     [6:0]   tl_time = 7'd0;
+    reg     [3:0]   tl_k_r = 4'd0;
+    reg     [6:0]   tl_n_r = 7'd0;
+always @(posedge clk_sys) begin
+    if (tl_go) begin
+        tl_time <= 7'd120; tl_k_r <= tl_k; tl_n_r <= tl_n;
+    end else if (osk_frame && tl_time != 7'd0)
+        tl_time <= tl_time - 7'd1;
+end
 
 intv_profile profile (
     .clk        ( clk_sys ),
@@ -1024,6 +1053,9 @@ intv_osk_draw osk_draw (
     .kb_mods    ( kb_mods ),
     .prof_ok    ( prof_ok ),
     .labels     ( prof_labels ),
+    .tl_on      ( tl_time != 7'd0 ),
+    .tl_k       ( tl_k_r ),
+    .tl_n       ( tl_n_r ),
     .ovl        ( osk_ovl )
 );
 

@@ -225,6 +225,14 @@ def parse_presses(text):
                     bits |= ecsm.keybits(k)
             out.append((f1, f2, ("ecs", bits)))
             continue
+        if key[:1] == "p" and key[1:2] in "1234" and key[2:3] == ":":
+            # (1.0.9) "pN:KEY": hand controller N only: 1 / 2 the console's (port B /
+            # port A, $01FF / $01FE), 3 / 4 the ECS's (port B / port A, $00FF / $00FE: the ECS
+            # ROM's $7134 reads $00FF into the EXEC's table $011F and $00FE into $0120)
+            if key[3:] not in KEYCODE:
+                raise SystemExit("unknown key %r" % key)
+            out.append((f1, f2, ("pad", int(key[1]), KEYCODE[key[3:]])))
+            continue
         if key.startswith("pocket:"):
             bits = 0
             for b in key[7:].split("+"):
@@ -269,6 +277,18 @@ def press_pads(presses, k):
     elif pocket:
         v &= ~pocket_lines(pocket) & 0xFF
     return v
+
+
+def press_pads4(presses, k):
+    """(1.0.9) Hand controllers 1-4's bytes after frame notifier k: press_pads's byte
+    (the presses without a pad, both console controllers) for 1 and 2, then each "pN:" press
+    on its own controller."""
+    base = press_pads(presses, k)
+    v = [base, base, 0xFF, 0xFF]
+    for f1, f2, code in presses:
+        if f1 <= k < f2 and isinstance(code, tuple) and code[0] == "pad":
+            v[code[1] - 1] &= ~code[2] & 0xFF
+    return tuple(v)
 
 
 def press_keys(presses, k):
@@ -562,8 +582,8 @@ class SystemBus:
             pads = self.pad
             if self.presses is not None:
                 self._osk_ecs()
-                p = press_pads(self.presses, self.timing.frame(self._t(cycle)) - 1)
-                pads = (p, p)
+                p4 = press_pads4(self.presses, self.timing.frame(self._t(cycle)) - 1)
+                pads = (p4[1], p4[0])           # port A ($01FE) player 2, port B ($01FF) player 1
             v &= self.snd.read(n, pads)
         elif 0x200 <= a <= 0x35F:
             v &= self.sysram[a - 0x200]
@@ -591,6 +611,7 @@ class SystemBus:
             if self.ecs.keys_at is None and self.presses is not None:
                 self._osk_ecs()
                 self.ecs.keys_at = lambda f: press_keys(self.presses, f - 1)
+                self.ecs.pads_at = lambda f: press_pads4(self.presses, f - 1)[2:]
             return v & self.ecs.read(a, self._t(cycle), self.timing.frame(self._t(cycle)))
         if self.jlp is not None:
             if self.jlp.blocks(self._t(cycle)):

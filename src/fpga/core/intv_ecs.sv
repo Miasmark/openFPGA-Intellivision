@@ -82,6 +82,10 @@ module intv_ecs #(
     // keyboard (intv_input)
     input  wire logic [63:0] keys,
     input  wire logic        synth,
+    // 1.0.9: the ECS's hand controllers 4 (port A) and 3 (port B), active low ($FF: none); they pull
+    // their port's lines while the port is an input, ANDed with the keyboard's (MAME ecs_ctrl.cpp:149-157)
+    input  wire logic [7:0]  hand_a,
+    input  wire logic [7:0]  hand_b,
 
     output logic [15:0]      audio,           // PSG #2, 48 kHz (0..32766)
     output logic             audio_stb,
@@ -185,8 +189,8 @@ module intv_ecs #(
             c1 <= c1 | to_cols(r1, k);
         end
         if (step == 5'(PASS - 1)) begin
-            port_a <= synth ? syn_a : ~(r0 & ~r1);
-            port_b <= synth ? syn_b : ~(c0 & ~c1);
+            port_a <= (synth ? syn_a : ~(r0 & ~r1)) & (dir_a ? 8'hFF : hand_a);
+            port_b <= (synth ? syn_b : ~(c0 & ~c1)) & (dir_b ? 8'hFF : hand_b);
         end
     end
 

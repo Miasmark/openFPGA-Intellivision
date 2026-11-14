@@ -111,10 +111,16 @@ module intv_machine #(
     input  wire logic        tv_bq,           // 1.0.8: the STIC 1A bus-request option
     input  wire logic [7:0]  pad_r,           // hand controllers ($FF: none)
     input  wire logic [7:0]  pad_l,
+    input  wire logic [7:0]  ecs_pa,          // 1.0.9: the ECS's hand controllers 4 (port A) / 3 (port B), $FF: none
+    input  wire logic [7:0]  ecs_pb,
     input  wire logic [1:0]  ecs_mode,        // 0 off, 1 on, 2 attached (taken at reset)
     input  wire logic [63:0] ecs_keys,        // the ECS keyboard's pressed switches
     input  wire logic        ecs_synth,       // the synthesizer instead of the keyboard
     input  wire logic        tape_instant,    // Tape speed: Instant (1.0.6; intv_tape)
+    input  wire logic [2:0]  tape_choose,     // Tape: next load (1.0.9; intv_tape)
+    output logic             tl_go,           // the load's line: show it (intv_tape)
+    output logic [3:0]       tl_k,
+    output logic [6:0]       tl_n,
     output logic             ecs_on,          // to intv_media: the ECS ROMs
     output logic             ecs_full,        // the ECS fully on (mode on): intv_input's key routing
     output logic [11:0]      ecs_pg,
@@ -263,7 +269,7 @@ module intv_machine #(
     intv_ecs #(.SS_ID(SS_ECS), .SS_PSG(SS_PSG2), .SS_RAM(SS_ERAM)) ecs (
         .clk, .mreset, .mode(ecs_mode), .ce, .run(!hold),
         .a(addr), .wr, .wdata(dout), .hit(ecs_hit), .q(ecs_q), .uart_q,
-        .on(ecs_on), .full(ecs_full), .pg(ecs_pg), .keys(ecs_keys), .synth(ecs_synth),
+        .on(ecs_on), .full(ecs_full), .pg(ecs_pg), .keys(ecs_keys), .synth(ecs_synth), .hand_a(ecs_pa), .hand_b(ecs_pb),
         .audio(audio2), .audio_stb(audio2_stb),
         .ss_en, .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_ecs));
 
@@ -273,6 +279,7 @@ module intv_machine #(
         .fetch(ce && fetch), .hcnt, .vcnt, .instant(tape_instant), .rom_ok(ecs_on && ecs_pg[7:4] == 4'd0),
         .ovr_hit(tovr_hit), .ovr_q(tovr_q),
         .clr(tape_clr), .walk(tape_walk), .busy(tape_busy),
+        .choose(tape_choose), .tl_go, .tl_k, .tl_n,
         .nv_addr(tape_nv_addr), .nv_we(tape_nv_we), .nv_wdata(tape_nv_wdata), .nv_q(tape_nv_q),
         .ss_addr, .ss_we, .ss_wdata, .ss_rdata(ssr_tape));
 

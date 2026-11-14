@@ -6,8 +6,15 @@
 //
 // tools/intv_input.py is the model, with the mapping in full; in short:
 // - player 1 = cont1, player 2 = cont2 (types 1-3 only; sticks on type 3);
-//   player 1 is the left controller, player 2 the right; swap exchanges
-//   them;
+//   player 1 is the left controller, player 2 the right;
+// - 1.0.9: players 3 and 4 = cont3 and cont4 (types 1-3; cont3 type 4 is
+//   the USB keyboard: then no player 3) on the ECS's hand-controller ports,
+//   ecs_pb (port B, $00FF: player 3) and ecs_pa (port A, $00FE: player 4),
+//   MAME devices/bus/intv_ctrl/ecs_ctrl.cpp:149-157, only while the ECS is
+//   fully on ($FF otherwise). seat (Swap Controllers: Player 1 / 2 / 3 / 4)
+//   is cont1's seat: cont1 trades seats with the controller whose seat that
+//   is (seat 1 = the old swap). The on-screen keypads and the ECS keyboard
+//   stay with their controller (cont1's, cont2's) in any seat;
 // - keypad mode 0 Layer: D-pad = disc, A/B/X = side actions lower right /
 //   lower left / top; R, the number pad: D-pad = ring keys by position,
 //   Y/B/A = Clear/0/Enter (the keypad's bottom row), X = 5; L (R not
@@ -107,8 +114,10 @@ module intv_input #(
     input  wire logic [31:0] cont3_key,
     input  wire logic [31:0] cont3_joy,
     input  wire logic [15:0] cont3_trig,
+    input  wire logic [31:0] cont4_key,     // 1.0.9: player 4 (types 1-3)
+    input  wire logic [31:0] cont4_joy,
     input  wire logic [1:0]  kp_mode,       // 0 Layer, 1 Face-button ring, 2 Right stick, 3 Auto (the game's profile)
-    input  wire logic        swap,          // 1: player 1 on the right controller
+    input  wire logic [1:0]  seat,          // Swap Controllers: cont1's seat, players 1-4 (1: the old swap)
     input  wire logic [1:0]  ecs_ovr_74,    // setting ECS: 0 Auto, 1 On, 2 Off
     input  wire logic        synth_74,      // setting ECS Keyboard: 1 Synthesizer
     input  wire logic        ecs_full,      // clk: the ECS is fully on (mode on, not attached)
@@ -125,6 +134,8 @@ module intv_input #(
     output logic      [1:0]  kb_mods,       //   SHIFT (Y) [0], CTL (X) [1] held
     output logic      [7:0]  pad_r,         // $01FE, PSG port A
     output logic      [7:0]  pad_l,         // $01FF, PSG port B
+    output logic      [7:0]  ecs_pa,        // 1.0.9: $00FE, the ECS PSG's port A: player 4 ($FF unless ecs_full)
+    output logic      [7:0]  ecs_pb,        //   $00FF, its port B: player 3
     output logic      [63:0] ecs_keys,      // clk: the ECS matrix's pressed switches
     output logic             ecs_synth,
     output logic      [1:0]  ecs_ovr
@@ -382,9 +393,9 @@ module intv_input #(
     // -------------------------------------------------------------------
     // Crossing: clk_74a -> clk as one word (toggle handshake)
     // -------------------------------------------------------------------
-    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;
+    localparam int W = 8 * 32 + 16 + 2 + 2 + 3;
     wire logic [W-1:0] in_74 = {cont1_key, cont1_joy, cont2_key, cont2_joy, cont3_key, cont3_joy,
-                                cont3_trig, kp_mode, swap, ecs_ovr_74, synth_74};
+                                cont3_trig, cont4_key, cont4_joy, kp_mode, seat, ecs_ovr_74, synth_74};
 
     // clk_74a side: the held copy, the request flag, the acknowledge's
     // synchroniser. The copy is taken only when the acknowledge equals the
@@ -426,14 +437,14 @@ module intv_input #(
     // Output
     // -------------------------------------------------------------------
     /* verilator lint_off UNUSEDSIGNAL */
-    logic [31:0] k1, j1, k2, j2, k3, j3;    // (k3: the type alone; synthesis drops unused bits)
+    logic [31:0] k1, j1, k2, j2, k3, j3, k4, j4;
     /* verilator lint_on UNUSEDSIGNAL */
     logic [15:0] t3;
     logic [1:0]  md;
-    logic        sw;
+    logic [1:0]  sw;                        // cont1's seat
     logic [1:0]  eo;
     logic        sy;
-    assign {k1, j1, k2, j2, k3, j3, t3, md, sw, eo, sy} = word;
+    assign {k1, j1, k2, j2, k3, j3, t3, k4, j4, md, sw, eo, sy} = word;
     assign ecs_synth = sy;
     assign ecs_ovr   = eo;
 
@@ -620,18 +631,27 @@ module intv_input #(
     wire logic [1:0] pmd  = auto ? (prof_ok ? prof_mode : 2'd0) : md;
     wire logic [11:0] psd = auto && prof_ok ? prof_sides : 12'h210;
 
-    logic [7:0]  p1, p2;
+    logic [7:0]  p1, p2, p3, p4;            // the controllers' bytes (cont1-cont4), before the seats
     always_comb begin
         p1 = player({k1[31:16], k1[15:0] & ~((o_open[0] ? 16'hFFFF : o_mask[0]) | (kb_on ? 16'hFFFF : kb_mask))},
                     j1, pmd, psd) | kb_acc
            | (o_open[0] && o_held[0] != 4'd0 ? cell_code(o_held[0] - 4'd1) : 8'h00);
         p2 = player({k2[31:16], k2[15:0] & ~(o_open[1] ? 16'hFFFF : o_mask[1])}, j2, pmd, psd)
            | (o_open[1] && o_held[1] != 4'd0 ? cell_code(o_held[1] - 4'd1) : 8'h00);
+        p3 = player(k3, j3, pmd, psd);      // type 4 (the USB keyboard): nothing
+        p4 = player(k4, j4, pmd, psd);
     end
+    // the seats: cont1 takes seat sw and trades it with that seat's controller
+    wire logic [7:0] s1 = sw == 2'd1 ? p2 : sw == 2'd2 ? p3 : sw == 2'd3 ? p4 : p1;
+    wire logic [7:0] s2 = sw == 2'd1 ? p1 : p2;
+    wire logic [7:0] s3 = sw == 2'd2 ? p1 : p3;
+    wire logic [7:0] s4 = sw == 2'd3 ? p1 : p4;
 
     initial begin
         pad_r = 8'hFF;
         pad_l = 8'hFF;
+        ecs_pa = 8'hFF;
+        ecs_pb = 8'hFF;
         ecs_keys = 64'd0;
         kb_acc = 8'h00;
         ek_acc = 64'd0;
@@ -644,8 +664,10 @@ module intv_input #(
                     | (kbd && ecs_full && !sp[6] ? 64'd1 << sp[5:0] : 64'd0);
         end
         if (ph == 3'd6) begin
-            pad_l <= ~(sw ? p2 : p1);
-            pad_r <= ~(sw ? p1 : p2);
+            pad_l <= ~s1;
+            pad_r <= ~s2;
+            ecs_pb <= ecs_full ? ~s3 : 8'hFF;
+            ecs_pa <= ecs_full ? ~s4 : 8'hFF;
             ecs_keys <= ek_acc | kb_keys
                       | (kbd && ecs_full && !sy && (k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)   // Shift: row 6, column 7
                       | (kbd && ecs_full && !sy && (k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);  // Ctrl: row 5, column 6

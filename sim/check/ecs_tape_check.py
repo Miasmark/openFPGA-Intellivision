@@ -30,6 +30,10 @@ not compared.
          then RTN at each of its two prompts: one save of two blocks back to back (ECS RAM
          $4085-$47C8, then cartridge RAM $8800-$8B0C; docs/ECS_NOTES.md 5); then a fresh game
          with that tape: RTN, 4, RTN, 1 (LOAD), RTN, RTN, RTN: both blocks back, in order.
+  1.0.9, the save chooser (Normal only): wsmlb and gf again load their save from a tape with
+         another save (a short junk block) in front of it, with "Tape: next load" on 2nd: the
+         same RAM must come back (Game Factory: both blocks, its second a continuation with 10
+         sync bytes), and the tape line must be "SAVE 2 OF 2".
 It prints one line a case and ECS_TAPE pass / FAIL, and keeps a few pictures in OUTDIR (pictures
 of the user's games: keep OUTDIR outside any repository).
 """
@@ -51,10 +55,14 @@ GF_LOAD = GF_MENU + "1000-1006:ecs:1,1100-1106:ecs:RTN,1300-1306:ecs:RTN,1500-15
 GF_RAM = range(0x8800, 0x8B0D)                      # Game Factory's cartridge RAM block
 
 
+# 1.0.9: a short save to put in front of a game's (the chooser cases)
+JUNK = bytes([0xAA] * 9 + [0x00, 0xFB, 0xFF]) + b"JUNK!"
+
+
 class Run:
     """One model run: the tape's E2 writes, the RAM at the first record start, the end state."""
 
-    def __init__(self, cart, presses, frames, out, name, instant, tape=None, cart_ram=()):
+    def __init__(self, cart, presses, frames, out, name, instant, tape=None, cart_ram=(), choose=0):
         import intv_system as isys
         bus, cpu, _ = isys.system_for("stic", None, cart, ecs=("auto", None))
         bus.ecs.instant = instant
@@ -62,6 +70,7 @@ class Run:
         tp = bus.ecs.tape
         if tape is not None:
             tp.load_file(tape)
+        tp.choose = choose                              # 1.0.9: Tape: next load
         self.motor, self.at_rec = [], None
         mode = tp._mode
 
@@ -83,6 +92,7 @@ class Run:
             cpu.step()
             bus.boundary(cpu.cycle)
         self.tape, self.head, self.mode = tp.file(), tp.head, tp.mode
+        self.line = tp.line[:2] if tp.line else None    # the last tape line (k, n)
         self.eram = list(bus.ecs.ram)
         self.flags = list(bus.scratch[0x5E:0x60])
         self.cart_ram = [bus.cart.read(a) for a in cart_ram]
@@ -192,7 +202,19 @@ def wsmlb(cart, out):
         if r.pic is None or r.pic[w * (3 * h // 4):] != keep[0].pic[w * (3 * h // 4):]:
             probs.append("%s does not end on Done" % what)
     report("wsmlb", keep[0], keep[1], [], " (Keep Game)")
-    return report("wsmlb", old[0], old[1], probs, " (Old Game)")
+    probs = report("wsmlb", old[0], old[1], probs, " (Old Game)")
+    ch = Run(cart, OLD, 4400, out, "wsmlb_choose", False, tape=JUNK + tape, choose=1)
+    cp = []
+    diff = [x for x in range(lo, hi) if a[x] != ch.eram[x]]
+    if diff:
+        cp.append("Old Game, 2nd of 2: %d ECS RAM cells differ from the save" % len(diff))
+    if ch.line != (2, 2):
+        cp.append("Old Game, 2nd of 2: the tape line %s, want SAVE 2 OF 2" % (ch.line,))
+    print("wsmlb  Old Game with a junk save in front, Tape: next load 2nd: line %s %s"
+          % (ch.line, "pass" if not cp else "FAIL"), flush=True)
+    for p in cp:
+        print("  FAIL " + p)
+    return probs + cp
 
 
 def gf(cart, out):
@@ -213,8 +235,24 @@ def gf(cart, out):
             probs.append("LOAD (%s): %d ECS RAM cells differ from the store, first $%04X" % (what, len(d), 0x4000 + d[0]))
         if [v & 0xFF for v in cram] != [v & 0xFF for v in r.cart_ram]:
             probs.append("LOAD (%s): the cartridge RAM differs from the store" % what)
+    if [b[1] for b in bl] != [9, ecs_tape.CONT_SYNC]:
+        probs.append("STORE: sync %s, want 9 then %d (1.0.9: the second block continues the save)"
+                     % ([b[1] for b in bl], ecs_tape.CONT_SYNC))
     report("gf", store[0], store[1], [], " (STORE)")
-    return report("gf", load[0], load[1], probs, " (LOAD)")
+    probs = report("gf", load[0], load[1], probs, " (LOAD)")
+    ch = Run(cart, GF_LOAD, 4500, out, "gf_choose", False, tape=JUNK + tape, cart_ram=GF_RAM, choose=1)
+    cp = []
+    d = [x for x in range(0x85, 0x7C8) if eram[x] != ch.eram[x]]
+    if d or [v & 0xFF for v in cram] != [v & 0xFF for v in ch.cart_ram]:
+        cp.append("LOAD, 2nd of 2: %d ECS RAM cells differ, cartridge RAM %s" % (
+            len(d), "equal" if [v & 0xFF for v in cram] == [v & 0xFF for v in ch.cart_ram] else "differs"))
+    if ch.line != (2, 2):
+        cp.append("LOAD, 2nd of 2: the tape line %s, want SAVE 2 OF 2" % (ch.line,))
+    print("gf     LOAD with a junk save in front, Tape: next load 2nd: line %s %s"
+          % (ch.line, "pass" if not cp else "FAIL"), flush=True)
+    for p in cp:
+        print("  FAIL " + p)
+    return probs + cp
 
 
 def main():

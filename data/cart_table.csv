@@ -20,7 +20,7 @@ crc32,layout,flags,flag_names,size_words,source,status,name,map
 156A5645,3,40,estimated,1000,extra,sibling,traction,5000-5FFF
 159AF7F7,20,20,ecs_off,4000,mame:intv,mame,digdug,5000-6FFF 7000-7FFF 9000-9FFF
 15C65DC5,7,00,,2000,mame:intv,mame,zaxxon,5000-6FFF
-15D9D27A,23,00,,4000,mame:intv,mame,worldcup,5000-6FFF D000-DFFF F000-FFFF
+15D9D27A,23,01,ecs,4000,mame:intv,mame,worldcup,5000-6FFF D000-DFFF F000-FFFF
 15E88FCE,7,00,,2000,mame:intv,mame,swordsas,5000-6FFF
 169E3584,3,00,,1000,mame:intv,mame,bowling,5000-5FFF
 16BFB8EB,13,00,,4000,mame:intv,mame,decathln,5000-6FFF 9000-AFFF

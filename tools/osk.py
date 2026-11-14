@@ -392,10 +392,18 @@ def label(p, cell):
 
 
 # ---------------------------------------------------------------------- drawing
-def draw(players, prof, kb=None):
+TLX, TLY = 4, 4                 # 1.0.9: the tape line's first character (lines 4-19)
+
+
+def tape_text(k, n):
+    """1.0.9: the tape line, shown 2 s from an ECS tape load's first byte (intv_tape tl_go)."""
+    return "TAPE: SAVE %d OF %d" % (k, n)
+
+
+def draw(players, prof, kb=None, tape=None):
     """The overlay over the playfield: {(x, y): colour} for x 0-159, y 0-191 (lines), colours
     WHITE, DARK, YELLOW (absent: transparent). players: the two Player objects; kb: the ECS
-    keyboard (Keyboard), never open with a keypad."""
+    keyboard (Keyboard), never open with a keypad; tape: (k, n) while the tape line shows."""
     px = {}
 
     def glyph(x0, y0, ch, colour):
@@ -469,6 +477,9 @@ def draw(players, prof, kb=None):
         for n, (t, x) in enumerate(KB_MODS):
             for i, ch in enumerate(t):
                 glyph(KGX + x + 8 * i, KLY, ch, YELLOW if kb.mods >> n & 1 else WHITE)
+    if tape is not None:
+        for i, ch in enumerate(tape_text(*tape)):
+            glyph(TLX + 8 * i, TLY, ch, WHITE)
     return px
 
 

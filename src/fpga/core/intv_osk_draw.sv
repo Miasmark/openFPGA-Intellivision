@@ -17,6 +17,9 @@
 // yellow, filled yellow with a dark text while pressed. Above it (line 70) "Y:SHIFT" at its left
 // edge and "X:CTL" ending at its right edge, each yellow while its button is held.
 //
+// The tape line (1.0.9; core_top shows it for 2 s at an ECS tape load's start, intv_tape tl_go):
+// "TAPE: SAVE k OF n" at x 4, lines 4-19, white with a shadow as a label.
+//
 // The pixel (pf_x, pf_y) is stable for the 12 clk_sys between two ce_pix; the overlay colour
 // ovl for it is worked out in four of them (ph 0: where the pixel is; 1: its character, the
 // label pool read; 2: the glyph row; 3: the row above it, for the shadow) and holds until the
@@ -45,6 +48,9 @@ module intv_osk_draw #(
     input  wire logic [1:0]  kb_mods,
     input  wire logic        prof_ok,       // intv_profile
     input  wire logic [107:0] labels,
+    input  wire logic        tl_on,         // the tape line (1.0.9)
+    input  wire logic [3:0]  tl_k,
+    input  wire logic [6:0]  tl_n,
     output logic      [1:0]  ovl            // 0 none, 1 white, 2 dark, 3 yellow
 );
 
@@ -162,6 +168,30 @@ module intv_osk_draw #(
         endcase
     endfunction
 
+    // the tape line: its 17 or 18 characters (osk.py tape_text)
+    localparam int TLX = 4, TLY = 4;
+    wire  logic [3:0] tl_t = tl_n >= 7'd90 ? 4'd9 : tl_n >= 7'd80 ? 4'd8 : tl_n >= 7'd70 ? 4'd7
+                           : tl_n >= 7'd60 ? 4'd6 : tl_n >= 7'd50 ? 4'd5 : tl_n >= 7'd40 ? 4'd4
+                           : tl_n >= 7'd30 ? 4'd3 : tl_n >= 7'd20 ? 4'd2 : tl_n >= 7'd10 ? 4'd1 : 4'd0;
+    wire  logic [3:0] tl_o = 4'(tl_n - 7'(10 * tl_t));
+    function automatic logic [5:0] tl_char(input logic [4:0] i, input logic [3:0] k,
+                                           input logic [3:0] t, input logic [3:0] o);
+        unique case (i)
+            5'd0:  tl_char = 6'd30;  5'd1:  tl_char = 6'd11;  5'd2:  tl_char = 6'd26;      // T A P
+            5'd3:  tl_char = 6'd15;  5'd4:  tl_char = 6'd39;                               // E :
+            5'd6:  tl_char = 6'd29;  5'd7:  tl_char = 6'd11;  5'd8:  tl_char = 6'd32;      // S A V
+            5'd9:  tl_char = 6'd15;                                                         // E
+            5'd11: tl_char = 6'(k) + 6'd1;                                                  // k
+            5'd13: tl_char = 6'd25;  5'd14: tl_char = 6'd16;                               // O F
+            5'd16: tl_char = t != 4'd0 ? 6'(t) + 6'd1 : 6'(o) + 6'd1;                       // n
+            5'd17: tl_char = t != 4'd0 ? 6'(o) + 6'd1 : 6'd0;
+            default: tl_char = 6'd0;
+        endcase
+    endfunction
+    wire  logic [7:0] tl_dx = pf_x - 8'(TLX);
+    wire  logic       t_line = tl_on && pf_y >= 8'(TLY) && pf_y < 8'(TLY + 16) && pf_x >= 8'(TLX)
+                            && tl_dx < (tl_t != 4'd0 ? 8'd144 : 8'd136);
+
     logic       k_grid, k_mod, k_ing, k_bord, k_curb, k_cur, k_press, k_fill, k_yel;
     logic [5:0] k_ch;
     logic [2:0] k_gc;
@@ -226,6 +256,13 @@ module intv_osk_draw #(
             k_gy = 4'(pf_y - 8'(KLY));
             k_ch = mod_char(right, mx[5:3]);
         end
+        if (t_line) begin
+            k_ing = 1'b1;
+            k_gc = tl_dx[2:0];
+            k_gy = 4'(pf_y - 8'(TLY));
+            k_ch = tl_char(tl_dx[7:3], tl_k, tl_t, tl_o);
+            k_yel = 1'b0;
+        end
     end
 
     // registered at the end of ph 0
@@ -255,7 +292,7 @@ module intv_osk_draw #(
             bx = w_dx - 7'(12 * cc);                        // from the cursor cell's corner
             by = w_dy - 7'(20 * rc);
             q_kb   <= k_grid;
-            q_km   <= k_mod && !k_grid;
+            q_km   <= (k_mod && !k_grid) || t_line;      // (the tape line: as the SHIFT / CTL line)
             q_kch  <= k_ch;
             q_kfill <= k_fill;
             q_kyel <= k_yel;
@@ -272,7 +309,7 @@ module intv_osk_draw #(
             q_iscur <= k_grid ? k_cur : g_r < 3'd4 && g_c < 2'd3 && 4'(3 * g_r) + {2'd0, g_c} == cur;
             q_press <= k_grid ? k_press
                      : g_r < 3'd4 && g_c < 2'd3 && held != 4'd0 && 4'(3 * g_r) + {2'd0, g_c} + 4'd1 == held;
-            if (k_grid || k_mod) begin
+            if (k_grid || k_mod || t_line) begin
                 q_ing <= k_ing;
                 q_gc  <= k_gc;
                 q_gy  <= k_gy;

@@ -23,7 +23,10 @@ and the RTL's tables). `sim/tb/tb_osk.py` compares the RTL with it.
 
 - Player 1's keypad belongs to cont1, player 2's to cont2. Only controller types 1-3 have one;
   any other type closes it. Its key goes into that player's hand controller, wherever Swap puts
-  it.
+  it: 1.0.9, Swap Controllers' Player 3 / 4 seats cont1 on the ECS's hand-controller port 3 / 4,
+  and its keypad's keys go there. Docked controllers 3 and 4 (players 3 and 4, or seat 1 when the
+  Pocket takes theirs) have no on-screen keypad; Start's ECS keyboard is the ECS's, whatever the
+  seat (docs/ECS_NOTES.md 3).
 - The key pressed is the one under the cursor when A went down. Moving the cursor while A is
   held does not change it.
 - Buttons still held when the keypad closes stay masked until they are let go, so the B that
@@ -46,6 +49,10 @@ and the RTL's tables). `sim/tb/tb_osk.py` compares the RTL with it.
   a shadow: player 1's from the grid's left edge, player 2's ending at its grid's right edge.
   While both keypads are open, player 2's label is one row higher (line 70), because the two
   labels could overlap.
+- The tape line (1.0.9): "TAPE: SAVE k OF n" at x 4, lines 4-19, white with a shadow as a
+  label, for 2 s at an ECS tape load's start (docs/ECS_NOTES.md 5, the save chooser). It is drawn
+  as the keyboard's SHIFT / CTL line is, and never meets a keypad or the keyboard (they start at
+  line 70).
 - `intv_osk_draw` works out each pixel in 4 of the pixel's 12 clk_sys (where it is, its
   character, the glyph row, the row above for the shadow). `pocket_video` takes the result with
   the STIC's colour for the same pixel.
@@ -122,15 +129,18 @@ frames choose among all 70 CRCs; the tables are the model's (`osk.py gen --check
 - `sim/tb/tb_osk.py --all`: about 540 frames are run through the RTL (intv_input, intv_profile,
   intv_osk_draw on a small raster):
   - written-out frames for every rule above, every profile's every cell, Auto's modes and side
-    actions, the fixed modes, Swap;
-  - random frames.
+    actions, the fixed modes, Swap; 1.0.9: the tape line alone, over open keypads and over the
+    keyboard (`tape_frames`);
+  - random frames (1.0.9: the tape line on and off with random k and n).
 
   Both pad bytes and every overlay pixel of every frame must equal the model's. Fourteen planted
   faults (cursor wrap, A held by level, the close's mask, buttons leaking while open, player 2's
   key, Auto's sides and mode, the profile scan's first entry, the shadow, player 2's label row,
   the cursor's outline, the shadow's row, the pressed fill, the label's character address) must
-  each fail.
-- `tb_input`: its keypads never step (`frame` = 0). Since 1.0.8 every vector carries a profile
+  each fail; 1.0.9 adds five for the tape line (its x, n's tens digit, k's digit, its colour,
+  the line dropped).
+- `tb_input`: its keypads never step (`frame` = 0). 1.0.9: class 13, the four seats with players
+  3 and 4 (the ECS on, attached, off; the USB keyboard in slot 3), six plants. Since 1.0.8 every vector carries a profile
   (ok, mode, buttons): class 12 writes out the profile rows by hand (the TutorVision titles' and
   B-17 Bomber's buttons in Auto, R's number pad and L's turn with them, the fixed modes and a
   ring profile ignoring the buttons), class 7 gives every other random vector a random profile

@@ -77,9 +77,10 @@ def btn(*names):
     return sum(1 << m[n] for n in names)
 
 
-def frame(k1=T1, k2=0, mode=0, swap=0, crc=NOPROF, j1=CENTRE, j2=CENTRE, ecs=0):
-    """ecs: bit 0 the ECS fully on, bit 1 the synthesizer setting"""
-    return dict(key1=k1, joy1=j1, key2=k2, joy2=j2, mode=mode, swap=swap, crc=crc, ecs=ecs)
+def frame(k1=T1, k2=0, mode=0, swap=0, crc=NOPROF, j1=CENTRE, j2=CENTRE, ecs=0, tape=None):
+    """ecs: bit 0 the ECS fully on, bit 1 the synthesizer setting; tape: (k, n), the tape line
+    (1.0.9; the vector's last field: bit 2 on, k at 6:3, n at 13:7)"""
+    return dict(key1=k1, joy1=j1, key2=k2, joy2=j2, mode=mode, swap=swap, crc=crc, ecs=ecs, tape=tape)
 
 
 def spec_frames():
@@ -133,7 +134,22 @@ def spec_frames():
     fr.append(frame(k1=T1, k2=T2 | btn('sel'), swap=1, crc=CRCS[0]))
     fr += [frame(k1=T1, k2=T2 | btn('A'), swap=1, crc=CRCS[0])] * 2
     fr.append(frame(k1=T1, k2=T2, swap=1, crc=CRCS[0]))
-    fr += kb_spec_frames()
+    return fr + kb_spec_frames() + tape_frames()
+
+
+def tape_frames():
+    """1.0.9: the tape line, alone, with both keypads open and with the ECS keyboard open."""
+    fr = []
+    for t in ((1, 1), (2, 3), (8, 12), (3, 99), (1, 10), (5, 9), (7, 70), (4, 45)):
+        fr.append(frame(tape=t))
+    fr.append(frame(k1=T1 | btn('sel'), k2=T2 | btn('sel'), mode=3, crc=CRCS[0], tape=(2, 2)))
+    fr += [frame(k1=T1, k2=T2, mode=3, crc=CRCS[0], tape=(2, 2))] * 2
+    fr.append(frame(k1=T1 | btn('sel'), k2=T2 | btn('sel'), mode=3, crc=CRCS[0]))
+    fr.append(frame(k1=T1, k2=T2, mode=3, crc=CRCS[0]))
+    fr.append(frame(k1=T1 | btn('sel'), ecs=1, tape=(6, 13)))
+    fr += [frame(k1=T1, ecs=1, tape=(6, 13))] * 2
+    fr.append(frame(k1=T1 | btn('sel'), ecs=1))
+    fr.append(frame(k1=T1, ecs=1))
     return fr
 
 
@@ -145,7 +161,8 @@ def plant_frames(name, n):
         return kb_spec_frames() + random_frames(n, random.Random(14), sel=0.0, start=0.04, b_pr=0.01,
                                                 ecs_set=(1, 1, 1, 1, 1, 1, 1, 1, 0, 3))
     sp = spec_frames()
-    return sp[:len(sp) - len(kb_spec_frames())] + random_frames(n, random.Random(13))
+    return (sp[:len(sp) - len(kb_spec_frames()) - len(tape_frames())] + tape_frames()
+            + random_frames(n, random.Random(13)))
 
 
 def kb_spec_frames():
@@ -227,6 +244,7 @@ def random_frames(n, rnd, sel=0.06, start=0.06, b_pr=0.08, ecs_set=(0, 1, 1, 1, 
     fr = []
     crc = NOPROF
     mode, swap, ecs = 3, 0, 1
+    tape = None
     for _ in range(n):
         if rnd.random() < 0.03:
             crc = rnd.choice(CRCS + [NOPROF, 0])
@@ -244,8 +262,10 @@ def random_frames(n, rnd, sel=0.06, start=0.06, b_pr=0.08, ecs_set=(0, 1, 1, 1, 
                 if rnd.random() < pr:
                     b |= 1 << bit
             ks.append((t << 28) | b)
+        if rnd.random() < 0.02:
+            tape = None if tape else (rnd.randint(1, 8), rnd.randint(1, 99))
         fr.append(frame(k1=ks[0], k2=ks[1], mode=mode, swap=swap, crc=crc, ecs=ecs,
-                        j1=rnd.choice([CENTRE, rnd.getrandbits(32)]), j2=CENTRE))
+                        j1=rnd.choice([CENTRE, rnd.getrandbits(32)]), j2=CENTRE, tape=tape))
     return fr
 
 
@@ -260,7 +280,7 @@ def expect(frames):
         prof = osk.profile_for(f['crc'])
         v = dict(f, key3=0, joy3=0, trig3=0, ecs=im.ECS_ON if on else 0, synth=synth)
         r, l = im.ports(v, osk=pl, prof=prof, kb=kb)
-        px = {(x, y): c for (x, y), c in osk.draw(pl, prof, kb).items()}
+        px = {(x, y): c for (x, y), c in osk.draw(pl, prof, kb, f.get('tape')).items()}
         out.append((r, l, im.ecs_keys(v, kb), px))
     return out
 
@@ -288,12 +308,18 @@ def build(work, rtl_dir, verilator, strict=True):
     return os.path.join(obj, 'tb_osk')
 
 
+def ecs_field(fr):
+    """The vector's last field: the ECS bits, the tape line (1.0.9)."""
+    t = fr.get('tape')
+    return fr['ecs'] | (0 if t is None else 4 | t[0] << 3 | t[1] << 7)
+
+
 def run(binary, frames, work):
     vec = os.path.join(work, 'vectors.txt')
     with open(vec, 'w') as f:
         for fr in frames:
             f.write('%08x %08x %08x %08x %x %x %08x %x\n' % (fr['key1'], fr['joy1'], fr['key2'], fr['joy2'],
-                                                             fr['mode'], fr['swap'], fr['crc'], fr['ecs']))
+                                                             fr['mode'], fr['swap'], fr['crc'], ecs_field(fr)))
     with open(os.path.join(work, 'run.log'), 'w') as f:
         subprocess.run([binary, '+vec=' + vec], stdout=f, stderr=subprocess.STDOUT, cwd=work)
     got = []
@@ -334,7 +360,7 @@ def compare(frames, want, got, quiet=False):
         if msg:
             bad += 1
             if not quiet and bad <= 10:
-                print('frame %d (%s): %s' % (i, ' '.join('%s=%x' % kv for kv in frames[i].items()), '; '.join(msg)))
+                print('frame %d (%s): %s' % (i, ' '.join('%s=%s' % (k, v if k == 'tape' else '%x' % v) for k, v in frames[i].items()), '; '.join(msg)))
     return bad
 
 
@@ -392,6 +418,13 @@ PLANTS = [
      "k_fill = k_press && dx >= ks + 8'd1 && oy >= 5'd1;"),
     ('kb_draw_mod_colour', 'intv_osk_draw.sv', "k_yel = right ? kb_mods[1] : kb_mods[0];", "k_yel = kb_mods[0];"),
     ('kb_draw_mod_text', 'intv_osk_draw.sv', "4'h4: mod_char = 6'd19;", "4'h4: mod_char = 6'd18;"),
+    # the tape line (1.0.9)
+    ('tape_line_x', 'intv_osk_draw.sv', "localparam int TLX = 4, TLY = 4;", "localparam int TLX = 5, TLY = 4;"),
+    ('tape_line_tens', 'intv_osk_draw.sv', ": tl_n >= 7'd20 ? 4'd2 : tl_n >= 7'd10 ? 4'd1 : 4'd0;",
+     ": tl_n >= 7'd20 ? 4'd2 : tl_n >= 7'd11 ? 4'd1 : 4'd0;"),
+    ('tape_line_k', 'intv_osk_draw.sv', "5'd11: tl_char = 6'(k) + 6'd1;", "5'd11: tl_char = 6'(k);"),
+    ('tape_line_yellow', 'intv_osk_draw.sv', "k_yel = 1'b0;", "k_yel = 1'b1;"),
+    ('tape_line_ignored', 'intv_osk_draw.sv', "|| t_line;      // (the tape line", "|| 1'b0;      // (the tape line"),
 ]
 
 

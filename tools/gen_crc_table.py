@@ -52,6 +52,15 @@ def build(root):
                                      status='mame' if sw['supported'] == 'yes' else 'mame-unsupported:' + sw['supported'])
     for r in m.read_extra(os.path.join(root, 'data', 'cart_extra.csv')):
         crc = int(r['crc32'], 16)
+        if crc in entries and r['status'] == 'flags-only' and not r['segments']:
+            # 1.0.9: a flags-only row on a MAME-listed image adds its flags to MAME's entry (World Cup
+            # Football: an ECS game MAME does not mark; data/cart_extra.csv's evidence column)
+            add = (m.FLAG_ECS if r['ecs'] == '1' else 0) | (m.FLAG_VOICE if r['voice'] == '1' else 0)
+            log.append('%08X %s: cart_extra.csv adds %s' % (crc, entries[crc]['name'],
+                       '+'.join(n for b, n in m.FLAG_NAMES.items() if add & ~entries[crc]['flags'] & b) or 'nothing'))
+            entries[crc]['flags'] |= add
+            entries[crc]['tv'] = entries[crc].get('tv', False) or r.get('tv') == '1'
+            continue
         if crc in entries:
             sys.exit('cart_extra.csv: %08X is already in MAME\'s lists' % crc)
         # 1.0.8: a row with no segments only flags its image (the default map; a CFG maps it)

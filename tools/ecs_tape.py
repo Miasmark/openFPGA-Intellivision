@@ -29,9 +29,9 @@ Fast: a byte is ready whenever the ROM looks (it takes one a frame at most, abou
   - rewind: the head goes to 0 at a machine reset (a game load, the menu's Reset) and when the
     motor starts after REWIND_IDLE CPU cycles (60 frames, 1 s) or more with it off. The ROM's name
     search (CLOD) restarts the motor within a few frames between blocks, so it reads on.
-  - a save goes in at the head (the last block start at or before it): after a rewind that is the
-    front, so the newest save comes first; right after another save (the motor off for less than
-    1 s, no rewind) it is the end of that save, so a game that writes one save as several blocks
+  - a save goes in at the front (1.0.9; until 1.0.8: at the head, the last block start at or before
+    it), so the newest save comes first; right after another save (the motor off for less than
+    1 s, no rewind, no load between) it is the end of that save, so a game that writes one save as several blocks
     (Game Factory: its ECS RAM, then its cartridge RAM) keeps them in their order. The sync is
     counted until $00, then the length; the block (k + 3 + N bytes) goes in: the tape from there
     moves up by its length (what passes the tape's end is lost) and its bytes are written there.
@@ -43,6 +43,16 @@ Fast: a byte is ready whenever the ROM looks (it takes one a frame at most, abou
   - the tape's end (tape_len): the first offset that does not start a whole block (sync, $00,
     length, all within the tape), found at a load with a tape file, after a save and an erase.
   - a load without a tape file, and the menu's "Erase ECS tape": all zeros.
+  - 1.0.9, the save chooser (Core Settings "Tape: next load", choose = 0 Newest ... 7 the 8th):
+    a save is a block written after a rewind plus the blocks written back to back after it (Game
+    Factory's two). The blocks that continue a save are marked by one more sync byte: the ECS ROM
+    writes 9, the engine stores CONT_SYNC (10) for a continuation block, so a block with fewer
+    than CONT_SYNC sync bytes starts a save (old tapes, all 9: one save a block). A rewind for
+    playing puts the head at the start of save `choose` (the oldest when there are fewer); a
+    rewind for recording at 0, so saves still go in at the front. At a load's start (playing after
+    a rewind) `line` is (the save's number, the number of saves) for the on-screen "TAPE: SAVE k OF
+    n", from the load's first byte read, when choose is not Newest or the tape holds more than one
+    save (a save's SET prompt turns the motor on to play, too, but reads nothing).
 
 Save state (intv_tape's words): the head, the mode, the motor-off count; not the tape (a state
 load never undoes a save), and not a save in progress (a state load abandons one: it is taken out
@@ -66,6 +76,7 @@ NAME_LEN = 4
 FRAME = 14934                   # CPU cycles a frame (intv_system)
 REWIND_IDLE = 60 * FRAME        # motor off this long: the next start rewinds
 MODE_MOTOR, MODE_REC = 0x10, 0x20
+CONT_SYNC = 10                  # 1.0.9: a block that continues a save (the ROM's 9 + 1)
 
 
 def parse_block(t, o, limit):
@@ -112,6 +123,12 @@ def basic_name(nm):
             and all(0x20 <= c <= 0x5A for c in nm))
 
 
+def save_starts(t):
+    """1.0.9: the offsets of the blocks that start a save (fewer than CONT_SYNC sync bytes, or the
+    tape's first block)."""
+    return [o for i, (o, k, n, ln) in enumerate(blocks(t)) if k < CONT_SYNC or i == 0]
+
+
 def floor_block(t, head):
     """The last block start at or before head (0 if none): where a save goes in."""
     o = 0
@@ -129,6 +146,10 @@ class Tape:
         self.t = bytearray(SIZE)
         self.tape_len = 0
         self.idle = idle                # the rewind's motor-off time (benches use less)
+        self.choose = 0                 # 1.0.9: Tape: next load (0 Newest)
+        self.cont = False               # a save was committed and no rewind since: the next continues it
+        self.line = None                # (k, n, cycle): the on-screen line's text and when it started
+        self.pend_line = None           # (k, n) from a rewind for playing, until the first byte is read
         self.reset()
 
     # -- media -------------------------------------------------------------
@@ -137,12 +158,14 @@ class Tape:
         self.t = bytearray(data[:SIZE].ljust(SIZE, b"\0"))
         self.tape_len = tape_end(self.t)
         self.t[self.tape_len:] = bytes(SIZE - self.tape_len)     # past the end: zeros
+        self.cont = False
 
     def clear(self):
         """A load without a tape file, and the menu's Erase ECS tape."""
         self.t = bytearray(SIZE)
         self.tape_len = 0
         self.head = 0
+        self.cont = False
 
     def file(self):
         """The slot's bytes (the Pocket saves them as GAME.ecs)."""
@@ -154,6 +177,7 @@ class Tape:
         if getattr(self, "rec", None) is not None:
             self.abandon()
         self.head = 0
+        self.cont = False
         self.mode = 0
         self.off_at = None              # the cycle the motor stopped (None: off since the reset)
         self.rec = None                 # a save in progress: dict(ph, k, n, got, length)
@@ -178,6 +202,8 @@ class Tape:
             v = self.t[self.head] if self.head < SIZE else 0
             if self.playing and self.head < self.tape_len:
                 self.head += 1
+                if self.pend_line is not None:  # 1.0.9: a load's first byte: the line shows
+                    self.line, self.pend_line = self.pend_line + (cycle,), None
             return v
         return 0
 
@@ -195,12 +221,28 @@ class Tape:
         if motor and not was_motor:
             if self.off_at is None or cycle - self.off_at >= self.idle:
                 self.head = 0
+                self.cont = False
+                if not m & MODE_REC:
+                    # 1.0.9: playing: the start of save `choose` (the oldest when there are fewer)
+                    st = save_starts(self.t)
+                    self.pend_line = None
+                    if st:
+                        i = min(self.choose, len(st) - 1)
+                        self.head = st[i]
+                        if self.choose or len(st) > 1:      # shown at the first byte read
+                            self.pend_line = (i + 1, min(len(st), 99))
+            if not m & MODE_REC:
+                self.cont = False               # a load in between: the next save is a new one
         if not motor and was_motor:
             self.off_at = cycle
         if was_rec and not self.recording:
             self._finish()
         if self.recording and not was_rec:
-            self.rec = dict(ph="sync", k=0, n=0, got=0, length=0, lo=0, ins=floor_block(self.t, self.head))
+            # 1.0.9: a new save (no save committed since the rewind) goes in at the front; a
+            # continuation (a save written back to back) right after the save before it
+            self.pend_line = None
+            self.rec = dict(ph="sync", k=0, n=0, got=0, length=0, lo=0,
+                            ins=floor_block(self.t, self.head) if self.cont else 0, cont=self.cont)
 
     # -- saving ------------------------------------------------------------
     def _rec_byte(self, b):
@@ -215,6 +257,8 @@ class Tape:
         elif r["ph"] == "lo":
             r["lo"], r["ph"] = b, "hi"
         elif r["ph"] == "hi":
+            if r["cont"]:
+                r["k"] += 1                         # 1.0.9: a continuation block: one more sync byte
             r["n"] = (-(r["lo"] | b << 8)) & 0xFFFF
             r["length"] = r["k"] + 3 + r["n"]
             i = r["ins"]
@@ -258,6 +302,7 @@ class Tape:
                     break
                 o += bl
             self.head = i + ln
+            self.cont = True
         self.tape_len = tape_end(self.t)
         self.t[self.tape_len:] = bytes(SIZE - self.tape_len)
 
@@ -278,7 +323,7 @@ class Tape:
             off = (1 << 20) - 1
         else:
             off = min(cycle - self.off_at, (1 << 20) - 1)
-        return [self.head | self.mode << 16, off]
+        return [self.head | self.mode << 16, off | self.cont << 27]
 
     def load_state(self, words, cycle):
         self.abandon()
@@ -286,6 +331,7 @@ class Tape:
         self.mode = words[0] >> 16 & 0xFF
         off = words[1] & 0xFFFFF
         self.off_at = None if off == (1 << 20) - 1 else cycle - off
+        self.cont = bool(words[1] >> 27 & 1)
 
 
 # ---------------------------------------------------------------- the .wav side
@@ -499,6 +545,37 @@ def selftest():
         to_wav(data, p)
         back, errs = from_wav(p)
         chk(back == data and errs == 0, "the .wav round trip (%d bytes, %d errors)" % (len(back), errs))
+    # 1.0.9: the continuation marker and the save chooser (tg: two saves of two blocks each)
+    chk([k for _, k, _, _ in blocks(tg.t)] == [9, CONT_SYNC, 9, CONT_SYNC] and save_starts(tg.t) == [0, bl[2][0]],
+        "a save's continuation blocks get %d sync bytes, its first the ROM's 9: two saves" % CONT_SYNC)
+
+    def load_choice(t, k, c):
+        t.choose = k
+        t.line = t.pend_line = None
+        return _load(t, c), _load(t, c + 100), t.line
+    c = cyc + 6 * gap
+    got = load_choice(tg, 1, c)
+    chk(got[0] == bytes([0, 0, 0, 0, 1]) * 40 and got[1] == b"`;`;" + bytes([1]) * 30 and got[2][:2] == (2, 2),
+        "Tape: next load = 2nd: the older save's two blocks, in order; the line 'SAVE 2 OF 2'")
+    got = load_choice(tg, 5, c + 2 * gap)
+    chk(got[0] == bytes([0, 0, 0, 0, 1]) * 40 and got[2][:2] == (2, 2), "past the oldest save: the oldest")
+    got = load_choice(tg, 0, c + 4 * gap)
+    chk(got[0] == bytes([0, 0, 0, 0, 2]) * 40 and got[2][:2] == (1, 2), "Newest with two saves: the line 'SAVE 1 OF 2'")
+    tg.choose = 1
+    tg.write(0xE2, 0x1D, c + 6 * gap)               # a save's SET prompt: the motor on to play
+    tg.write(0xE2, 0x00, c + 6 * gap)
+    tg.line = None
+    _save(tg, c + 6 * gap + 50, bytes([0, 0, 0, 0, 3]) * 40)
+    chk(tg.line is None and save_starts(tg.t) == [0, 212, 212 + 212 + 47] and blocks(tg.t)[0][1] == 9,
+        "a new save with the chooser on 2nd: at the front, 9 sync, no line (nothing read)")
+    old = Tape()
+    old.load_file(bytes(tg.t[:blocks(tg.t)[0][3]]) + bytes([0xAA] * 9 + [0, 0xFB, 0xFF]) + b"END\0\0")
+    chk(len(save_starts(old.t)) == 2, "an old tape (all 9 sync): one save a block")
+    single = Tape()
+    single.load_file(one)
+    single.reset()
+    chk(load_choice(single, 0, cyc)[2] is None and load_choice(single, 3, cyc + gap)[2][:2] == (1, 1),
+        "one save: no line on Newest; on 4th: 'SAVE 1 OF 1'")
     print("TAPE_SELFTEST %s" % ("pass" if not fails else "FAIL (%d)" % len(fails)))
     return 0 if not fails else 1
 
@@ -509,10 +586,13 @@ def main(argv):
     cmd = argv[1]
     if cmd == "list":
         t = open(argv[2], "rb").read()
+        starts = save_starts(t)
         for o, k, n, ln in blocks(t):
             nm = name_of(t, o, k, n)
-            print("%5d  sync %d  %5d data bytes  name %r" % (o, k, n, nm))
-        print("end of the tape at %d of %d" % (tape_end(t), len(t)))
+            what = "save %d" % (starts.index(o) + 1) if o in starts else "  continues"
+            print("%5d  %-11s sync %2d  %5d data bytes  name %r" % (o, what, k, n, nm))
+        print("%d saves (a block with %d sync bytes continues the save before it); end of the tape at %d of %d"
+              % (len(starts), CONT_SYNC, tape_end(t), len(t)))
         return 0
     if cmd == "towav":
         to_wav(open(argv[2], "rb").read(), argv[3])

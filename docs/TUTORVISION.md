@@ -48,16 +48,23 @@ with the mode off too.
 
 | Item | Options | Address |
 |---|---|---|
-| TutorVision | Auto (by cartridge), Off, INTV88, Full (WBEXEC) | 0x10000234 |
-| INTV88 Bus Timing | As the 2609; STIC 1A (12 a frame) (section 3.6) | 0x10000238 |
+| TutorVision | Auto (by cartridge), Off, INTV88, Full (WBEXEC), INTV88 12-request, Full 12-request (section 3.6) | 0x10000234 |
 | Font | Original; TutorVision | 0x1000023C |
+
+1.0.9: the bus-request option is folded into the TutorVision list (its item at 0x10000238 gave
+its place in the menu to Tape: next load). The list's values 0-3 are 1.0.8's (Auto, Off, INTV88,
+Full), so a saved TutorVision setting means what it did; 4 and 5 are INTV88 and Full with the
+12-request timing (`core_top.v`: tv_setting 2 / 3 and tv_bq_set). The core no longer decodes
+0x10000238, so a 1.0.8 setting of "STIC 1A (12 a frame)" left in the Pocket's saved settings is
+dropped: the timing is back off (its default) until 4 or 5 is chosen. Auto has no 12-request
+variant (no known program depends on the timing).
 
 The mode is latched at machine reset (`intv_core.sv`), like the ECS and Intellivoice modes:
 
 - **Off**: off. **INTV88**: INTV88.
 - **Full**: Full when `wbexec.bin` is loaded (slot 0x108 status ok), else INTV88.
 - **Auto**: as Full for a cartridge the Auto rule marks (section 2.3), else off.
-- The bus-timing option applies only while the mode is on.
+- The 12-request timing (4, 5) applies only while the mode is on.
 - **Font**: the TutorVision GROM when the option is on and `wbgrom.bin` is loaded; else
   `grom.bin`. It applies with the mode off too (both GROM ports: the CPU's and the STIC's).
 
@@ -159,7 +166,7 @@ extensions, not bank-switched [Z p.4]. Full maps the second half at $2000-$2FFF 
 WBEXEC ROM, 4,096 x 10) and turns the ECS off: the menu's ECS item is overridden while Full is in
 effect. The cartridge port still sees the bus there but its reads are overridden.
 
-### 3.6 The bus-request option (INTV88 Bus Timing)
+### 3.6 The bus-request option (TutorVision's "12-request" choices; until 1.0.8 INTV88 Bus Timing)
 
 [Z p.15-16]: the INTV88 leaves the CPU slightly more bus time; Zbiciak's guess, from experiments
 in jzIntv, is that the STIC 1A issues only the 12 card-row requests (no short request at the

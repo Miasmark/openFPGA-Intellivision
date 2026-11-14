@@ -96,6 +96,22 @@ bit 4 clear. Read masks are the 8914's (MAME's; ay8910.cpp notes that the 8916/8
 "mirror one of the i/o ports, needs further testing": not modelled). Register 8 bits 6 and 7 are
 the port directions (A = $00FE, B = $00FF). Both PSGs step together.
 
+**Hand controllers 3 and 4 (1.0.9).** The ECS's two controller sockets are on PSG #2's ports: hand
+controller 3 on port B (`$00FF`), 4 on port A (`$00FE`), each pulling its lines low while its port
+is an input (MAME `devices/bus/intv_ctrl/ecs_ctrl.cpp:149-157`; the ECS ROM's routine at `$7134`
+reads them into `$011F` / `$0120`). World Cup Football (CRC `15D9D27A`, an ECS game no list records:
+`data/cart_extra.csv` now sets its ECS flag, so Auto turns the ECS on) reads them for players 3
+and 4. `intv_input` makes them from cont3 and cont4 (types 1-3; cont3 type 4, the USB keyboard,
+gives no player 3) as it makes players 1 and 2 (the same keypad mode and profile), and sends
+`$FF` unless the ECS is fully on (mode on); `intv_ecs` ANDs them into the matrix read
+(`port_a <= ... & (dir_a ? 8'hFF : hand_a)`), so with no key and no controller the read is as
+before. Swap Controllers (0x20C, 0-3) is cont1's seat: cont1 trades places with the controller of
+seat 1-4 (`tools/intv_input.py seats`). The on-screen keypad and keyboard stay cont1's: Select's
+keypad presses the keys of cont1's seat; Start's keyboard is the ECS's. Model: `tools/ecs.py`
+`pads_at`, `tools/intv_system.py` presses `p3:` / `p4:`. Checks: tb_input class 13 (every seat with
+the ECS on, attached and off; 6 plants), tb_system image wcf_auto (Auto turns the ECS on) and
+`--ecs-play` wcf4 (World Cup Football, four players: players 3 and 4 move on their ports).
+
 **The mix.** The sound is PSG #1 + PSG #2; while the ECS is attached or on the sum is scaled to 3/4
 (floor; `intv_machine.sv`), and then held at 32,767 at most. With the ECS off it is PSG #1 alone,
 unscaled, as in 0.0.8. Why (step-9 review): with the plain sum, World Series Major League Baseball
@@ -202,10 +218,11 @@ rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-
 - `$E0` reads `$0002`, plus bit 0 while playing with a byte under the head; `$E1` reads the byte
   (`$00xx`) and, playing, moves the head on: the ROM takes one a frame, about twice a real 300-baud
   tape. Bits 3-5 (errors) are never set.
-- A save is a block of the tape, and goes in at the head: after a rewind that is the front, so the
-  newest save comes first; right after another save (the motor off for a moment, no rewind) it is
-  just after that block, so a game that writes one save as several blocks keeps them in their
-  order. Game Factory does (owner's 1.0.5 test, 2026-11-07: its game came back scrambled while
+- A save is a block of the tape. A new save goes in at the front, so the newest save comes first
+  (1.0.9; until 1.0.8 at the head, which after a rewind was the front too, but after a load within
+  1 s was the middle of the tape); right after another save (the motor off for a moment, no
+  rewind and no load between) it is just after that block, so a game that writes one save as
+  several blocks keeps them in their order. Game Factory does (owner's 1.0.5 test, 2026-11-07: its game came back scrambled while
   each block went to the front): its save is two engine calls back to back, ECS RAM `$4085-$47C8`
   (1,859 bytes) then cartridge RAM `$8800-$8B0C` (780 bytes), and its load reads them in that
   order. When the length comes in, the tape from there moves up by the block's length (what
@@ -215,10 +232,35 @@ rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-
   game's data (Game Factory's `00 00 00 00`, `` `;`; ``) never replaces anything. The tape's end
   is found again (a block cut at the end is dropped) and the rest is zeroed. A save that stops
   short (or is cut by a reset or a state load) is taken out again. A block that does not fit from
-  where it goes in is not recorded. (The head inside a block: the save goes in at that block's
-  start.)
+  where it goes in is not recorded.
 - The head goes to 0 at a machine reset and when the motor starts after 1 s (60 frames) or more
   with it off: CLOD's SET / GO prompts rewind, its search from block to block does not.
+- **The save chooser** (1.0.9; the owner's decisions on `TAPE_CHOOSER.md`, outside the
+  repository: menu option A, the marker below, the line). **The marker:** a block that continues a
+  save (its 2nd, 3rd ... part, written back to back: Game Factory's cartridge RAM) is written with
+  **10** `$AA` sync bytes; a save's first block keeps the ROM's **9**. So a save is a block with
+  fewer than 10 sync bytes (or the tape's first) and the 10-sync blocks after it; a tape from
+  jzIntv or from 1.0.5-1.0.8 (all 9) counts one save a block. `tools/ecs_tape.py list` prints it
+  ("save k" / "continues"). The ROM's loader counts `$AA` until `$00` and does not care how many:
+  checked before building, in the model with the real ECS ROM (ECS BASIC CLOD and CVER of a
+  10-sync block: the same ECS RAM, no error flag, the same screen; Game Factory's LOAD of a save
+  whose blocks have 9 + 10 and 10 + 10 sync: ECS RAM and cartridge RAM exactly back; WSMLB Old
+  Game), and in jzIntv as a black box (ECS BASIC CLOD of a jzIntv-written program with 9 and with
+  10 sync: both list and run; Game Factory's LOAD of the owner's jzIntv tape and of the same with
+  a 10-sync second block: the same screen and the same ECS and cartridge RAM after the load, by
+  jzIntv's debugger. jzIntv's own CLOD reads its file without the ROM's lead-in check: the same
+  tape with the second block's `$00` broken loads alike, so jzIntv takes any lead-in). **Choosing:** Core
+  Settings' **Tape: next load** (0x240, Newest / 2nd ... 8th, not persisted): a rewind for playing
+  puts the head at the start of that save (the oldest when there are fewer) instead of 0;
+  `CLOD NAME` searches on from there. Saves still go to the front (a rewind for recording goes to
+  0; ECS BASIC's SET prompt starts the motor to play, then records: the new save is not put at
+  the chosen save). `intv_tape` keeps the first 8 saves' starts and the count (up to 99) from
+  every END walk (the walk after each save, file load and erase), so a rewind is as instant as
+  before. **The line:** at the load's first byte read (not at the motor start: a save's SET
+  prompt starts the motor to play too) when the chooser is not Newest or the tape holds more than
+  one save, `intv_tape` pulses `tl_go` with the save's number and the count, and `core_top` shows
+  "TAPE: SAVE k OF n" for 120 frames at the picture's top left (x 4, lines 4-19), in the on-screen
+  keypad's label style (`intv_osk_draw`, `tools/osk.py tape_text`).
 - **Tape speed** (1.0.6; Core Settings, default Normal; the owner's go of 2026-11-10 after the
   options in `TAPE_SPEED.md`, outside the repository). Normal: the ROM's routine (`$7E70`) is
   called once a frame while `$015E` bit 3 is set (by the ECS interrupt handler `$7261` for ECS
@@ -242,8 +284,9 @@ rules; `intv_tape.sv` (in `intv_machine`, beside `intv_ecs`, which answers `$E0-
   so a state may be made at any time, inside the loop too. A real ECS has no such speed; Normal
   is the console's pace.
 - The printer's output is still discarded.
-- Save state: module `tape` ($22, 2 words: the head and mode, the motor-off count; blob version 6).
-  The tape itself is media, not state: a state load never undoes a save.
+- Save state: module `tape` ($22, 2 words: the head and mode, the motor-off count; blob version 6;
+  1.0.9: word 1 bit 27 "a save was just committed": the next save continues it). The tape itself
+  is media, not state: a state load never undoes a save.
 - `tools/ecs_tape.py` is also the developer's tool: `list` (a tape's blocks), `towav` / `fromwav`
   (300-baud FSK: 4,800 Hz 1, 2,400 Hz 0, 8 data bits LSB first, odd parity, 2 stop bits, for a real
   ECS and recorder), `join` (several `.ecs` files into one tape).
@@ -261,8 +304,10 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
 - `tools/ecs.py` selftest (ECS_SELFTEST): the matrix rule's cases, pages, modes, the 8917's select.
 - The cassette (1.0.5): `tools/ecs_tape.py` selftest (TAPE_SELFTEST: saves by name, newest first,
   the rewind, a stopped save, a full tape, a block too long, a jzIntv file, the state, the .wav
-  round trip); `sim/tb/tb_tape.py` (RTL = model on 5 spec and 12 random UART scripts: every read,
-  state word and store dump; planted faults); `sim/tb/run_tb_tape_nv.sh` (the slot at the bridge:
+  round trip; 1.0.9: the marker, the chooser, the line); `sim/tb/tb_tape.py` (RTL = model on 8
+  spec and 12 random UART scripts: every read, tape line, state word and store dump; planted
+  faults; 1.0.9: scripts chooser and chooser_old, the random scripts set the chooser, the bench's
+  rewind time 16,000 cycles, above its 12,000-cycle settle, so back-to-back saves really are); `sim/tb/run_tb_tape_nv.sh` (the slot at the bridge:
   a file with its tail zeroed, the clear, the erase); `sim/tb/tb_system.py --ecs-play` ecstape (ECS
   BASIC CSAV AAA, CSAV BBB, CLOD AAA past BBB and RUN 1.00, CLOD BBB and RUN 22.00: RTL = model
   frame by frame); tb_system's state dumps compare the tape's words; `sim/check/ecs_tape_check.py`
@@ -270,6 +315,9 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   SHIFT+K, RTN: one 1,792-byte block of its ECS RAM `$4100-$47FF`, 1,988 frames) and, in a fresh
   game with that tape, Old Game (RTN, 1, C, SHIFT+O, RTN: 1,805 frames): every byte back, both end
   on "Done". Game Factory's two-block save is covered by its rule in tb_tape's session script.
+  1.0.9: WSMLB's Old Game and Game Factory's LOAD again from a tape with a short junk save in
+  front and Tape: next load on 2nd (the same RAM back, the line SAVE 2 OF 2), and Game Factory's
+  store must write 9 then 10 sync bytes.
 - Tape speed (1.0.6): `sim/check/ecs_tape_check.py --basic --wsmlb --gf` runs every case at Normal
   and at Instant and compares the tape, head, mode, ECS RAM (with the routine's control block),
   `$015E / $015F` and Game Factory's cartridge RAM exactly (ECS BASIC with CVER and a CLOD waiting

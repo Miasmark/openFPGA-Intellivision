@@ -11,8 +11,10 @@ name, loads after a rewind and within 1 s, a load past the end, a save stopped s
 long, a full tape dropping its oldest blocks, a tape file with a garbage tail, an erase, a reset
 and a state load during a save, a state load during a load, the data byte that comes in while the
 tape moves up), then random ones (saves of random length and names from a small set, loads,
-rewinds, stops). Every read the RTL answers, every state word and the whole store at each dump
-must equal the model's. --all also plants faults in the RTL, each of which must make the bench
+rewinds, stops). 1.0.9: the save chooser (saves of one and two blocks, each choice, past the
+oldest, an old tape of 9-sync blocks, a save after a load, the line at a load's first byte; the
+random scripts set the chooser too). Every read the RTL answers, every tape line, every state word
+and the whole store at each dump must equal the model's. --all also plants faults in the RTL, each of which must make the bench
 fail. TB_TAPE_ALL pass / FAIL.
 """
 import argparse
@@ -31,9 +33,11 @@ import tbcommon  # noqa: E402
 CORE = os.path.join(ROOT, 'src', 'fpga', 'core')
 TB = os.path.join(ROOT, 'sim', 'tb', 'tb_tape.sv')
 RTL = ['intv_tape_store.sv', 'intv_tape.sv']
-IDLE = 3000                 # the bench's rewind time (CPU cycles); the core's is et.REWIND_IDLE
 ROOM = 12000                # CPU cycles after anything that sets the engine going (a move: 16,384
                             # bytes x 3 clocks / 8 clocks a cycle, and a whole-store dump)
+IDLE = 16000                # the bench's rewind time (CPU cycles); the core's is et.REWIND_IDLE.
+                            # 1.0.9: more than ROOM (until 1.0.8 3,000), so a session save (the
+                            # next block ROOM after the last) does not rewind
 
 
 class Script:
@@ -58,11 +62,19 @@ class Script:
     def r(self, a, g=4):
         self.c += g
         self.ops.append('R %d %x' % (self.c, a))
+        line = self.tp.line
         v = self.tp.read(a, self.c)
         self.exp.append('Q %d %04x' % (self.nq, v))
+        if self.tp.line is not line:            # 1.0.9: a load's first byte: the tape line
+            self.exp.append('T %d %d' % self.tp.line[:2])
         self.nq += 1
         self.c += 1
         return v
+
+    def choose(self, v):
+        """1.0.9: Core Settings "Tape: next load" (0 Newest)."""
+        self.ops.append('H %d' % v)
+        self.tp.choose = v
 
     def settle(self):
         self.ops.append('Z')
@@ -74,11 +86,15 @@ class Script:
         self.exp.append('S %08x %08x' % tuple(w))
         return w
 
-    def load_state(self, w):
+    def load_state(self, w, room=None):
+        """room: CPU cycles to leave after it instead of a settle (nothing for the engine to do)."""
         self.ops.append('L %d %x %x' % (self.c, w[0], w[1]))
         self.tp.load_state(w, self.c)
         self.c += 4
-        self.settle()
+        if room is None:
+            self.settle()
+        else:
+            self.c += room
 
     def media_file(self, data):
         """A load with a tape file: the Pocket's bytes, then the walk."""
@@ -118,8 +134,8 @@ class Script:
     def save(self, name, data, sync=9, stop_after=None, quick=False, hold_motor=False, session=False,
              pace=None):
         """A save as the ECS ROM writes it. session: right after the previous save (the motor off
-        for a moment, no rewind: Game Factory's second block); else after more than 1 s, so the
-        record start rewinds (ECS BASIC's prompts)."""
+        for a moment, no rewind: Game Factory's second block, a continuation with 10 sync bytes,
+        1.0.9); else after more than 1 s, so the record start rewinds (ECS BASIC's prompts)."""
         body = (name.ljust(4).encode() if name else b'') + bytes(data)
         n = len(body)
         self.w(0xE2, 0x39, 20 if session else IDLE + 10)
@@ -223,12 +239,12 @@ def spec_scripts():
     s.gap(IDLE + 10)
     s.read_block()
     s.read_block()                                # the head after AAA(old)
-    s.save('AAA', b'new one', session=True)       # in at the head: after AAA(old)...
-    s.dump()                                      # ...which is removed; the head moves down with it
+    s.save('AAA', b'new one', session=True)       # a load between: a new save, at the front (1.0.9;
+    s.dump()                                      # until 1.0.8 at the head); AAA(old) is removed
     s.state()
-    s.save('CCC', b'right after', session=True)   # goes in after the new AAA
+    s.save('CCC', b'right after', session=True)   # continues it: after the new AAA, 10 sync bytes
     s.dump()
-    # the head inside a block: a save goes in at that block's start
+    # the head inside a block: a new save still goes in at the front (1.0.9)
     s.gap(IDLE + 10)
     s.w(0xE2, 0x1D, 10)
     for _ in range(5):
@@ -306,6 +322,62 @@ def spec_scripts():
     s.r(0xE1, 20)
     s.r(0xE0, 3)
     out.append(s)
+
+    # 1.0.9: the save chooser
+    s = Script('chooser')
+    s.save('AAA', b'first')
+    s.save(None, bytes([0, 0, 0, 0, 1]) * 30)
+    s.save(None, b'`;`;' + bytes([1]) * 20, session=True)    # a save of two blocks (10 sync)
+    s.save('BBB', b'third')
+    s.dump()                                      # BBB, the pair, AAA: 3 saves, 4 blocks
+    for k in (0, 1, 2, 3, 7, 1):
+        s.choose(k)
+        s.gap(IDLE + 10)
+        s.read_block()                            # save k (the oldest past it); the line at byte 1
+        s.read_block()                            # within 1 s: reads on
+    s.choose(0)
+    s.gap(IDLE + 10)
+    s.load(3)                                     # Newest of 3: the line too
+    s.choose(2)
+    s.gap(IDLE + 10)
+    s.w(0xE2, 0x1D, 10)                           # a save's SET prompt: the motor on to play...
+    s.w(0xE2, 0x00, 10)
+    s.save(None, b'set prompt', session=True)     # ...the save: at the front, no line, 9 sync
+    s.gap(50)
+    s.read_block()                                # within 1 s of the save: no line
+    s.dump()
+    w = s.state()                                 # (no save committed since: cont 0)
+    s.save('CCC', b'c', session=True)             # a new save (a load between), then...
+    w2 = s.state()                                # ...cont 1 in the state
+    s.gap(IDLE + 10)
+    s.read_block()                                # a load clears it...
+    s.load_state(w2, room=200)                    # ...a state load brings it back
+    s.save(None, b'continues CCC', session=True)
+    s.dump()
+    s.load_state(w)
+    s.reset()
+    s.choose(1)
+    s.read_block()                                # after a reset: the motor's first start rewinds
+    out.append(s)
+
+    s = Script('chooser_old')
+    blk = lambda nm: bytes([0xAA] * 9 + [0, (-len(nm)) & 0xFF, 0xFF]) + nm
+    s.media_file(blk(b'ONE.') + blk(b'TWO.') + blk(b'THR.'))   # jzIntv's or 1.0.5-1.0.8's: all 9
+    s.choose(2)
+    s.read_block()                                # one save a block: the 3rd
+    out.append(s)
+
+    s = Script('chooser_one')                     # (the bench takes one tape file a script)
+    s.media_file(blk(b'ONLY'))
+    s.gap(IDLE + 10)
+    s.read_block()                                # one save, Newest: no line
+    s.choose(4)
+    s.gap(IDLE + 10)
+    s.read_block()                                # past it: SAVE 1 OF 1
+    s.clear()
+    s.gap(IDLE + 10)
+    s.load(5)                                     # a blank tape: no line, nothing read
+    out.append(s)
     return out
 
 
@@ -334,6 +406,8 @@ def random_scripts(seed, n):
                 s.reset()
             elif x < 0.93:
                 s.clear()
+            elif x < 0.96:
+                s.choose(rnd.choice([0, 0, 1, 2, 7]))
             else:
                 s.dump()
         s.dump()
@@ -395,9 +469,8 @@ def run_all(binary, work, scripts):
 
 # planted faults: (name, file, from, to); each must make the bench fail
 PLANTS = [
-    ('rewind_every_start', 'intv_tape.sv', "if (offc >= 20'(IDLE)) begin head <= 15'd0;",
-     "if (1'b1) begin head <= 15'd0;"),
-    ('no_rewind', 'intv_tape.sv', "if (offc >= 20'(IDLE)) begin head <= 15'd0;", "if (1'b0) begin head <= 15'd0;"),
+    ('rewind_every_start', 'intv_tape.sv', "if (offc >= 20'(IDLE)) begin\n", "if (1'b1) begin\n"),
+    ('no_rewind', 'intv_tape.sv', "if (offc >= 20'(IDLE)) begin\n", "if (1'b0) begin\n"),
     ('dr_always', 'intv_tape.sv', "wire logic dr   = playing && head < tlen && hb_ok && !busy;",
      "wire logic dr   = playing && hb_ok && !busy;"),
     ('head_stuck', 'intv_tape.sv', "                head <= head + 15'd1;\n                hb_ok <= 1'b0;",
@@ -412,10 +485,10 @@ PLANTS = [
      "mc <= TSIZE - rlen - rins; mup <= 1'b1;\n                    mret <= J_HDR; hj <= 15'd0;\n                    st <= E_HDR;"),
     ('cut_block_kept', 'intv_tape.sv', "if (w_end > 18'(TSIZE)) st <= E_W_H0;", "if (1'b0) st <= E_W_H0;"),
     ('no_short_abort', 'intv_tape.sv', "                        else q_abt <= 1'b1;\n", "                        else q_com <= 1'b1;\n"),
-    ('no_tail_zero', 'intv_tape.sv', "else begin tlen <= wo; zp <= wo; zret <= J_IDLE; st <= E_ZERO; end",
-     "else begin tlen <= wo; zp <= TSIZE; zret <= J_IDLE; st <= E_ZERO; end"),
+    ('no_tail_zero', 'intv_tape.sv', "tlen <= wo; zp <= wo; zret <= J_IDLE; st <= E_ZERO;",
+     "tlen <= wo; zp <= TSIZE; zret <= J_IDLE; st <= E_ZERO;"),
     ('clr_ignored', 'intv_tape.sv', "        if (clr)  q_clr  <= 1'b1;", "        if (1'b0) q_clr  <= 1'b1;"),
-    ('walk_ignored', 'intv_tape.sv', "        if (walk) q_walk <= 1'b1;", "        if (1'b0) q_walk <= 1'b1;"),
+    ('walk_ignored', 'intv_tape.sv', "        if (walk) begin q_walk <= 1'b1;", "        if (1'b0) begin q_walk <= 1'b1;"),
     ('too_long_recorded', 'intv_tape.sv', "> 17'(TSIZE))\n                            rph <= R_SKIP;", "> 17'(TSIZE) + 17'd70000)\n                            rph <= R_SKIP;"),
     ('pend_lost', 'intv_tape.sv', "                    st <= E_DATA;\n", "                    st <= E_IDLE;\n"),
     ('fifo_one', 'intv_tape.sv', "            if (f_push) begin fq[fw] <= wdata[7:0]; fw <= fw + 4'd1; end",
@@ -438,6 +511,24 @@ PLANTS = [
      "hb_ok <= 1'b0;"),
     ('del_before_head_kept', 'intv_tape.sv', "                    head <= 15'(17'(rins) - wbl + 17'(rlen));\n", "\n"),
     ('stale_read_ahead', 'intv_tape.sv', "&& !a_we && !nv_we && !head_chg) begin hb <= a_q;", "&& !a_we && !nv_we) begin hb <= a_q;"),
+    # 1.0.9: the save chooser
+    ('cont_sync_9', 'intv_tape.sv', "rk  <= rk + 15'(rcont);", "rk  <= rk;"),
+    ('choose_ignored', 'intv_tape.sv', "sidx = 7'(choose) < scnt ? choose :", "sidx = 7'(choose) < scnt ? 3'd0 :"),
+    ('blocks_not_saves', 'intv_tape.sv', "(wk < 15'd10 || wo == 15'd0)) begin", "(1'b1 || wo == 15'd0)) begin"),
+    ('oldest_is_newest', 'intv_tape.sv', "? choose : 3'(scnt - 7'd1);", "? choose : 3'd0;"),
+    ('line_k_past_oldest', 'intv_tape.sv', "pl_k <= 4'(sidx) + 4'd1;", "pl_k <= 4'(choose) + 4'd1;"),
+    ('line_on_newest_single', 'intv_tape.sv', "pl_pend <= choose != 3'd0 || scnt > 7'd1;", "pl_pend <= 1'b1;"),
+    ('save_count_from_last', 'intv_tape.sv', "if (wo == 15'd0) begin sst[0] <= 15'd0; scnt <= 7'd1; end",
+     "if (wo == 15'd0) begin sst[0] <= 15'd0; end"),
+    ('line_after_save', 'intv_tape.sv', "rcont <= cont && !rew; pl_pend <= 1'b0;", "rcont <= cont && !rew;"),
+    ('cont_through_rewind', 'intv_tape.sv', "wire logic rew     = wdata[4] && !motor && offc >= 20'(IDLE);",
+     "wire logic rew     = 1'b0;"),
+    ('new_save_at_head', 'intv_tape.sv', "else rins <= 15'd0;                 // a new save: at the front",
+     "else q_flr <= 1'b1;"),
+    ('cont_kept_by_load', 'intv_tape.sv', "                    if (!wdata[5]) cont <= 1'b0;        // a load in between: the next save is new\n",
+     "\n"),
+    ('ss_cont_lost', 'intv_tape.sv', "{cont, fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[27:20];",
+     "{fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];"),
 ]
 
 

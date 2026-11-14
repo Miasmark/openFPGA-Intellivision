@@ -24,6 +24,16 @@
 //           (the tape above it moves down, the top is zeroed); END
 //   ABORT   record stopped short (or a reset or a state load during a save): the tape from rins
 //           moves back down by the block's length, the top is zeroed; END
+//   (1.0.9) the saves: END also counts the saves and keeps the first 8's starts (sst, scnt, up
+//           to 99). A save is a block with fewer than 10 sync bytes (or the tape's first) and the
+//           blocks of 10 after it: the engine writes a block that continues a save (written back
+//           to back, cont) with the ROM's 9 + 1. A rewind for playing puts the head at the start
+//           of save `choose` (Core Settings "Tape: next load": 0 Newest ... 7 the 8th; the oldest
+//           when there are fewer) at once, from the table, and the load's first byte read sends
+//           tl_go with the save's number (tl_k) and the count (tl_n), when choose is not Newest
+//           or the tape holds more than one save: core_top shows "TAPE: SAVE k OF n" for 2 s
+//           (intv_osk_draw). A new save (no save committed since the last rewind or play start)
+//           goes in at the front (FLOOR only for a continuation).
 // A move is 3 clocks a byte (at most 16,384 bytes: 1.2 ms), so the engine is done long before
 // the ECS ROM's next tape access (one a frame at most; the save's data bytes queue behind an
 // INSERT in a 16-byte FIFO: at Tape speed Instant the ROM writes one every few hundred CPU cycles,
@@ -85,6 +95,11 @@ module intv_tape #(
     input  wire logic        clr,               // pulse: blank the tape
     input  wire logic        walk,              // pulse: a tape file came in: find its end
     output logic             busy,
+    // 1.0.9: the save chooser and its on-screen line
+    input  wire logic [2:0]  choose,            // Tape: next load (0 Newest)
+    output logic             tl_go,             // pulse: a load's first byte: show the line
+    output logic [3:0]       tl_k,              //   SAVE k (1-8)
+    output logic [6:0]       tl_n,              //   OF n (1-99)
 
     // the nonvolatile slot (intv_tape_nv): the store's port B
     input  wire logic [13:0] nv_addr,
@@ -125,8 +140,19 @@ module intv_tape #(
     logic [14:0] rlen = 15'd0;                  // the block's length (<= 16,384)
     logic [31:0] rname = 32'd0;                 // the first 4 data bytes, byte 0 in 31:24
     logic [14:0] rins = 15'd0;                  // where the save goes in
+    logic        cont = 1'b0;                   // 1.0.9: a save committed, no rewind or play start since
+    logic        rcont = 1'b0;                  // the save in progress continues one (10 sync bytes)
+    logic [14:0] sst [8];                       // the first 8 saves' starts (each END walk)
+    logic [6:0]  scnt = 7'd0;                   // the saves on the tape (up to 99)
+    initial for (int i = 0; i < 8; i++) sst[i] = 15'd0;
+    wire  logic [2:0] sidx = 7'(choose) < scnt ? choose : 3'(scnt - 7'd1);  // the save a rewind goes to
+    logic        pl_pend = 1'b0;                // a line waits for the load's first byte
+    logic [3:0]  pl_k = 4'd0;
+    logic [6:0]  pl_n = 7'd0;
+    initial begin tl_go = 1'b0; tl_k = 4'd0; tl_n = 7'd0; end
 
     wire logic motor   = mode[4];
+    wire logic rew     = wdata[4] && !motor && offc >= 20'(IDLE);  // 1.0.9: a mode write that rewinds
     wire logic playing = mode[4] && !mode[5];
     wire logic recording = mode[4] && mode[5];
 
@@ -158,7 +184,7 @@ module intv_tape #(
         else if (opnd && !fpend) begin ovr_hit = 1'b1; ovr_q = 16'h0004; end
     end
     assign ss_rdata = ss_hit0 ? {8'd0, mode, 1'b0, head}
-                    : ss_hit1 ? {5'd0, fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step, offc} : 32'd0;
+                    : ss_hit1 ? {4'd0, cont, fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step, offc} : 32'd0;
 
     // ------------------------------------------------------------ the engine
     typedef enum logic [5:0] {
@@ -183,7 +209,7 @@ module intv_tape #(
     logic [16:0] wbl = 17'd0;                   // its length
     logic [15:0] wn = 16'd0;
     typedef enum logic [1:0] {W_END, W_SEARCH, W_FLOOR} wm_t;
-    wm_t         wm = W_END;                    // the walk's job: END, a COMMIT's name search, FLOOR
+    wm_t         wm = W_END;                    // the walk's job: END (1.0.9: the saves too), a COMMIT's name search, FLOOR
     logic [1:0]  wj = 2'd0;
     logic [14:0] hj = 15'd0;                    // the header's byte
     logic [13:0] pf_a = 14'd0;
@@ -223,6 +249,7 @@ module intv_tape #(
         logic f_push, f_pop, f_clr;                // the FIFO's moves this clock
         f_push = 1'b0; f_pop = 1'b0; f_clr = 1'b0;
         a_we <= 1'b0;
+        tl_go <= 1'b0;
         if (a_we || nv_we) hb_ok <= 1'b0;
 
         // -------------------------------------------- the CPU side
@@ -231,6 +258,7 @@ module intv_tape #(
             mode <= 8'd0;
             offc <= 20'hFFFFF;
             hb_ok <= 1'b0;
+            cont <= 1'b0; pl_pend <= 1'b0;
             if (rph == R_DATA) q_abt <= 1'b1;   // a reset during a save: taken out
             rph <= R_NONE;
         end else if (ss_we && ss_hit0) begin
@@ -241,7 +269,7 @@ module intv_tape #(
             rph <= R_NONE;
         end else if (ss_we && ss_hit1) begin
             offc <= ss_wdata[19:0];
-            {fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[26:20];
+            {cont, fpend, f_ent, f_rtn, f_ret, busy_cp, opnd, step} <= ss_wdata[27:20];
         end else begin
             if (ce && !motor && offc != 20'hFFFFF) offc <= offc + 20'd1;
             if (fetch) begin                    // an opcode fetch's BAR: its address on wdata
@@ -259,6 +287,10 @@ module intv_tape #(
             if (rd && sel && a[1:0] == 2'd1 && playing && head < tlen) begin
                 head <= head + 15'd1;
                 hb_ok <= 1'b0;
+                if (pl_pend) begin              // a load's first byte: the line
+                    pl_pend <= 1'b0;
+                    tl_go <= 1'b1; tl_k <= pl_k; tl_n <= pl_n;
+                end
             end
             if (wr && sel && a[1:0] == 2'd1 && recording) begin
                 case (rph)
@@ -269,10 +301,11 @@ module intv_tape #(
                     R_HI:   begin
                         rhi <= wdata[7:0];
                         rn  <= neg16(rlo, wdata[7:0]);
-                        if (17'(rins) + 17'(rk) + 17'd3 + 17'(neg16(rlo, wdata[7:0])) > 17'(TSIZE))
+                        rk  <= rk + 15'(rcont);         // 1.0.9: a continuation block: one more sync byte
+                        if (17'(rins) + 17'(rk) + 17'(rcont) + 17'd3 + 17'(neg16(rlo, wdata[7:0])) > 17'(TSIZE))
                             rph <= R_SKIP;              // does not fit from rins: not recorded
                         else begin
-                            rlen  <= 15'(17'(rk) + 17'd3 + 17'(neg16(rlo, wdata[7:0])));
+                            rlen  <= 15'(17'(rk) + 17'(rcont) + 17'd3 + 17'(neg16(rlo, wdata[7:0])));
                             q_ins <= 1'b1;
                             rph   <= R_DATA;
                         end
@@ -288,7 +321,16 @@ module intv_tape #(
             if (wr && sel && a[1:0] == 2'd2) begin
                 mode <= wdata[7:0];
                 if (wdata[4] && !motor) begin          // the motor starts
-                    if (offc >= 20'(IDLE)) begin head <= 15'd0; hb_ok <= 1'b0; end
+                    if (offc >= 20'(IDLE)) begin
+                        head <= 15'd0; hb_ok <= 1'b0; cont <= 1'b0; pl_pend <= 1'b0;
+                        if (!wdata[5] && scnt != 7'd0) begin  // playing: to save `choose` (the oldest
+                            head <= sst[sidx];                 // when there are fewer); the line
+                            pl_k <= 4'(sidx) + 4'd1;           // waits for the load's first byte
+                            pl_n <= scnt;
+                            pl_pend <= choose != 3'd0 || scnt > 7'd1;
+                        end
+                    end
+                    if (!wdata[5]) cont <= 1'b0;        // a load in between: the next save is new
                     offc <= 20'd0;
                 end
                 if (!wdata[4] && motor) offc <= 20'd1;  // the motor stops (this cycle counts: the model's cycle - off_at)
@@ -301,20 +343,23 @@ module intv_tape #(
                 end
                 if (wdata[4] && wdata[5] && !recording) begin     // record starts
                     rph <= R_SYNC; rk <= 15'd0; rgot <= 16'd0; rname <= 32'd0; dn <= 16'd0;
-                    q_flr <= 1'b1;
+                    // a continuation (after the save before it), unless this write rewinds
+                    rcont <= cont && !rew; pl_pend <= 1'b0;
+                    if (cont && !rew) q_flr <= 1'b1;
+                    else rins <= 15'd0;                 // a new save: at the front
                 end
             end
-            if (clr) begin head <= 15'd0; hb_ok <= 1'b0; end       // the tape blanked: rewound
+            if (clr) begin head <= 15'd0; hb_ok <= 1'b0; cont <= 1'b0; end   // the tape blanked: rewound
         end
         if (clr)  q_clr  <= 1'b1;
-        if (walk) q_walk <= 1'b1;
+        if (walk) begin q_walk <= 1'b1; cont <= 1'b0; end
 
         // -------------------------------------------- the engine (port A)
         case (st)
             E_IDLE: begin
                 if (q_clr) begin
                     q_clr <= 1'b0; q_walk <= 1'b0;
-                    zp <= 15'd0; zret <= J_IDLE; tlen <= 15'd0;
+                    zp <= 15'd0; zret <= J_IDLE; tlen <= 15'd0; scnt <= 7'd0;
                     st <= E_ZERO;
                 end else if (q_walk) begin
                     q_walk <= 1'b0;
@@ -340,6 +385,7 @@ module intv_tape #(
                 end else if (q_com) begin
                     q_com <= 1'b0;
                     head <= rins + rlen; hb_ok <= 1'b0;     // the head after the new block
+                    cont <= 1'b1;                           // a save written right after continues it
                     // a BASIC name: the search over every other block, else straight to END
                     wo <= 15'd0;
                     wm <= rn >= 16'd4 && basic_name(rname) ? W_SEARCH : W_END;
@@ -418,6 +464,14 @@ module intv_tape #(
             E_W_N0: begin
                 // the block's end; wn is its data length
                 wbl <= 17'(w_end - 18'(wo));
+                // 1.0.9: END counts the saves: a block with fewer than 10 sync bytes, or the first
+                if (wm == W_END && w_end <= 18'(TSIZE) && (wk < 15'd10 || wo == 15'd0)) begin
+                    if (wo == 15'd0) begin sst[0] <= 15'd0; scnt <= 7'd1; end
+                    else begin
+                        if (scnt < 7'd8) sst[scnt[2:0]] <= wo;
+                        if (scnt != 7'd99) scnt <= scnt + 7'd1;
+                    end
+                end
                 if (w_end > 18'(TSIZE)) st <= E_W_H0;                   // cut at the top: the end
                 else if (wm == W_FLOOR && w_end > 18'(head)) st <= E_W_H0;  // the block past the head
                 else if (wm == W_SEARCH && wn >= 16'd4 && wo != rins) begin
@@ -434,7 +488,10 @@ module intv_tape #(
             E_W_H0: begin
                 if (wm == W_SEARCH) begin wo <= 15'd0; wm <= W_END; st <= E_W_START; end
                 else if (wm == W_FLOOR) begin rins <= wo; st <= E_IDLE; end
-                else begin tlen <= wo; zp <= wo; zret <= J_IDLE; st <= E_ZERO; end
+                else begin
+                    tlen <= wo; zp <= wo; zret <= J_IDLE; st <= E_ZERO;
+                    if (wo == 15'd0) scnt <= 7'd0;          // no block: no save
+                end
             end
             // remove the block at wo (wbl bytes): down by wbl, zeros at the top, then END
             E_DEL: begin

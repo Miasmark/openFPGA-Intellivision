@@ -8,8 +8,8 @@
 // do for the core.
 //
 // +vec=FILE: one line a frame: key1 joy1 key2 joy2 mode swap crc ecs (hex; ecs bit 0 ecs_full,
-// bit 1 the synthesizer setting). The bench drives frame f's words before frame f starts (line 150
-// of frame f - 1), so the keypads and the keyboard step on them at the frame's start; it prints
+// bit 1 the synthesizer setting; 1.0.9: bit 2 the tape line, its k at 6:3 and n at 13:7). The
+// bench drives frame f's words before frame f starts (line 150 of frame f - 1), so the keypads and the keyboard step on them at the frame's start; it prints
 // "S f" as frame f starts, "F f pad_r pad_l ecs_keys" at its line 100, and
 // every overlay pixel of the frame that is not transparent as "P x y colour" (pocket_video's sampling: the colour
 // intv_osk_draw holds at the ce_pix that ends the pixel). The CRC goes to intv_profile with
@@ -47,6 +47,9 @@ module tb_osk;
     logic [31:0] key1 = 32'd0, joy1 = 32'h80808080, key2 = 32'd0, joy2 = 32'h80808080, crc = 32'd0;
     logic [1:0]  mode = 2'd0;
     logic        swap = 1'b0, efull = 1'b0, synth = 1'b0;
+    logic        tl_on = 1'b0;
+    logic [3:0]  tl_k = 4'd0;
+    logic [6:0]  tl_n = 7'd0;
 
     wire logic [7:0]  pad_r, pad_l;
     wire logic [1:0]  osk_open;
@@ -68,12 +71,12 @@ module tb_osk;
     intv_input #(.KBD_HEX(`OSK_KBD_HEX)) dut_in (
         .clk_74a(clk_74a), .clk(clk),
         .cont1_key(key1), .cont1_joy(joy1), .cont2_key(key2), .cont2_joy(joy2),
-        .cont3_key(32'd0), .cont3_joy(32'd0), .cont3_trig(16'd0),
-        .kp_mode(mode), .swap(swap), .ecs_ovr_74(2'd0), .synth_74(synth), .ecs_full(efull),
+        .cont3_key(32'd0), .cont3_joy(32'd0), .cont3_trig(16'd0), .cont4_key(32'd0), .cont4_joy(32'd0),
+        .kp_mode(mode), .seat({1'b0, swap}), .ecs_ovr_74(2'd0), .synth_74(synth), .ecs_full(efull),
         .frame(frame), .prof_ok(prof_ok), .prof_mode(prof_mode), .prof_sides(prof_sides),
         .osk_open(osk_open), .osk_cur(osk_cur), .osk_held(osk_held),
         .kb_open(kb_open), .kb_cur(kb_cur), .kb_held(kb_held), .kb_mods(kb_mods),
-        .pad_r(pad_r), .pad_l(pad_l), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_ovr(ecs_ovr));
+        .pad_r(pad_r), .pad_l(pad_l), .ecs_pa(), .ecs_pb(), .ecs_keys(ecs_keys), .ecs_synth(ecs_synth), .ecs_ovr(ecs_ovr));
 
     intv_profile #(.CRC_HEX(`OSK_CRC_HEX), .PROF_HEX(`OSK_PROF_HEX)) dut_prof (
         .clk(clk), .crc(crc), .ready(1'b1),
@@ -84,7 +87,7 @@ module tb_osk;
         .clk(clk), .ce_pix(ce_pix), .pf_x(pf_x), .pf_y(pf_y),
         .osk_open(osk_open), .osk_cur(osk_cur), .osk_held(osk_held),
         .kb_open(kb_open), .kb_cur(kb_cur), .kb_held(kb_held), .kb_mods(kb_mods),
-        .prof_ok(prof_ok), .labels(labels), .ovl(ovl));
+        .prof_ok(prof_ok), .labels(labels), .tl_on(tl_on), .tl_k(tl_k), .tl_n(tl_n), .ovl(ovl));
 
     // the overlay as pocket_video takes it
     integer fn = 0, out;
@@ -109,6 +112,7 @@ module tb_osk;
             #1;
             key1 = v[0]; joy1 = v[1]; key2 = v[2]; joy2 = v[3]; mode = v[4][1:0]; swap = v[5][0]; crc = v[6];
             synth = v[7][1];
+            tl_on = v[7][2]; tl_k = v[7][6:3]; tl_n = v[7][13:7];
             @(posedge clk);
             #1;
             efull = v[7][0];

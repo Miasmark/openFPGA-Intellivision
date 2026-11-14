@@ -267,8 +267,16 @@ byte-identical inputs only. Where the time goes and the rules:
 
 ```sh
 python3 sim/check/apf_json_check.py
+python3 -I sim/check/plant_patterns.py
 sim/check/hygiene.sh --names <list outside the repo> --data <BIOS folder> --data <ROM folder>
 ```
+
+`plant_patterns.py` (1.0.9) reads every bench's planted-fault table (tb_system, tb_loader,
+tb_savestate, tb_input, tb_osk, tb_tape, tb_voice, run_tb_cpu.sh, run_tb_timing.sh) without
+running anything and checks in a second that each plant's pattern is still in its RTL file (once
+for the Python benches). A plant whose line was rewritten otherwise fails as "pattern not found"
+only when it runs, hours into a gate (21 such in gate 30). Run it after every RTL change; the
+Python gates run it too (PLANT_PATTERNS pass).
 
 `apf_json_check.py` holds every `dist/` file to Analogue's documented
 limits and to the RTL that answers it (slot addresses and ids, the data

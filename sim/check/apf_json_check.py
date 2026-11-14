@@ -386,8 +386,8 @@ def main():
     sizes = re.search(r"SIZE \[8\] = '\{([^}]*)\}", stub)
     stub_sizes = [int(x.split("'d")[1]) for x in sizes.group(1).split(",")] if sizes else []
     # 1.0.8: loader slot 7 (wbgrom.bin) never required, slot 6 (wbexec.bin) only with the menu's
-    # TutorVision Full (tv_s1 3): red then, else grey
-    req = re.search(r"\.slot_req\s*\(\s*\{1'b0, tv_s1 == 2'd3, 6'b([01]{6})\}\s*\)", core_top)
+    # TutorVision Full (tv_s1 3, 1.0.9 also 5: Full 12-request): red then, else grey
+    req = re.search(r"\.slot_req\s*\(\s*\{1'b0, tv_s1 == 3'd3 \|\| tv_s1 == 3'd5, 6'b([01]{6})\}\s*\)", core_top)
     req = [req.group(1)[5 - i] == "1" for i in range(6)] + [False, False] if req else []
     loader_mask = re.search(r"\.ADDRESS_MASK_UPPER_4\s*\(\s*4'h([0-9A-Fa-f])\s*\)", core_top)
     for i, (s, (name, sid, fn, size, required)) in enumerate(zip(slots, SLOTS)):
@@ -467,6 +467,8 @@ def main():
               f"{v['name']}: {v['address']} decoded by core_top")
         if v["type"] == "action":
             check(all(k not in v for k in ("writeonly", "persist", "defaultval")), f"{v['name']}: action, no setting fields")
+        elif v["name"] == "Tape: next load":       # 1.0.9: back to Newest each time the core starts
+            check(v.get("writeonly") is True and v.get("persist") is False, f"{v['name']}: writeonly, not persisted")
         else:
             check(v.get("writeonly") is True and v.get("persist") is True, f"{v['name']}: writeonly, persist")
         if v["type"] == "list":
@@ -506,13 +508,34 @@ def main():
           and "kp_mode,       // 0 Layer, 1 Face-button ring, 2 Right stick, 3 Auto (the game's profile)" in inp,
           "Keypad Mode: core_top's set_kp_mode at 0x208 (power-up Auto, build step 13), 3 Auto / 0 Layer / 1 Face-button ring / 2 Right stick as intv_input.sv")
     sw = [v for v in var if v["name"] == "Swap Controllers"]
-    pw = re.search(r"reg\s+set_swap\s*=\s*1'b([01]);", core_top)
+    pw = re.search(r"reg\s+\[1:0\]\s+set_swap\s*=\s*2'd(\d);", core_top)
     check(len(sw) == 1 and pw and int(sw[0]["address"], 16) & 0xFFF == 0x20C
-          and re.search(r"12'h20C:\s*set_swap\s*<=\s*bridge_wr_data\[0\];", core_top) is not None
+          and re.search(r"12'h20C:\s*set_swap\s*<=\s*bridge_wr_data\[1:0\];", core_top) is not None
           and sw[0]["defaultval"] == int(pw.group(1)) == 0
-          and [o["value"] for o in sw[0]["options"]] == [0, 1]
-          and "swap,          // 1: player 1 on the right controller" in inp,
-          "Swap Controllers: core_top's set_swap at 0x20C (power-up off: player 1 on the left controller)")
+          and [o["value"] for o in sw[0]["options"]] == [0, 1, 2, 3]
+          and "seat,          // Swap Controllers: cont1's seat, players 1-4" in inp
+          and re.search(r"\.seat\s*\(\s*set_swap\s*\)", core_top) is not None,
+          "Swap Controllers: core_top's set_swap at 0x20C into intv_input's seat (power-up player 1; 1.0.9: "
+          "players 1-4, 1 the old swap)")
+    # 1.0.9: TutorVision's six (the 1A timing folded in) and Tape: next load
+    tv = [v for v in var if v["name"] == "TutorVision"]
+    check(len(tv) == 1 and int(tv[0]["address"], 16) & 0xFFF == 0x234 and tv[0]["defaultval"] == 0
+          and [o["value"] for o in tv[0]["options"]] == [0, 1, 2, 3, 4, 5]
+          and re.search(r"reg\s+\[2:0\]\s+set_tv\s*=\s*3'd0;", core_top) is not None
+          and re.search(r"12'h234:\s*set_tv\s*<=\s*bridge_wr_data\[2:0\];", core_top) is not None
+          and "( tv_s1 >= 3'd4 ? tv_s1[1:0] ^ 2'b10 : tv_s1[1:0] )" in core_top
+          and "( tv_s1 >= 3'd4 )" in core_top
+          and not any(int(v["address"], 16) & 0xFFF == 0x238 for v in var)
+          and "12'h238:" not in blk,
+          "TutorVision: set_tv at 0x234, 0 Auto / 1 Off / 2 INTV88 / 3 Full as 1.0.8, 4 / 5 INTV88 / Full with the "
+          "1A timing (until 1.0.8 the item at 0x238, no longer decoded)")
+    tc = [v for v in var if v["name"] == "Tape: next load"]
+    check(len(tc) == 1 and int(tc[0]["address"], 16) & 0xFFF == 0x240 and tc[0]["defaultval"] == 0
+          and [o["value"] for o in tc[0]["options"]] == list(range(8))
+          and re.search(r"reg\s+\[2:0\]\s+set_choose\s*=\s*3'd0;", core_top) is not None
+          and re.search(r"12'h240:\s*set_choose\s*<=\s*bridge_wr_data\[2:0\];", core_top) is not None
+          and re.search(r"\.tape_choose\s*\(\s*choose_s1\s*\)", core_top) is not None,
+          "Tape: next load: set_choose at 0x240 (power-up Newest, 8 choices) into intv_tape's choose")
     check(re.search(r"\.pad_r\s*\(\s*pad_r\s*\)", core_top) is not None
           and re.search(r"\.pad_l\s*\(\s*pad_l\s*\)", core_top) is not None
           and re.search(r"intv_input\s+\w+\s*\(", core_top) is not None,

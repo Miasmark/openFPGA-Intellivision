@@ -163,6 +163,9 @@ IMAGES = [('nocart', None, None, 10, (0xFF, 0xFF), 'stic'),
           # $00E0-$00FF, the UART stub and PSG #2, in frame 4)
           ('ecsnorom', None, 'ecstest.asm', 12, (0xFF, 0xFF), 'stic'),
           ('nfl_auto', 'Super NFL Footbal (USA) (Proto).zip', None, 24, (0xFF, 0xFF), 'stic'),
+          # 1.0.9: World Cup Football under Auto: on by the table's ECS flag (attached, its ECS RAM
+          # probe at $51E0 sent it into the paged-out ECS ROM at $70C4)
+          ('wcf_auto', 'World Cup Football (Europe).zip', None, 24, (0xFF, 0xFF), 'stic'),
           ('atlantis_auto', 'Atlantis (USA, Europe).zip', None, 10, (0xFF, 0xFF), 'stic'),
           ('bodyslam_auto', 'Body Slam! - Super Pro Wrestling (USA).zip', None, 10, (0xFF, 0xFF), 'stic'),
           # step 10: the Intellivoice (VOICE_OF): our sim/testroms/voicetest.py in the EXEC slot with the
@@ -269,6 +272,7 @@ ECS_OF = {
     'cart4000_on': dict(ovr='on', auto=0),      # forced on: the ECS RAM, not the cartridge, at $4000
     'ecsnorom': dict(ovr='on', auto=1, norom=True),     # no ECS ROM slot: the ROMs never answer
     'nfl_auto': dict(ovr='auto', auto=1),
+    'wcf_auto': dict(ovr='auto', auto=1),
     'atlantis_auto': dict(ovr='auto', auto=2),
     'bodyslam_auto': dict(ovr='auto', auto=2),
 }
@@ -625,6 +629,14 @@ ECS_PLAY = [
     # M=0, O=0) and RUN; MOB 0 then shows GRAM card 62 = the cartridge's $53F5 picture (the boat).
     # MAME's intvecs agrees instruction by instruction and on 4 snapshots (ecs_ref_compare, 2026-10-29).
     ('ecstape', None, _tape_basic()[1], _tape_basic()[0], dict(ovr='auto')),
+    # 1.0.9: World Cup Football with four players (ECS on by Auto): the ECS menu's Cartridge, MATCH,
+    # 2 home and 2 visitors, a kick-off by the console's controllers, then the ECS's hand controllers
+    # 3 (port B, $00FF) and 4 (port A, $00FE) move their players (the ECS ROM's $7134 reads both into
+    # the EXEC's table at $011F / $0120): RTL = model frame by frame with the bench's +epads
+    ('wcf4', 'World Cup Football (Europe).zip', 1900,
+     '300-306:Enter,420-426:2,500-506:Enter,700-706:Enter,850-856:1,920-926:Enter,1000-1006:2,1060-1066:Enter,'
+     '1120-1126:2,1180-1186:Enter,1400-1420:Lower-Right,1420-1500:Right,1500-1900:p3:Up,1500-1900:p4:Down,'
+     '1600-1610:p3:Lower-Right', dict(ovr='auto')),
     ('ecstape_fast', None, _tape_instant()[1], _tape_instant()[0], dict(ovr='auto', instant=True)),
     ('grab', 'Advanced Dungeons & Dragons (USA, Europe).zip', 2056,
      '300-306:Enter,420-426:1,500-506:Enter,'
@@ -1618,9 +1630,23 @@ def key_lines(presses, nframes):
     hand-controller byte (press_pads of notifier k - 1) changes."""
     out, last = [], None
     for k in range(nframes + 2):
-        v = isys.press_pads(presses, k - 1)
+        p = isys.press_pads4(presses, k - 1)
+        v = (p[1], p[0])                # RR = $01FE (port A, player 2), LL = $01FF (player 1)
         if v != last:
-            out.append('%d %02X%02X\n' % (k, v, v))
+            out.append('%d %02X%02X\n' % (k, v[0], v[1]))
+            last = v
+    return out
+
+
+def epad_lines(presses, nframes):
+    """1.0.9: the bench's +epads file: "k AABB" where frame k's ECS hand controllers 4 (port A,
+    $00FE) and 3 (port B, $00FF) change (press_pads4's "p3:" / "p4:" presses)."""
+    out, last = [], (0xFF, 0xFF)
+    for k in range(nframes + 2):
+        p = isys.press_pads4(presses, k - 1)
+        v = (p[3], p[2])
+        if v != last:
+            out.append('%d %02X%02X\n' % (k, v[0], v[1]))
             last = v
     return out
 
@@ -1654,6 +1680,11 @@ def check_screen(binary, work, name, cart, exec_path, grom_path, npics, verbose=
             with open(ef, 'w') as f:
                 f.writelines(ekey_lines(presses, npics))
             cmd.append('+ekeys=' + ef)
+        if presses and any(isinstance(c, tuple) and c[0] == 'pad' and c[1] > 2 for _, _, c in presses):
+            pf = os.path.join(work, 'screen_%s.epads' % name)
+            with open(pf, 'w') as f:
+                f.writelines(epad_lines(presses, npics))
+            cmd.append('+epads=' + pf)
     else:
         cmd.append('+ecs=2')
     t0 = time.time()

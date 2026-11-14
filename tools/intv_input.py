@@ -33,7 +33,17 @@ The mapping (the owner's input notes, "IN" in DESIGN.md, and DESIGN.md 7.2):
   analog); the sticks only on type 3.
 - Player 1's controller is the LEFT one ($01FF, PSG port B), player 2's the
   right one ($01FE, port A): many games read only the left controller.
-  Swap Controllers exchanges them.
+- 1.0.9: players 3 and 4 are the ECS's hand controllers 3 (its PSG's port B,
+  $00FF) and 4 (port A, $00FE; MAME devices/bus/intv_ctrl/ecs_ctrl.cpp:149-157,
+  World Cup Football through the ECS ROM's $7134), from cont3 and cont4 (types
+  1-3; cont3 type 4 is the USB keyboard, so then there is no player 3), only
+  while the ECS is fully on (v["ecs"] == ECS_ON; otherwise their ports read
+  $FF). Swap Controllers (v["swap"], 0-3: Player 1 / 2 / 3 / 4) is the seat of
+  cont1 (the Pocket's own buttons): cont1 trades seats with the controller whose
+  seat that is (Player 2 = the old swap: cont1 right, cont2 left). The
+  on-screen keypads and the ECS keyboard belong to the controller (cont1's,
+  cont2's), whatever its seat; cont3 and cont4 have none. All four players use
+  the same keypad mode and, in Auto, the game's profile.
 - The USB keyboard (cont3 type 4: six HID usage codes in cont3_joy[31:0]
   and cont3_trig[15:0]) is player 1's keypad: 1-9 and 0 on the number row
   and on the numpad, Backspace = Clear, Enter and numpad Enter = Enter.
@@ -368,12 +378,45 @@ def hands(v, osk=None, prof=None, kb=None):
     return hs[0], hs[1]
 
 
+def seats(v):
+    """1.0.9: the controller (0-3: cont1-cont4) in each seat (players 1-4): cont1 takes seat
+    v["swap"] (Swap Controllers: Player 1 / 2 / 3 / 4) and trades it with that seat's
+    controller."""
+    s = list(range(4))
+    n = v["swap"] & 3
+    s[0], s[n] = s[n], s[0]
+    return s
+
+
+def players(v, osk=None, prof=None, kb=None):
+    """1.0.9: the four players' hands (players 1-4), from the controllers' hands by seat."""
+    c1, c2 = hands(v, osk, prof, kb)
+    mode, sides = v["mode"], ("lr", "ll", "top")
+    if mode == AUTO:
+        mode = prof["mode"] if prof else LAYER
+        if prof:
+            sides = prof["sides"]
+    elif mode not in (FACE, RSTICK):
+        mode = LAYER
+    c3 = virtual(v["key3"], v["joy3"], mode, sides=sides)          # type 4 (the keyboard): no hand
+    c4 = virtual(v.get("key4", 0), v.get("joy4", 0x80808080), mode, sides=sides)
+    ctl = (c1, c2, c3, c4)
+    return [ctl[i] for i in seats(v)]
+
+
+def ports4(v, mame=False, osk=None, prof=None, kb=None):
+    """1.0.9: (pad_r, pad_l, ecs_a, ecs_b): $01FE (port A: player 2), $01FF (port B: player 1),
+    the ECS's $00FE (port A: player 4) and $00FF (port B: player 3), the last two $FF unless the
+    ECS is fully on."""
+    p = players(v, osk, prof, kb)
+    c = code_mame if mame else code
+    on = v.get("ecs") == ECS_ON
+    return c(p[1]), c(p[0]), c(p[3]) if on else 0xFF, c(p[2]) if on else 0xFF
+
+
 def ports(v, mame=False, osk=None, prof=None, kb=None):
     """(pad_r, pad_l): $01FE (port A, right) and $01FF (port B, left)."""
-    p1, p2 = hands(v, osk, prof, kb)
-    c = code_mame if mame else code
-    left, right = (p2, p1) if v["swap"] & 1 else (p1, p2)
-    return c(right), c(left)
+    return ports4(v, mame, osk, prof, kb)[:2]
 
 
 def self_check():
@@ -461,6 +504,18 @@ def self_check():
     ok(h.kp == 1 << KP_BIT["E"] and h.disc == want.disc, "Auto + TutorVision profile: L+up+A = disc NNE + Enter")
     ok(all(p1([A, B, X], mode=md).kp == p1([A, B, X], mode=md, prof=None).kp for md in (LAYER, FACE, RSTICK)),
        "the fixed modes ignore the profile")
+    # 1.0.9: players 3 / 4 on the ECS's ports, Swap Controllers' seats
+    pk = {n: (1 << 28) | (1 << b) for n, b in ((1, A), (2, B), (3, X), (4, UP))}
+    w = {n: code(virtual(pk[n], 0, LAYER)) for n in pk}
+    v4 = dict(base, key1=pk[1], key2=pk[2], key3=pk[3], key4=pk[4], ecs=1)
+    ok(ports4(dict(v4, swap=0)) == (w[2], w[1], w[4], w[3]), "seat Player 1: P1 cont1, P2 cont2, P3 cont3, P4 cont4")
+    ok(ports4(dict(v4, swap=1)) == (w[1], w[2], w[4], w[3]), "seat Player 2: cont1 and cont2 trade (the old swap)")
+    ok(ports4(dict(v4, swap=2)) == (w[2], w[3], w[4], w[1]), "seat Player 3: cont1 on the ECS's port B, cont3 player 1")
+    ok(ports4(dict(v4, swap=3)) == (w[2], w[4], w[1], w[3]), "seat Player 4: cont1 on the ECS's port A, cont4 player 1")
+    ok(ports4(dict(v4, swap=2, ecs=2))[2:] == ports4(dict(v4, swap=2, ecs=0))[2:] == (0xFF, 0xFF),
+       "players 3 / 4 only with the ECS fully on (attached, off: $FF)")
+    ok(ports4(dict(v4, key3=4 << 28, joy3=0x59))[3] == 0xFF and ports4(dict(v4, key3=4 << 28, joy3=0x59))[1] != w[1],
+       "the USB keyboard in slot 3: no player 3; its keypad (numpad 1, the ECS on) joins cont1's hand")
     return fails
 
 

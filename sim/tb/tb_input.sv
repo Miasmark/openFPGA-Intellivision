@@ -7,11 +7,12 @@
 // the next one.
 //
 // Part 1, +vec=FILE: each line is class key1 joy1 key2 joy2 key3 joy3 trig3
-// mode swap ecs_ovr synth ecs pad_r pad_l keys_hi keys_lo prof, in hex (step 9:
+// mode seat ecs_ovr synth ecs pad_r pad_l keys_hi keys_lo prof key4 joy4 epads, in hex (step 9:
 // the ECS settings, ecs = the ECS mode on the clk side (0 off, 1 on, 2
 // attached; ecs_full = mode 1), and the ECS keyboard's switches ecs_keys;
 // ecs_ovr and ecs_synth must come out as they went in; 1.0.8: prof, the game
-// profile on the clk side, {ok, mode [13:12], buttons [11:0]}). The bench drives
+// profile on the clk side, {ok, mode [13:12], buttons [11:0]}; 1.0.9: cont4, seat = the
+// Swap Controllers seat 0-3, and epads = {ecs_pa, ecs_pb}, the ECS's controllers 4 / 3). The bench drives
 // the inputs 1 ns after a clk_74a edge, waits 48 clocks (the crossing's
 // handshake takes at most about 7 clk + 4 clk_74a periods plus up to 8 clk
 // for the decode round's load step, twice when a transfer was in flight,
@@ -61,12 +62,12 @@
 
 module tb_input;
 
-    localparam int W = 6 * 32 + 16 + 2 + 1 + 3;
+    localparam int W = 8 * 32 + 16 + 2 + 2 + 3;
 
     logic        clk = 1'b0;
     logic        clk_74a = 1'b0;
-    logic [W-1:0] bus = '0;          // {key1, joy1, key2, joy2, key3, joy3, trig3, mode, swap, ecs_ovr, synth}
-    wire  [7:0]  pad_r, pad_l;
+    logic [W-1:0] bus = '0;          // {key1, joy1, key2, joy2, key3, joy3, trig3, key4, joy4, mode, seat, ecs_ovr, synth}
+    wire  [7:0]  pad_r, pad_l, ecs_pa, ecs_pb;
     logic        ecs_full = 1'b0;    // clk side: the ECS fully on, mode 1 (step 9)
     logic        prof_ok = 1'b0;     // clk side (1.0.8): a game profile, its mode and buttons (intv_profile)
     logic [1:0]  prof_mode = 2'd0;
@@ -188,15 +189,17 @@ module tb_input;
     intv_input #(.KBD_HEX(`OSK_KBD_HEX)) dut (
         .clk_74a    ( clk_74a ),
         .clk        ( clk ),
-        .cont1_key  ( bus[213:182] ),
-        .cont1_joy  ( bus[181:150] ),
-        .cont2_key  ( bus[149:118] ),
-        .cont2_joy  ( bus[117:86] ),
-        .cont3_key  ( bus[85:54] ),
-        .cont3_joy  ( bus[53:22] ),
-        .cont3_trig ( bus[21:6] ),
-        .kp_mode    ( bus[5:4] ),
-        .swap       ( bus[3] ),
+        .cont1_key  ( bus[278:247] ),
+        .cont1_joy  ( bus[246:215] ),
+        .cont2_key  ( bus[214:183] ),
+        .cont2_joy  ( bus[182:151] ),
+        .cont3_key  ( bus[150:119] ),
+        .cont3_joy  ( bus[118:87] ),
+        .cont3_trig ( bus[86:71] ),
+        .cont4_key  ( bus[70:39] ),
+        .cont4_joy  ( bus[38:7] ),
+        .kp_mode    ( bus[6:5] ),
+        .seat       ( bus[4:3] ),
         .ecs_ovr_74 ( bus[2:1] ),
         .synth_74   ( bus[0] ),
         .ecs_full   ( ecs_full ),
@@ -213,13 +216,16 @@ module tb_input;
         .kb_mods    ( ),
         .pad_r      ( pad_r ),
         .pad_l      ( pad_l ),
+        .ecs_pa     ( ecs_pa ),
+        .ecs_pb     ( ecs_pb ),
         .ecs_keys   ( ecs_keys ),
         .ecs_synth  ( ecs_synth ),
         .ecs_ovr    ( ecs_ovr )
     );
 
-    function automatic logic [W-1:0] pack(input logic [31:0] f [18]);
-        pack = {f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0], f[10][1:0], f[11][0]};
+    function automatic logic [W-1:0] pack(input logic [31:0] f [21]);
+        pack = {f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[18], f[19], f[8][1:0], f[9][1:0], f[10][1:0],
+                f[11][0]};
     endfunction
 
     // W random bits
@@ -244,7 +250,7 @@ module tb_input;
 
     int fd, n, cls, nvec, nbad, ngrp, nchk, nchg, ntear;
     int cnt [16], bad [16];
-    logic [31:0] f [18];
+    logic [31:0] f [21];
     logic [W-1:0] gv [16];
     logic [15:0]  ge [16];
     logic [15:0]  prev;
@@ -272,10 +278,10 @@ module tb_input;
                 $finish;
             end
             while (!$feof(fd)) begin
-                n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h\n",
+                n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h\n",
                             f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11],
-                            f[12], f[13], f[14], f[15], f[16], f[17]);
-                if (n != 18) begin
+                            f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19], f[20]);
+                if (n != 21) begin
                     if (n > 0) begin
                         $display("  FAIL  vector %0d: %0d fields", nvec, n);
                         nbad++;
@@ -291,13 +297,15 @@ module tb_input;
                 #1;
                 cnt[cls & 15]++;
                 if (pad_r !== f[13][7:0] || pad_l !== f[14][7:0] || ecs_keys !== {f[15], f[16]}
+                    || {ecs_pa, ecs_pb} !== f[20][15:0]
                     || ecs_ovr !== f[10][1:0] || ecs_synth !== f[11][0]) begin
                     bad[cls & 15]++;
                     if (nbad < 20)
-                        $display("  FAIL  class %0d vector %0d: k1 %h j1 %h k2 %h j2 %h k3 %h j3 %h t3 %h mode %0d swap %0d ovr %0d synth %0d ecs %0d: pad_r %h pad_l %h keys %h ovr %0d synth %0d, want %h %h %h%h",
+                        $display("  FAIL  class %0d vector %0d: k1 %h j1 %h k2 %h j2 %h k3 %h j3 %h t3 %h mode %0d swap %0d ovr %0d synth %0d ecs %0d: pad_r %h pad_l %h keys %h ovr %0d synth %0d epads %h, want %h %h %h%h epads %h",
                                  cls, nvec, f[1], f[2], f[3], f[4], f[5], f[6], f[7][15:0], f[8][1:0], f[9][0],
                                  f[10][1:0], f[11][0], f[12][1:0],
-                                 pad_r, pad_l, ecs_keys, ecs_ovr, ecs_synth, f[13][7:0], f[14][7:0], f[15], f[16]);
+                                 pad_r, pad_l, ecs_keys, ecs_ovr, ecs_synth, {ecs_pa, ecs_pb}, f[13][7:0], f[14][7:0],
+                                 f[15], f[16], f[20][15:0]);
                     nbad++;
                 end
                 nvec++;
@@ -332,6 +340,7 @@ module tb_input;
                     f[0] = 0;
                     n = $fscanf(fd, "%h %h %h %h %h %h %h %h %h %h %h\n",
                                 f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[13], f[14]);
+                    f[18] = 0; f[19] = 0;               // (1.0.9) no cont4 in the tear groups
                     f[10] = $urandom % 3;               // the ECS settings: they change nothing on the pads
                     f[11] = $urandom % 2;
                     gv[i] = pack(f);

@@ -253,6 +253,14 @@ def spec_scripts():
     s.w(0xE2, 0x00, 10)
     s.save(None, b'\x01\x02\x03\x04 inside', session=True)
     s.dump()
+    # 1.0.9: a BASIC name continuing a save whose old copy lies before it (only a continuation goes
+    # in past the front now): the old copy goes, the new block and the head move down with it
+    s.save('AAA', b'old copy')
+    s.save('CCC', b'c', session=True)
+    s.save('AAA', b'newer', session=True)
+    s.gap(50)
+    s.read_block()                                # within 1 s: on from the head
+    s.dump()
     out.append(s)
 
     s = Script('full')

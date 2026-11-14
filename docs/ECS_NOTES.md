@@ -304,9 +304,10 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
 - `tools/ecs.py` selftest (ECS_SELFTEST): the matrix rule's cases, pages, modes, the 8917's select.
 - The cassette (1.0.5): `tools/ecs_tape.py` selftest (TAPE_SELFTEST: saves by name, newest first,
   the rewind, a stopped save, a full tape, a block too long, a jzIntv file, the state, the .wav
-  round trip; 1.0.9: the marker, the chooser, the line); `sim/tb/tb_tape.py` (RTL = model on 8
+  round trip; 1.0.9: the marker, the chooser, the line); `sim/tb/tb_tape.py` (RTL = model on 9
   spec and 12 random UART scripts: every read, tape line, state word and store dump; planted
-  faults; 1.0.9: scripts chooser and chooser_old, the random scripts set the chooser, the bench's
+  faults; 1.0.9: scripts chooser, chooser_old and chooser_one, a BASIC name continuing a save
+  past its old copy (plant del_before_head_kept), the random scripts set the chooser, the bench's
   rewind time 16,000 cycles, above its 12,000-cycle settle, so back-to-back saves really are); `sim/tb/run_tb_tape_nv.sh` (the slot at the bridge:
   a file with its tail zeroed, the clear, the erase); `sim/tb/tb_system.py --ecs-play` ecstape (ECS
   BASIC CSAV AAA, CSAV BBB, CLOD AAA past BBB and RUN 1.00, CLOD BBB and RUN 22.00: RTL = model

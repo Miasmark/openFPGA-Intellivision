@@ -16,6 +16,8 @@ games/
 # own CFGs for our own test ROMs live with their sources.
 *.[cC][fF][gG]
 !sim/testroms/**/*.cfg
+# our own patches' memory maps (patches/*/README.md)
+!patches/*/*.cfg
 # Memory images: anything built from a BIOS or game stays out. The tables
 # our own tools generate (CRC map table, palette) are tracked only under
 # src/fpga/core/tables/.

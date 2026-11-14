@@ -19,7 +19,8 @@
 #         .hex dump). Runs with too few distinct byte values (padding,
 #         fills) are not counted.
 #   - no binary file and no file over LIMIT bytes (default 262144) unless
-#     --allow names it;
+#     --allow names it (--allow-binary PATH: a binary file of our own, such as a
+#     patch, still checked for game data);
 #   - no absolute path into the temporary directory (/tmp, /var/tmp,
 #     /private/tmp), a scratch directory, or a home directory in an added
 #     line. Only a path whose "tmp" continues a relative one (work, ./, ~,
@@ -35,7 +36,7 @@
 # Commit messages are not files and are not checked here.
 #
 #   sim/check/hygiene.sh [--base REV] [--names FILE] [--data DIR]...
-#                        [--allow PATH]... [--limit BYTES] [--repo DIR]
+#                        [--allow PATH]... [--allow-binary PATH]... [--limit BYTES] [--repo DIR]
 # --repo checks another checkout (default: the one this script is in).
 # Exit status 0 when nothing is found, 1 otherwise, 2 on a usage error.
 # SPDX-License-Identifier: MIT
@@ -46,6 +47,7 @@ BASE=
 NAMES="${HYGIENE_NAMES:-}"
 LIMIT=262144
 ALLOW=()
+ALLOWBIN=()
 DATA=()
 IFS=: read -r -a DATA <<< "${HYGIENE_DATA:-}"
 while [ $# -gt 0 ]; do
@@ -54,6 +56,7 @@ while [ $# -gt 0 ]; do
 		--names) NAMES="$2"; shift 2 ;;
 		--data) DATA+=("$2"); shift 2 ;;
 		--allow) ALLOW+=("$2"); shift 2 ;;
+		--allow-binary) ALLOWBIN+=("$2"); shift 2 ;;
 		--limit) LIMIT="$2"; shift 2 ;;
 		--repo) REPO="$(git -C "$2" rev-parse --show-toplevel)" || exit 2; shift 2 ;;
 		*) echo "hygiene.sh: unknown argument $1" >&2; exit 2 ;;
@@ -65,10 +68,11 @@ fi
 git -C "$REPO" rev-parse --verify -q "$BASE^{commit}" > /dev/null || { echo "hygiene.sh: no commit $BASE" >&2; exit 2; }
 DATALIST="$(printf '%s\n' "${DATA[@]}" | grep -v '^$' || true)"
 # -I: the data directories hold files from outside (game images, BIOS).
-python3 -I - "$REPO" "$BASE" "$NAMES" "$LIMIT" "$DATALIST" "${ALLOW[@]}" <<'PY'
+ALLOWBIN_S="${ALLOWBIN[*]}" python3 -I - "$REPO" "$BASE" "$NAMES" "$LIMIT" "$DATALIST" "${ALLOW[@]}" <<'PY'
 import os, re, subprocess, sys, zipfile, zlib
 repo, base, names, limit, datalist = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
 allow = set(sys.argv[6:])
+allow_bin = set(os.environ.get("ALLOWBIN_S", "").split())   # binary allowed, still scanned
 datadirs = [d for d in datalist.split("\n") if d]
 
 def git(*a, binary=False):
@@ -220,7 +224,7 @@ for f in files:
         blob = git("cat-file", "blob", f"HEAD:{f}", binary=True)
     except subprocess.CalledProcessError:
         blob = b""
-    if numstat.get(f, ["", ""])[0] == "-":
+    if numstat.get(f, ["", ""])[0] == "-" and f not in allow_bin:
         bad.append(f"binary file: {f} ({len(blob)} bytes)")
     elif len(blob) > limit:
         bad.append(f"over {limit} bytes: {f} ({len(blob)} bytes)")

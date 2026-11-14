@@ -112,9 +112,11 @@ player-to-controller search (`$5BA0`).
   `PD1R_`.
 - After the location, "PLAYER n POSITION ?" asks for each player in turn: move with that player's
   controller into one of the boxes and press Enter. The first controller to move claims the player.
-- Teams are by side of the net. Player 1's side is player 3's, so **put player 2 on the other side**:
-  the game will not let player 3 cross the net, so with player 2 placed beside player 1, player 3's
-  only boxes are across the net and it cannot reach them (the game's own rule).
+- Teams are whoever stands on the same side of the net, as in the original's two-player doubles:
+  any arrangement works (players 1 and 3 against 2 and 4, or 1 and 2 against 3 and 4, ...), and
+  the game alternates the serve between the teams (1, 4, 3, 2 for the first, 1, 3, 2, 4 for the
+  second). To reach a box on the other side, walk around the **left** net post (along the left
+  edge of the court): the net blocks the middle and the right-hand side.
 - Keypad 0 while player 3 waits still gives the computer doubles, Clear the singles, as before.
 - Serving (as in the original): a lower side button tosses the ball and a second press hits it; the
   top button lobs (in the model, top-button serves were always faults).
@@ -132,6 +134,10 @@ Model (tools/intv_system.py, with the ECS's hand controllers 3 and 4 added on th
   right team each time (the team of players 1 and 3, then players 2 and 4 in the second set), with
   "FAULT", "2ND SERVE", "GAME", "SET PT", "SET", "MATCH PT", "MATCH" as in two-player play. No
   hand-controller call for controllers 3 or 4 outside their own input once the held-disc fix was in.
+- **Four humans, other teams, a full match.** Players 1 and 2 placed on the near side, 3 and 4
+  walked around the left net post to the far boxes: serve order 1, 3, 2, 4 in all 32 games, sets
+  2-6, 6-2, 2-6, 2-6 (the scripted serves did not always do what the script meant), "MATCH" when
+  the team of players 3 and 4 won its third set. In jzIntv, too, player 3 crossed around the left post to the far side.
 - **Four humans, ECS Auto with the `.cfg`** (ECS attached, no ECS menu): placed, mode 0, first
   game played.
 - **Two players, unchanged**: singles and computer doubles (keypad 0), with the ECS off, on and
@@ -177,7 +183,7 @@ ECS's menu. With ECS Off it plays as the original, two players.
 - **Hardware.** Checked in our model and in jzIntv only. The ECS RAM probe, port directions and
   marker byte follow the ECS ROM and MAME, but no real ECS has run it.
 - **Game rules nobody shipped.** The four-player mode is the game's own, unfinished-looking code:
-  one bug is fixed here (the held disc); the net rule for player 3 above is left as the game has it.
+  one bug is fixed here (the held disc).
   Rallies with four people returning the ball were tried only briefly (jzIntv); the full match used
   serves only.
 - **Timing.** The patch adds work to every main-loop pass (with the ECS, two more passes through the

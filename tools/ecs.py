@@ -237,6 +237,7 @@ class Ecs:
         self.keys = 0                           # pressed switches now (bit 8 row + col)
         self.synth = False                      # the synthesizer is plugged in
         self.keys_at = None                     # f(frame) -> keys (scripted presses)
+        self.pads_at = None                     # (tennis branch) f(frame) -> (hand ctrl 3, 4) bytes
         self.tape = ecs_tape.Tape()             # the cassette (1.0.5): GAME.ecs, ecs_tape.py
         self.instant = False                    # Tape speed: Instant (1.0.6; intv_system._tape_patch)
         self.reset()
@@ -280,7 +281,16 @@ class Ecs:
         dir_a, dir_b = en >> 6 & 1, en >> 7 & 1
         if self.mame:
             return matrix_read_mame(keys, dir_a, self.lat[0])
-        return matrix_read(keys, self.synth, dir_a, dir_b, self.lat[0], self.lat[1])
+        a, b = matrix_read(keys, self.synth, dir_a, dir_b, self.lat[0], self.lat[1])
+        if self.pads_at is not None and frame is not None:
+            # (tennis branch) the ECS's hand controllers 3 (port B, $00FF) and 4 (port A, $00FE)
+            # pull their port's lines low while the port is an input (MAME ecs_ctrl.cpp:149-157)
+            p3, p4 = self.pads_at(frame)
+            if not dir_a:
+                a &= p4
+            if not dir_b:
+                b &= p3
+        return a, b
 
     def read(self, a, cycle, frame=None):
         """The word the ECS drives at a (owns(a) must be true)."""

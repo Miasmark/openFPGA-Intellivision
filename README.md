@@ -105,8 +105,9 @@ Layer.
 
 **Players 3 and 4 (1.0.9).**
 - The ECS has two more hand-controller ports. Docked controllers 3 and 4 are players 3 and 4
-  there, read only while the ECS is fully on (ECS games under Auto, or ECS set to On); a game must
-  read them itself (World Cup Football does, for four players).
+  there, read while the ECS is attached or on (ECS games and games that tolerate the ECS under
+  Auto, or ECS set to On); a game must read them itself (World Cup Football and the four-player
+  Championship Tennis patch do). With no controller 3 or 4 those ports read as before.
 - **Swap Controllers** puts the Pocket's own buttons in seat 1, 2, 3 or 4: the Pocket takes that
   player's port and the controller that had it moves to seat 1 (Player 2 is the old swap). With
   no docked controller, set the game up as player 1, then switch the Pocket to its player; the

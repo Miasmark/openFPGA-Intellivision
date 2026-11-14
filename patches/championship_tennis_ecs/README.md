@@ -175,11 +175,12 @@ without its menu, which is all the four-player code needs on a real ECS (the ECS
 ports answer with the ROMs paged out); with ECS set to On (or a real ECS) the game works as well,
 through the ECS's menu. With ECS Off it plays as the original, two players.
 
-**On the Pocket core (1.0.9):** the core gives hand controllers 3 and 4 (docked controllers 3 and
-4, or the Pocket with Swap Controllers on Player 3 / 4) only while the ECS is fully on, so for four
-players set Core Settings' **ECS to On** (Auto leaves this game's ECS attached: players 3 and 4
-then read nothing). The model (`tools/ecs.py`, `tools/intv_system.py` "p3:" / "p4:" presses) does
-the same since the 1.0.9 merge.
+**On the Pocket core (1.0.9):** ECS on Auto works: the core gives hand controllers 3 and 4
+(docked controllers 3 and 4, or the Pocket with Swap Controllers on Player 3 / 4) while the ECS is
+attached or on, so the game starts straight into its four-player setup. The model
+(`tools/ecs.py`, `tools/intv_system.py` "p3:" / "p4:" presses) does the same; `sim/tb/tb_system.py
+--ecs-play` tennis4 checks the core against it (players 2-4 placed from controllers 2-4, a point
+played).
 
 ## Open points
 

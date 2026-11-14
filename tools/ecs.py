@@ -282,10 +282,11 @@ class Ecs:
         if self.mame:
             return matrix_read_mame(keys, dir_a, self.lat[0])
         a, b = matrix_read(keys, self.synth, dir_a, dir_b, self.lat[0], self.lat[1])
-        if self.pads_at is not None and frame is not None and self.mode == ON:
+        if self.pads_at is not None and frame is not None and self.mode in (ON, ATTACHED):
             # 1.0.9: the ECS's hand controllers 3 (port B, $00FF) and 4 (port A, $00FE) pull their
-            # port's lines low while the port is an input (MAME ecs_ctrl.cpp:149-157); the core
-            # gives them only with the ECS fully on (intv_input: ecs_full)
+            # port's lines low while the port is an input (MAME ecs_ctrl.cpp:149-157), attached or
+            # on (the owner: the patched Championship Tennis runs attached; the keyboard is merged
+            # only fully on)
             p3, p4 = self.pads_at(frame)
             if not dir_a:
                 a &= p4

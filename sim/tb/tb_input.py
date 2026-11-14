@@ -597,11 +597,16 @@ def generate(path):
                 v = vec(key1=keys(*one[1], t=t), key2=keys(*one[2], t=t), key3=keys(*one[3], t=t), joy3=0x80808080,
                         key4=keys(*one[4], t=t), swap=seat, ecs=ecs)
                 pl = seat_of[seat]
-                we = (want1[pl[3]], want1[pl[2]]) if ecs == 1 else (0xFF, 0xFF)
+                we = (want1[pl[3]], want1[pl[2]])      # every ECS mode: intv_ecs reads them attached or on
                 before = len(problems)
                 add(13, v, (want1[pl[1]], want1[pl[0]]), want_e=we)
                 if len(problems) > before:
                     problems[-1] = f'seat {seat} ecs {ecs} type {t}: ' + problems[-1]
+    # attached (or off, on) with no controller 3 / 4: both ECS ports $FF, as before 1.0.9 (an attached
+    # game that reads $00FE / $00FF sees nothing new), whatever the Pocket and controller 2 press
+    for seat in (0, 1):
+        for ecs in (0, 1, 2):
+            add(13, vec(key1=keys('A', 'up'), key2=keys('B'), swap=seat, ecs=ecs), want_e=(0xFF, 0xFF))
     # the USB keyboard in slot 3: no player 3 (its port reads $FF), player 4 still there
     for seat in range(4):
         v = vec(key1=keys('A'), key3=4 << 28, joy3=0x59, key4=keys('up'), swap=seat, ecs=1)
@@ -758,8 +763,8 @@ def run(binary, vectors, tear, log):
 PLANTS = [
     ('swap_ignored', 'intv_input.sv', 'pad_l <= ~s1;', 'pad_l <= ~p1;'),
     # 1.0.9: players 3 / 4 and the four seats
-    ('ecs_ports_swapped', 'intv_input.sv', "ecs_pb <= ecs_full ? ~s3 : 8'hFF;", "ecs_pb <= ecs_full ? ~s4 : 8'hFF;"),
-    ('ecs_ports_always', 'intv_input.sv', "ecs_pa <= ecs_full ? ~s4 : 8'hFF;", "ecs_pa <= ~s4;"),
+    ('ecs_ports_swapped', 'intv_input.sv', "ecs_pb <= ~s3;", "ecs_pb <= ~s4;"),
+    ('ecs_ports_full_only', 'intv_input.sv', "ecs_pa <= ~s4;", "ecs_pa <= ecs_full ? ~s4 : 8'hFF;"),
     ('kbd_as_player3', 'intv_input.sv', "p3 = player(k3, j3, pmd, psd);", "p3 = player({4'd1, k3[27:0]}, j3, pmd, psd);"),
     ('seat3_no_trade', 'intv_input.sv', "wire logic [7:0] s3 = sw == 2'd2 ? p1 : p3;", "wire logic [7:0] s3 = p3;"),
     ('seat4_as_seat3', 'intv_input.sv', "sw == 2'd3 ? p4 : p1;", "sw == 2'd3 ? p3 : p1;"),

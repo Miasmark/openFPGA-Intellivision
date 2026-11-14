@@ -10,8 +10,10 @@
 // - 1.0.9: players 3 and 4 = cont3 and cont4 (types 1-3; cont3 type 4 is
 //   the USB keyboard: then no player 3) on the ECS's hand-controller ports,
 //   ecs_pb (port B, $00FF: player 3) and ecs_pa (port A, $00FE: player 4),
-//   MAME devices/bus/intv_ctrl/ecs_ctrl.cpp:149-157, only while the ECS is
-//   fully on ($FF otherwise). seat (Swap Controllers: Player 1 / 2 / 3 / 4)
+//   MAME devices/bus/intv_ctrl/ecs_ctrl.cpp:149-157; the ECS's PSG reads
+//   them while the ECS is there, attached or on (owner, 1.0.9: the patched
+//   Championship Tennis runs attached; the keyboard stays fully-on only), and
+//   with no controller in a seat its port reads $FF as before. seat (Swap Controllers: Player 1 / 2 / 3 / 4)
 //   is cont1's seat: cont1 trades seats with the controller whose seat that
 //   is (seat 1 = the old swap). The on-screen keypads and the ECS keyboard
 //   stay with their controller (cont1's, cont2's) in any seat;
@@ -134,7 +136,7 @@ module intv_input #(
     output logic      [1:0]  kb_mods,       //   SHIFT (Y) [0], CTL (X) [1] held
     output logic      [7:0]  pad_r,         // $01FE, PSG port A
     output logic      [7:0]  pad_l,         // $01FF, PSG port B
-    output logic      [7:0]  ecs_pa,        // 1.0.9: $00FE, the ECS PSG's port A: player 4 ($FF unless ecs_full)
+    output logic      [7:0]  ecs_pa,        // 1.0.9: $00FE, the ECS PSG's port A: player 4 (read attached or on)
     output logic      [7:0]  ecs_pb,        //   $00FF, its port B: player 3
     output logic      [63:0] ecs_keys,      // clk: the ECS matrix's pressed switches
     output logic             ecs_synth,
@@ -666,8 +668,8 @@ module intv_input #(
         if (ph == 3'd6) begin
             pad_l <= ~s1;
             pad_r <= ~s2;
-            ecs_pb <= ecs_full ? ~s3 : 8'hFF;
-            ecs_pa <= ecs_full ? ~s4 : 8'hFF;
+            ecs_pb <= ~s3;                      // (intv_ecs: attached or on; the keys: fully on)
+            ecs_pa <= ~s4;
             ecs_keys <= ek_acc | kb_keys
                       | (kbd && ecs_full && !sy && (k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)   // Shift: row 6, column 7
                       | (kbd && ecs_full && !sy && (k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);  // Ctrl: row 5, column 6

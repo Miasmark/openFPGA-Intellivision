@@ -602,6 +602,9 @@ def _tape_instant(short=False):
     return ','.join(out), t
 
 
+TENNIS4 = ('300-306:Enter,450-456:1,600-606:Enter,700-748:Right,766-772:Enter,810-816:p2:Up,840-891:p2:Up,895-949:p2:Right,970-976:p2:Enter,1050-1056:p3:Up,1080-1098:p3:Up,1102-1129:p3:Right,1150-1156:p3:Enter,1230-1236:p4:Up,1260-1323:p4:Up,1330-1366:p4:Right,1400-1406:p4:Enter,1460-1468:Lower-Right,1485-1493:Lower-Right')
+
+
 ECS_PLAY = [
     ('ecsbasic', None, 1200, '300-306:Enter,420-426:1,500-506:Enter,' + _typed(800, '10 PRINT 2*3\nRUN\n'),
      dict(ovr='auto')),
@@ -637,6 +640,12 @@ ECS_PLAY = [
      '300-306:Enter,420-426:2,500-506:Enter,700-706:Enter,850-856:1,920-926:Enter,1000-1006:2,1060-1066:Enter,'
      '1120-1126:2,1180-1186:Enter,1400-1420:Lower-Right,1420-1500:Right,1500-1900:p3:Up,1500-1900:p4:Down,'
      '1600-1610:p3:Lower-Right', dict(ovr='auto')),
+    # 1.0.9 (owner: controllers 3 / 4 attached or on): the four-player Championship Tennis patch
+    # (patches/championship_tennis_ecs, built by its build.py from the library's original into WORK)
+    # under Auto with its .cfg (ecs_compat 1: the ECS attached): doubles, players 2, 3 and 4 placed
+    # from hand controllers 2, 3 ($00FF) and 4 ($00FE), then player 1's serve (an ace at 1,650)
+    ('tennis4', ('patch', 'championship_tennis_ecs', 'Championship Tennis (Europe).zip'), 1700,
+     TENNIS4, dict(ovr='auto')),
     ('ecstape_fast', None, _tape_instant()[1], _tape_instant()[0], dict(ovr='auto', instant=True)),
     ('grab', 'Advanced Dungeons & Dragons (USA, Europe).zip', 2056,
      '300-306:Enter,420-426:1,500-506:Enter,'
@@ -1614,6 +1623,28 @@ def check_image(binary, work, name, exec_path, grom_path, cart_path, exp, pads, 
 
 
 # ------------------------------------------------------------- frame gate
+def patch_image(work, name, patch, zipname, lib):
+    """1.0.9: one of our patches (patches/PATCH/build.py) applied to a copy of the library's
+    original in WORK; the patched .bin (game data: WORK only) with its .cfg (CFG_OF)."""
+    d = os.path.join(work, 'patch_' + name)
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    src = os.path.join(d, os.path.basename(zipname))
+    shutil.copyfile(os.path.join(lib, zipname), src)
+    r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'patches', patch, 'build.py'), src, d],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    bins = [f for f in os.listdir(d) if f.endswith('.bin')]
+    if r.returncode or len(bins) != 1:
+        sys.exit('patch %s: build.py failed: %s' % (patch, r.stdout[-500:]))
+    cart = os.path.join(work, name + '.bin')
+    shutil.copyfile(os.path.join(d, bins[0]), cart)
+    CFG_OF[cart] = os.path.join(work, name + '.cfg')
+    shutil.copyfile(os.path.join(d, bins[0][:-4] + '.cfg'), CFG_OF[cart])
+    os.remove(src)
+    os.remove(os.path.join(d, bins[0]))
+    return cart
+
+
 def screen_cart(work, name, zipname, lib):
     if not zipname:
         return None
@@ -2637,15 +2668,19 @@ ECS_PLAY_PLANTS = [
     ('tape_loop_operand', 'intv_tape.sv', [("ovr_hit = 1'b1; ovr_q = 16'h0004; end", "ovr_hit = 1'b1; ovr_q = 16'h0005; end")]),
     ('tape_loop_helper_out', 'intv_tape.sv', [("|| (wdata >= 16'h70B0 && wdata <= 16'h70B9);", ";")]),
     ('tape_ovr_anded', 'intv_bus.sv', [("            if (ovr_hit)  din = ovr_q;", "            if (ovr_hit)  din &= ovr_q;")]),
+    # 1.0.9: hand controllers 3 / 4 only with the ECS fully on (the 1.0.9 test build's rule): the
+    # patched Tennis under Auto (attached) cannot place player 3; run 'tennis4' to frame 1,200
+    ('ecs_hands_full_only', 'intv_ecs.sv', [("& (dir_b ? 8'hFF : hand_b);", "& (dir_b || !full ? 8'hFF : hand_b);")],
+     'tennis4'),
 ]
 
 
-def ecs_play_plants(a, verilator, work, exec_path, grom_path):
+def ecs_play_plants(a, verilator, work, exec_path, grom_path, lib):
     names = a.plant.split(',') if a.plant else None
     presses, nframes = _tape_instant(short=True)
     ecs = dict(ovr='auto', instant=True)
     fails = []
-    for name, fn, subs in ECS_PLAY_PLANTS:
+    for name, fn, subs, *run in ECS_PLAY_PLANTS:
         if names and name not in names:
             continue
         d = os.path.join(work, 'plant_' + name)
@@ -2667,8 +2702,15 @@ def ecs_play_plants(a, verilator, work, exec_path, grom_path):
             print('PLANT %s: build failed' % name, flush=True)
             fails.append(name)
             continue
-        pr = check_screen(binary, d, 'tape_plant', None, exec_path, grom_path, nframes,
-                          presses=isys.parse_presses(presses), ecs=ecs)
+        if run:                             # 1.0.9: a plant on an ECS_PLAY run (shortened)
+            _, spec, _, ptext, recs = next(x for x in ECS_PLAY if x[0] == run[0])
+            cart = patch_image(d, run[0], spec[1], spec[2], lib)
+            pr = check_screen(binary, d, run[0], cart, exec_path, grom_path, 1200,
+                              presses=isys.parse_presses(ptext), ecs=recs)
+            os.remove(cart)
+        else:
+            pr = check_screen(binary, d, 'tape_plant', None, exec_path, grom_path, nframes,
+                              presses=isys.parse_presses(presses), ecs=ecs)
         if pr:
             print('PLANT %s: caught: %s' % (name, pr[0][:100]), flush=True)
         else:
@@ -2684,7 +2726,7 @@ def ecs_play_main(a, verilator, work, lib, exec_path, grom_path):
     and the mixed sound included (E lines); the model's ECS mode must be the Auto rule's."""
     import ecs as ecsm
     if a.plants_only or a.plant:
-        return ecs_play_plants(a, verilator, work, exec_path, grom_path)
+        return ecs_play_plants(a, verilator, work, exec_path, grom_path, lib)
     sel = ECS_PLAY
     if a.only:
         sel = [x for x in ECS_PLAY if x[0] in a.only.split(',')]
@@ -2701,7 +2743,9 @@ def ecs_play_main(a, verilator, work, lib, exec_path, grom_path):
     fails = []
     for name, cart_spec, nframes, ptext, ecs in sel:
         presses = isys.parse_presses(ptext)
-        if isinstance(cart_spec, tuple):
+        if isinstance(cart_spec, tuple) and cart_spec[0] == 'patch':
+            cart = patch_image(work, name, cart_spec[1], cart_spec[2], lib)
+        elif isinstance(cart_spec, tuple):
             cart = step9_image(cart_spec[1], work)
         else:
             cart = screen_cart(work, name, cart_spec, lib)
@@ -2711,7 +2755,7 @@ def ecs_play_main(a, verilator, work, lib, exec_path, grom_path):
             dev = model_stream.bus.ecs
             print('  %s: model ECS mode %s' % (name, ecsm.MODE_NAMES[dev.mode] if dev else None))
         finally:
-            if cart and not isinstance(cart_spec, tuple):
+            if cart and (not isinstance(cart_spec, tuple) or cart_spec[0] == 'patch'):
                 os.remove(cart)
         print('TB_ECS_PLAY %s %s' % (name, 'FAIL' if p else 'pass'), flush=True)
         fails += ['%s: %s' % (name, x) for x in p]

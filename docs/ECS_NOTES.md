@@ -102,14 +102,18 @@ is an input (MAME `devices/bus/intv_ctrl/ecs_ctrl.cpp:149-157`; the ECS ROM's ro
 reads them into `$011F` / `$0120`). World Cup Football (CRC `15D9D27A`, an ECS game no list records:
 `data/cart_extra.csv` now sets its ECS flag, so Auto turns the ECS on) reads them for players 3
 and 4. `intv_input` makes them from cont3 and cont4 (types 1-3; cont3 type 4, the USB keyboard,
-gives no player 3) as it makes players 1 and 2 (the same keypad mode and profile), and sends
-`$FF` unless the ECS is fully on (mode on); `intv_ecs` ANDs them into the matrix read
-(`port_a <= ... & (dir_a ? 8'hFF : hand_a)`), so with no key and no controller the read is as
-before. Swap Controllers (0x20C, 0-3) is cont1's seat: cont1 trades places with the controller of
+gives no player 3) as it makes players 1 and 2 (the same keypad mode and profile); `intv_ecs`
+ANDs them into the matrix read (`port_a <= ... & (dir_a ? 8'hFF : hand_a)`) whenever the ECS is
+there, attached or on (the owner's decision for 1.0.9: the four-player Championship Tennis patch,
+`patches/championship_tennis_ecs`, tolerates the ECS, so Auto attaches it; a real ECS's sockets
+work attached too). The keyboard stays fully-on only. A seat without a controller sends `$FF`, so
+with no key and no controller 3 / 4 the read is as before, for every attached game. Swap Controllers (0x20C, 0-3) is cont1's seat: cont1 trades places with the controller of
 seat 1-4 (`tools/intv_input.py seats`). The on-screen keypad and keyboard stay cont1's: Select's
 keypad presses the keys of cont1's seat; Start's keyboard is the ECS's. Model: `tools/ecs.py`
 `pads_at`, `tools/intv_system.py` presses `p3:` / `p4:`. Checks: tb_input class 13 (every seat with
-the ECS on, attached and off; 6 plants), tb_system image wcf_auto (Auto turns the ECS on) and
+the ECS on, attached and off, and no controller 3 / 4 in each: $FF; 6 plants), tb_system image
+wcf_auto (Auto turns the ECS on), `--ecs-play` tennis4 (the patched Championship Tennis under Auto,
+attached: players 2-4 placed from controllers 2-4, a point; plant ecs_hands_full_only) and
 `--ecs-play` wcf4 (World Cup Football, four players: players 3 and 4 move on their ports).
 
 **The mix.** The sound is PSG #1 + PSG #2; while the ECS is attached or on the sum is scaled to 3/4

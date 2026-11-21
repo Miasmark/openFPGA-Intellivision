@@ -394,7 +394,8 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   (2026-11-21) the PC keys written out by hand (every one with and without Shift, Ctrl and Alt,
   both modifier sides, the key-down latch, roll-overs, SHIFT going up) and every vector through
   the model's USB keyboard in order; tb_input.sv checks at every clk that no key closes with or
-  within 8 x KB_SEQ clk of a SHIFT change (13 planted faults `pc_*`, among them pc_drop_rejoins: a
+  within 8 x KB_SEQ clk of a SHIFT change, and at each vector's end that every key closed in it is
+  still under the SHIFT it closed with (a key joining under the old SHIFT: plant pc_drop_no_wait) (13 planted faults `pc_*`, among them pc_drop_rejoins: a
   dropped key back once the new one is let go); `sim/check/ecs_pc_keys_check.py`
   (model, the owner's ECS ROM): an ECS BASIC program typed on the USB keyboard by PC legends (with
   roll-overs and Shift let go first) ends on the same screen as the same text typed on the ECS

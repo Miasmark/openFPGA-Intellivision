@@ -25,7 +25,13 @@
 // SHIFT (row 6 column 7) must not change at an edge where another switch
 // (but CTL) changes, and no switch (but SHIFT and CTL) may close within
 // 8 x KB_SEQ clk after SHIFT changed: a key that needs SHIFT down or up never
-// meets the other SHIFT. It counts the SHIFT changes seen.
+// meets the other SHIFT. And each switch (but SHIFT and CTL) that closes
+// during a vector must still close under the SHIFT it closed with when the
+// vector has settled (if it is still closed): a key joining under the old
+// SHIFT, which then changes under it (a drop without its wait), fails. Keys
+// closed when the vector comes are not held to it (the PC's Shift pressed
+// over a held key changes SHIFT under it, as on the ECS). It counts the SHIFT
+// changes seen and the switches so checked.
 //
 // Part 2, +tear=FILE (the crossing, DESIGN.md 7): groups of vectors, each
 // a line "n" and then n lines of key1 .. swap pad_r pad_l. For each group
@@ -183,9 +189,10 @@ module tb_input;
     end
 
     // ------------------------------------------- the USB keyboard's SHIFT
-    int nshift = 0, nseq = 0, since = 1000000;
+    int nshift = 0, nseq = 0, since = 1000000, nrise = 0;
     logic [63:0] kprev = '0;
     logic        mprev = 1'b0;
+    logic [63:0] rose = '0, rsh = '0;   // switches closed in this vector, the SHIFT each closed under
     always @(posedge clk) begin
         #0.2;
         if (dut.ecm && mprev) begin
@@ -204,6 +211,8 @@ module tb_input;
                     $display("  FAIL  SHIFT at %0t: switches %h closed %0d clk after SHIFT changed", $time, rise, since);
                 nseq++;
             end
+            rose = rose | rise;
+            rsh = (rsh & ~rise) | (rise & {64{ecs_keys[55]}});
         end
         since = (dut.ecm && mprev && ecs_keys[55] != kprev[55]) ? 1 : since + 1;
         kprev = ecs_keys;
@@ -330,8 +339,20 @@ module tb_input;
                 #1 bus = pack(f);
                 ecs_full = f[12][1:0] == 2'd1;
                 {prof_ok, prof_mode, prof_sides} = f[17][14:0];   // (1.0.8) the profile
+                rose = '0;
                 repeat (ecs_full && f[5][31:28] == 4'd4 ? 128 : 48) @(posedge clk);
                 #1;
+                // the switches closed in this vector: still under the SHIFT they closed with
+                if (dut.ecm) begin
+                    automatic logic [63:0] held = rose & ecs_keys & ~(64'd1 << 55) & ~(64'd1 << 46);
+                    nrise += $countones(held);
+                    if ((held & (rsh ^ {64{ecs_keys[55]}})) != 64'd0) begin
+                        if (nseq < 10)
+                            $display("  FAIL  SHIFT: class %0d vector %0d: switches %h closed under SHIFT %0d, now %0d",
+                                     f[0], nvec, held & (rsh ^ {64{ecs_keys[55]}}), !ecs_keys[55], ecs_keys[55]);
+                        nseq++;
+                    end
+                end
                 cnt[cls & 15]++;
                 if (pad_r !== f[13][7:0] || pad_l !== f[14][7:0] || ecs_keys !== {f[15], f[16]}
                     || {ecs_pa, ecs_pb} !== f[20][15:0]
@@ -444,8 +465,8 @@ module tb_input;
         end
 
         // the USB keyboard's SHIFT over the whole run
-        $display("  %s USB keyboard SHIFT: %0d changes, %0d keys meeting a changing SHIFT",
-                 (nseq == 0 && (nshift > 0 || nvec == 0)) ? "ok  " : "FAIL", nshift, nseq);
+        $display("  %s USB keyboard SHIFT: %0d changes, %0d switches closed in a vector checked, %0d keys meeting a changing SHIFT",
+                 (nseq == 0 && (nshift > 0 || nvec == 0)) ? "ok  " : "FAIL", nshift, nrise, nseq);
         if (nseq != 0 || (nshift == 0 && nvec > 0))
             nbad++;
 

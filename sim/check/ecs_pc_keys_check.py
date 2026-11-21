@@ -8,13 +8,14 @@ gives ECS BASIC what typing the same characters on the ECS keyboard does, in the
 
   ecs_pc_keys_check.py [--frames N] [--show]      (INTV_BIOS_DIR: exec.bin, grom.bin, ECS.bin)
 
-The program below is typed twice: once straight into the ECS matrix (tools/ecs.py type_presses,
+Each case below is typed twice: once straight into the ECS matrix (tools/ecs.py type_presses,
 the ECS's own SHIFT combinations), once as USB keyboard reports frame by frame (PC keys, the
 PC's Shift held over the shifted characters and let go first on every other one, some keys rolled
 over the next) through the input model's USB keyboard (UsbKeys, the RTL's rounds: 29,868 a frame,
 each report changing at a random point of its frame; the matrix is taken at each frame's start,
 where the ECS ROM's scan runs). Both runs must end on the same screen (BACKTAB as text), and the
-screen must show the RUN's output. It prints the screen and ECS_PC_KEYS pass / FAIL.
+screen must show the RUN's output (case program: = - * + / " typed on the PC keys) or the typed
+lines (case legends: ^ ? % ' ( ) +). It prints the screen and ECS_PC_KEYS pass / FAIL.
 """
 import argparse
 import os
@@ -27,8 +28,13 @@ import ecs as ecsm  # noqa: E402
 import intv_input as inm  # noqa: E402
 
 # ECS BASIC's print keyword is PRIN (PRINT reads as PRIN T: tools/../ecs_osk_check.py)
-PROGRAM = '10 A=5-1\n20 B=A*2+1\n30 PRIN A\n40 PRIN B\n50 PRIN 10/4\n60 PRIN "HI"\n70 C=8/2-1\n80 PRIN C\nRUN\n'
-WANT = ["4.00", "9.00", "2.50", "HI", "3.00"]
+CASES = [
+    ("program", '10 A=5-1\n20 B=A*2+1\n30 PRIN A\n40 PRIN B\n50 PRIN 10/4\n60 PRIN "HI"\n70 C=8/2-1\n80 PRIN C\nRUN\n',
+     ["4.00", "9.00", "2.50", "HI", "3.00"]),
+    # the other legends, as ECS BASIC echoes them (what it makes of them does not matter here)
+    ("legends", "PRIN 2^3\n?10/4\nPRIN 9%4\nPRIN 'X'\nA=(1+2)*3\n",
+     ["PRIN 2^3", "?10/4", "PRIN 9%4", "PRIN 'X'", "A=(1+2)*3"]),
+]
 ROUNDS = 14934 * 16 // 8                # rounds of 8 clk_sys a frame
 LEAD = "300-306:Enter,420-426:1,500-506:Enter"     # the ECS menu: 1, ECS BASIC
 START, STEP, HOLD = 800, 16, 7
@@ -110,8 +116,8 @@ def screen(bus):
         s = ""
         for c in range(20):
             w = bus.sysram[20 * r + c]
-            card = (w >> 3) & 0xFF
-            s += chr(card + 0x20) if not (w & 0x800) and 0 <= card < 0x5F else "~"
+            card = (w >> 3) & 0x3F          # ECS BASIC: Foreground/Background mode, GROM cards 0-63
+            s += chr(card + 0x20) if not (w & 0x800) else "~"
         rows.append(s)
     return rows
 
@@ -135,18 +141,22 @@ def main():
     ap.add_argument("--show", action="store_true", help="print both screens")
     a = ap.parse_args()
     import intv_system as isys
-    reports, end = usb_reports(PROGRAM, START)
-    frames = a.frames or end + 300
-    typed, end2 = ecsm.type_presses(START, PROGRAM, HOLD, STEP - HOLD)
-    s1 = run(list(isys.parse_presses(typed)), frames)
-    s2 = run(usb_presses(reports), frames)
-    for name, s in (("ECS keys", s1), ("USB keys", s2)) if a.show else (("USB keys", s2),):
-        print("-- %s" % name)
-        print("\n".join("   |%s|" % r for r in s))
-    text = "\n".join(s2)
-    ok = s1 == s2 and all(w in text for w in WANT)
-    print("  %s screens %s, output %s" % ("ok  " if ok else "FAIL", "the same" if s1 == s2 else "differ",
-                                         " ".join(WANT) + (" shown" if all(w in text for w in WANT) else " missing")))
+    ok = True
+    for name, prog, want in CASES:
+        reports, end = usb_reports(prog, START)
+        frames = a.frames or end + 300
+        typed, end2 = ecsm.type_presses(START, prog, HOLD, STEP - HOLD)
+        s1 = run(list(isys.parse_presses(typed)), frames)
+        s2 = run(usb_presses(reports), frames)
+        for what, s in (("ECS keys", s1), ("USB keys", s2)) if a.show else (("USB keys", s2),):
+            print("-- %s: %s" % (name, what))
+            print("\n".join("   |%s|" % r for r in s))
+        text = "\n".join(s2)
+        good = s1 == s2 and all(w in text for w in want)
+        ok &= good
+        print("  %s %s: %d frames, screens %s, %s %s" % (
+            "ok  " if good else "FAIL", name, frames, "the same" if s1 == s2 else "differ", " / ".join(want),
+            "shown" if all(w in text for w in want) else "missing"), flush=True)
     print("ECS_PC_KEYS %s" % ("pass" if ok else "FAIL"))
     return 0 if ok else 1
 

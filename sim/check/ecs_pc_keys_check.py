@@ -6,7 +6,7 @@ Alt+5 / Alt+6 on the keys the positional map leaves free, tools/intv_input.py PC
 gives ECS BASIC what typing the same characters on the ECS keyboard does, in the system model
 (tools/intv_system.py, mode stic) with the owner's ECS ROM.
 
-  ecs_pc_keys_check.py [--frames N] [--show]      (INTV_BIOS_DIR: exec.bin, grom.bin, ECS.bin)
+  ecs_pc_keys_check.py [--frames N] [--show] [--case NAME]      (INTV_BIOS_DIR: exec.bin, grom.bin, ECS.bin)
 
 Each case below is typed twice: once straight into the ECS matrix (tools/ecs.py type_presses,
 the ECS's own SHIFT combinations), once as USB keyboard reports frame by frame (PC keys, the
@@ -15,7 +15,8 @@ over the next) through the input model's USB keyboard (UsbKeys, the RTL's rounds
 each report changing at a random point of its frame; the matrix is taken at each frame's start,
 where the ECS ROM's scan runs). Both runs must end on the same screen (BACKTAB as text), and the
 screen must show the RUN's output (case program: = - * + / " typed on the PC keys) or the typed
-lines (case legends: ^ ? % ' ( ) +). It prints the screen and ECS_PC_KEYS pass / FAIL.
+lines (case legends: ^ ? % ' ( ) +), and in case held (A held over = and 9 over Alt+5) nothing
+twice. It prints the screen and ECS_PC_KEYS pass / FAIL.
 """
 import argparse
 import os
@@ -34,7 +35,11 @@ CASES = [
     # the other legends, as ECS BASIC echoes them (what it makes of them does not matter here)
     ("legends", "PRIN 2^3\n?10/4\nPRIN 9%4\nPRIN 'X'\nA=(1+2)*3\n",
      ["PRIN 2^3", "?10/4", "PRIN 9%4", "PRIN 'X'", "A=(1+2)*3"]),
+    # the owner's kbtest2 report: hold A, tap = typed a second A. Here the key before each = (and before
+    # the %) stays down until 3 frames after that key is tapped: the newest key wins, nothing types twice
+    ("held", "A=7\nPRIN A\nB=A+1\nPRIN B\nPRIN 9%4\n", ["A=7", "PRIN A", "7.00", "B=A+1", "8.00", "PRIN 9%4"]),
 ]
+HELD = {"held": "=%"}                   # the cases' keys held over: the key before each of these
 ROUNDS = 14934 * 16 // 8                # rounds of 8 clk_sys a frame
 LEAD = "300-306:Enter,420-426:1,500-506:Enter"     # the ECS menu: 1, ECS BASIC
 START, STEP, HOLD = 800, 16, 7
@@ -49,10 +54,12 @@ for i, ch in enumerate("1234567890"):
     PC[ch] = (0x1E + i, "")
 
 
-def usb_reports(text, start):
+def usb_reports(text, start, held=""):
     """text typed on the PC keyboard -> {frame: (codes, modifier byte)}, frames start .. end; each key
     held HOLD frames, STEP apart; a key after '=' or '-' goes down before that one is let go (rolled
-    over); the Shift of every other shifted character is let go before its key."""
+    over); a key before one of `held` stays down until 3 frames after that one is let go (and that
+    one is tapped inside it: hold A, tap =, let A go); the Shift
+    of every other shifted character is let go before its key."""
     keys = {}                               # frame -> set of codes; mods -> frame -> byte
     mods = {}
     f = start
@@ -60,7 +67,9 @@ def usb_reports(text, start):
     for i, ch in enumerate(text):
         code, m = PC[ch]
         down, up = f, f + HOLD
-        if i > 0 and text[i - 1] in "=-" and ch not in "\n":
+        if i + 1 < len(text) and text[i + 1] in held:
+            up = f + STEP + HOLD + 3
+        if i > 0 and text[i - 1] in "=-" and text[i - 1] not in held and ch not in "\n":
             down = f - STEP + HOLD - 3          # rolled over the '=' or '-' before (held until f - STEP + HOLD)
         for k in range(down, up):
             keys.setdefault(k, []).append(code)
@@ -139,11 +148,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--frames", type=int, default=0, help="frames to run (default: the typing's end + 300)")
     ap.add_argument("--show", action="store_true", help="print both screens")
+    ap.add_argument("--case", help="only this case (program, legends, held)")
     a = ap.parse_args()
     import intv_system as isys
     ok = True
     for name, prog, want in CASES:
-        reports, end = usb_reports(prog, START)
+        if a.case and name != a.case:
+            continue
+        reports, end = usb_reports(prog, START, HELD.get(name, ""))
         frames = a.frames or end + 300
         typed, end2 = ecsm.type_presses(START, prog, HOLD, STEP - HOLD)
         s1 = run(list(isys.parse_presses(typed)), frames)

@@ -72,14 +72,19 @@
 //   Alt (either) + 5 = '%' (SHIFT+left), Alt + 6 = '^' (SHIFT+up). With Ctrl
 //   held they are as above (nothing). A key keeps the Shift, Ctrl and Alt of
 //   its key-down while held (pc_c / pc_m), so letting Shift go before / does
-//   not turn '?' into a new '/'. SHIFT shown (us) changes only between two
-//   waits of KB_SEQ rounds (9.2 ms each): keys that go away leave at the
-//   start, keys join only after the second wait, so SHIFT is in the matrix
-//   before a key that needs it is (the ECS ROM reads SHIFT's row first and
-//   takes a key as new on the first scan it shows in), and a key pressed again
-//   on the same switch (1 after =) is up for 18 ms, more than one frame's
-//   scan. While a SHIFT-down key is held without the PC's Shift, other keys
-//   held already stay and new ones wait for it to go (no "#" for "-3").
+//   not turn '?' into a new '/'. A key pressed (a new code with a switch)
+//   that needs SHIFT the other way from a key held (a SHIFT-down key, or a
+//   positional one without the PC's Shift) wins, as on a PC: each held key
+//   whose SHIFT is the other way is dropped and stays masked until it is let
+//   go (pc_x), so it never types again (hold A, tap =: A, =; no second A).
+//   The PC's Shift pressed or let go over held keys drops nothing (SHIFT
+//   then changes under them, as on the ECS). SHIFT shown (us) changes only
+//   between two waits of KB_SEQ rounds (9.2 ms each): keys that go away
+//   (dropped ones too) leave at the start, keys join only after the second
+//   wait, so SHIFT is in the matrix before a key that needs it is (the ECS
+//   ROM reads SHIFT's row first and takes a key as new on the first scan it
+//   shows in), and a key pressed on the switch of a dropped one (= after 1)
+//   finds it up for 18 ms, more than one frame's scan.
 //   Setting synth: the music synthesizer on two tracker rows (Z-M = C3-B3,
 //   Q-I = C4-C5) instead. With the ECS attached (ROMs out, Auto's default)
 //   or off the keyboard is the keypad as in 0.0.8 and the matrix reads no
@@ -500,17 +505,21 @@ module intv_input #(
     // the HID modifier byte (cont3_key[15:8]): either Shift, Ctrl, Alt
     wire  logic  sh = k3[9] | k3[13], ct = k3[8] | k3[12], al = k3[10] | k3[14];
     // The PC keys. ef: ecs_full taken once a round (step 7, with the word), so a round sees one value.
-    // pc_c / pc_m: each code of the last round and the {Shift, Ctrl, Alt} it went down with (all 0
-    // without the computer keyboard's word); a code still held keeps them (pn_*: this round's).
+    // pc_c / pc_m / pc_x: each code of the last round, the {Shift, Ctrl, Alt} it went down with and
+    // whether it is dropped (all 0 without the computer keyboard's word); a code still held keeps them.
+    // pn_*: this round's, with pn_k (the code has a switch), pn_d (a SHIFT-down key), pn_w (it is new).
     // ecw: the word has the computer keyboard; ecm: and the ECS is fully on.
     logic        ef;
     logic [7:0]  pc_c [6], pn_c [6];
     logic [2:0]  pc_m [6], pn_m [6];
+    logic [5:0]  pc_x, pn_x, pn_k, pn_d, pn_w;
     logic [2:0]  hm;                        // the code's {Shift, Ctrl, Alt}: its key-down's or now
+    logic        hx, hn;                    // it is dropped; it is new (not held in the last round)
     logic [7:0]  pt;                        // its switch, SHIFT down [7]
     logic [63:0] ed_acc;                    // the keys that need SHIFT down (ek_acc: the others)
     initial begin
         ef = 1'b0;
+        pc_x = '0; pn_x = '0; pn_k = '0; pn_d = '0; pn_w = '0;
         for (int i = 0; i < 6; i++) begin pc_c[i] = 8'd0; pc_m[i] = 3'd0; pn_c[i] = 8'd0; pn_m[i] = 3'd0; end
     end
     wire  logic  ecw = kbd && !sy;
@@ -527,8 +536,10 @@ module intv_input #(
         kc = !kbd ? 8'h00 : ecs_full ? hid_code_ecs(hc) : hid_code(hc);
         sp = sy ? syn_hid(hc) : ecs_hid(hc);
         hm = {sh, ct, al};
+        hx = 1'b0;
+        hn = 1'b1;
         for (int i = 5; i >= 0; i--)
-            if (pc_c[i] == hc) hm = pc_m[i];
+            if (pc_c[i] == hc) begin hm = pc_m[i]; hx = pc_x[i]; hn = 1'b0; end
         pt = pc_hid(hc, hm[2], hm[1], hm[0]);
     end
 
@@ -729,12 +740,18 @@ module intv_input #(
     // only leave, SHIFT changes after a wait, and keys join after another.
     localparam int TW = $clog2(KB_SEQ + 1);
     logic [63:0] ukp, ukp_n, ukd, ukd_n;
-    logic        us, us_n, ds, cf;
+    logic        us, us_n, ds, nt, mk;
+    logic [5:0]  px;
     logic [TW-1:0] tm, tm_n;
     initial begin ukp = 64'd0; ukd = 64'd0; us = 1'b0; tm = '0; end
     always_comb begin
         ds = |ed_acc || sh;
-        cf = |ed_acc && !sh;                // SHIFT down for a key, not for the PC's Shift: new keys wait
+        // the keys pressed this round: SHIFT down if one of them needs it (nt); each key with a switch
+        // that needs SHIFT the other way is dropped from the next round on (px), and while that is
+        // decided (mk) keys only leave and a wait starts
+        nt = |(pn_w & pn_k & (pn_d | {6{sh}}));
+        px = pn_x | ((|(pn_w & pn_k)) ? pn_k & ((pn_d | {6{sh}}) ^ {6{nt}}) : 6'd0);
+        mk = ecw && px != pn_x;
         ukp_n = ek_acc;
         ukd_n = 64'd0;
         us_n = 1'b0;
@@ -743,7 +760,9 @@ module intv_input #(
             us_n = us;
             ukp_n = ukp & ek_acc;
             ukd_n = ukd & ed_acc;
-            if (tm != '0) begin                                     // waiting: keys may only leave
+            if (mk)                                                 // keys dropped: they leave, wait
+                tm_n = TW'(KB_SEQ);
+            else if (tm != '0) begin                                // waiting: keys may only leave
                 tm_n = tm - 1'b1;
                 if (tm == TW'(1) && us != ds) begin                 // the first wait over: SHIFT changes
                     us_n = ds;
@@ -753,8 +772,7 @@ module intv_input #(
                 tm_n = TW'(KB_SEQ);
             else begin                                              // SHIFT right: the keys join
                 ukd_n = ed_acc;
-                if (!cf)
-                    ukp_n = ek_acc;
+                ukp_n = ek_acc;
             end
         end
     end
@@ -766,10 +784,14 @@ module intv_input #(
         if (ph < 3'd6) begin
             kb_acc <= (ph == 3'd0 ? 8'h00 : kb_acc) | kc;
             ek_acc <= (ph == 3'd0 ? 64'd0 : ek_acc)
-                    | (kbd && ef && (ecw ? !pt[6] && !pt[7] : !sp[6]) ? 64'd1 << (ecw ? pt[5:0] : sp[5:0]) : 64'd0);
-            ed_acc <= (ph == 3'd0 ? 64'd0 : ed_acc) | (ecm && !pt[6] && pt[7] ? 64'd1 << pt[5:0] : 64'd0);
+                    | (kbd && ef && (ecw ? !pt[6] && !pt[7] && !hx : !sp[6]) ? 64'd1 << (ecw ? pt[5:0] : sp[5:0]) : 64'd0);
+            ed_acc <= (ph == 3'd0 ? 64'd0 : ed_acc) | (ecm && !pt[6] && pt[7] && !hx ? 64'd1 << pt[5:0] : 64'd0);
             pn_c[ph] <= ecw ? hc : 8'd0;
             pn_m[ph] <= ecw ? hm : 3'd0;
+            pn_x[ph] <= ecw && hx;
+            pn_k[ph] <= ecw && !pt[6] && !hx;
+            pn_d[ph] <= pt[7];
+            pn_w[ph] <= hn;
         end
         if (ph == 3'd6) begin
             pad_l <= ~s1;
@@ -778,6 +800,7 @@ module intv_input #(
             ecs_pa <= ~s4;
             pc_c <= pn_c;
             pc_m <= pn_m;
+            pc_x <= px;
             ukp <= ukp_n;
             ukd <= ukd_n;
             us <= us_n;

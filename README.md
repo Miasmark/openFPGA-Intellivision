@@ -163,7 +163,9 @@ Layer.
   | Alt+6 | `^` (SHIFT+up) |
 
   Shift+5 and Shift+6 stay the ECS's `+` and `-`; `_` and `~` type nothing; with Ctrl these keys
-  do nothing. A character comes out as it was pressed even if Shift or Alt is let go first.
+  do nothing. A character comes out as it was pressed even if Shift or Alt is let go first. As on a
+  PC the newest key wins: a key still held that needs the ECS's SHIFT the other way (hold A, tap `=`)
+  stops until you let it go, so it never types twice.
 
 ## Settings
 

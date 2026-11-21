@@ -338,15 +338,17 @@ def pc_key(c, s, t, a):
 class UsbKeys:
     """intv_input.sv's USB keyboard into the ECS matrix, round by round (a round: 8 clk_sys): each
     code keeps the {Shift, Ctrl, Alt} of its key-down while held (the codes of the last round's word
-    with the computer keyboard); SHIFT (us) changes only after a wait of `seq` + 1 rounds in which
-    keys only leave, and keys join after another such wait; while a SHIFT-down key is held without
-    the PC's Shift, keys shown already stay and new ones wait. step(v, ef) is one round of word v
+    with the computer keyboard); a key pressed (a new code with a switch) that needs SHIFT the other
+    way from a key held drops that key, which stays dropped until let go (the newest key wins, as on
+    a PC; the PC's Shift itself drops nothing); SHIFT (us) changes only after a wait of `seq` + 1
+    rounds in which keys only leave (a drop starts one), and keys join after another such wait.
+    step(v, ef) is one round of word v
     with ecs_full ef; settle(v, ef) runs rounds until nothing changes; keys() the matrix bits (CTL
     from the word: shown at once)."""
 
     def __init__(self, seq=KB_SEQ):
         self.seq = seq
-        self.tab = {}                       # code -> (s, t, a) at its key-down
+        self.tab = {}                       # code -> ((s, t, a) at its key-down, dropped)
         self.ukp = self.ukd = 0
         self.us = False
         self.tm = 0
@@ -362,52 +364,55 @@ class UsbKeys:
         ecm = ecw and ef
         mods = (v["key3"] >> 8) & 0xFF
         now = (bool(mods & 0x22), bool(mods & 0x11), bool(mods & 0x44))
+        sh = now[0]
         ep = ed = 0
-        tab = {}
+        ent = {}                            # code -> (m, dropped, new, has a switch, SHIFT down)
         for c in hid_codes(v["joy3"], v["trig3"]):
-            m = self.tab.get(c, now)
+            m, x = self.tab.get(c, (now, False))
+            b, down = pc_key(c, *m)
             if ecw:
-                tab.setdefault(c, m)
+                ent.setdefault(c, (m, x, c not in self.tab, bool(b) and not x, down))
             if kbd and ef:
                 if sy:
                     if c in SYNTH_HID:
                         ep |= 1 << SYNTH_HID[c]
-                else:
-                    b, down = pc_key(c, *m)
+                elif not x:
                     if down:
                         ed |= b
                     else:
                         ep |= b
-        self.tab = tab
-        sh = now[0]
+        anynew = any(new and k for _, _, new, k, _ in ent.values())
+        nt = any(new and k and (down or sh) for _, _, new, k, down in ent.values())
+        self.tab = {c: (m, x or (anynew and k and (down or sh) != nt)) for c, (m, x, new, k, down) in ent.items()}
+        mk = any(self.tab[c][1] != e[1] for c, e in ent.items())
         if not ecm:
             self.ukp, self.ukd, self.us, self.tm = ep, 0, False, 0
         else:
             ds = bool(ed) or sh
-            cf = bool(ed) and not sh
             ukp, ukd, us, tm = self.ukp & ep, self.ukd & ed, self.us, 0
-            if self.tm:
+            if mk:
+                tm = self.seq
+            elif self.tm:
                 tm = self.tm - 1
                 if self.tm == 1 and self.us != ds:
                     us, tm = ds, self.seq
             elif self.us != ds:
                 tm = self.seq
             else:
-                ukd = ed
-                if not cf:
-                    ukp = ep
+                ukd, ukp = ed, ep
             self.ukp, self.ukd, self.us, self.tm = ukp, ukd, us, tm
         self.ctl = ecm and now[1]
 
     def advance(self, v, ef, n):
-        """n rounds of word v (fast over the waits and once nothing changes)."""
+        """n rounds of word v (fast over the waits once nothing but the wait changes, and once nothing
+        changes at all)."""
         while n > 0:
             before = self.state()
             self.step(v, ef)
             n -= 1
             if self.tm == 0 and self.state() == before:
                 return
-            if self.tm > 1 and n > 0:
+            if self.tm > 1 and n > 0 and self.state()[:4] == before[:4] and self.state()[5:] == before[5:]:
                 k = min(self.tm - 1, n)
                 self.tm -= k
                 n -= k
@@ -628,12 +633,17 @@ def self_check():
     ok(kb([0x38], 0, u) == S | kpbit("DOWN"), "a key keeps its key-down's Shift: ? stays ? when Shift goes first")
     ok(kb([], 0, u) == 0, "released: SHIFT goes up")
     u = UsbKeys(seq=2)
-    kb([0x2D], 0, u)                                        # - held, 3 pressed: 3 waits (no #)
-    ok(kb([0x2D, 0x20], 0, u) == S | kpbit("6") and kb([0x20], 0, u) == kpbit("3"),
-       "- then 3 rolled over: 3 waits while - is held, then 3 without SHIFT")
+    kb([0x2D], 0, u)                                        # - held, 3 pressed: - dropped (no #)
+    ok(kb([0x2D, 0x20], 0, u) == kpbit("3") and kb([0x2D, 0x20], 0, u) == kpbit("3") and kb([0x2D], 0, u) == 0,
+       "- held, 3 pressed: - dropped for good, 3 without SHIFT")
     u = UsbKeys(seq=2)
-    kb([0x04], 0, u)                                        # A held, = pressed: A stays
-    ok(kb([0x04, 0x2E], 0, u) == S | kpbit("A") | kpbit("1"), "A held, = pressed: A stays, SHIFT+1")
+    kb([0x04], 0, u)                                        # A held, = tapped: A dropped, not back
+    ok(kb([0x04, 0x2E], 0, u) == S | kpbit("1") and kb([0x04], 0, u) == 0 and kb([0x04, 0x05], 0, u) == kpbit("B"),
+       "A held, = tapped: A dropped (no second A), then B as usual")
+    u = UsbKeys(seq=2)
+    kb([0x04], 0, u)                                        # A held, Shift pressed: genuine ECS SHIFT+A
+    ok(kb([0x04], 0x02, u) == S | kpbit("A") and kb([0x04, 0x2E], 0x02, u) == S | kpbit("A") | kpbit("5"),
+       "A held, Shift pressed: SHIFT+A (no drop); then Shift+= with A: both, SHIFT down")
     # 1.0.8: a profile's keypad keys on the face buttons (the TutorVision titles), in Auto only
     tv = dict(mode=LAYER, sides=("E", "C", "lr"))
 

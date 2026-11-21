@@ -215,11 +215,20 @@ change could be read with the old SHIFT when the change falls inside a scan; wit
 is settled in the matrix before the key is, whatever order a program scans in, and goes up 9.2 ms
 after the last key that needed it is let go. A key pressed again on the switch another key just
 held (`1` rolled over `=`) is up for the two waits (18.3 ms), more than one frame, so a scan sees it
-up and the ECS takes it as a new key. While a SHIFT-down key is held without the PC's Shift, keys
-held before stay (SHIFT just goes down under them, as on the ECS) and keys pressed after wait until
-it is let go (so `-` then `3` rolled over types `-3`, not `-#`). Not covered: `1` still held when
-`=` is pressed (the same switch): it stays closed and only SHIFT goes down, so the ECS sees no new
-key and the `=` is lost.
+up and the ECS takes it as a new key.
+
+**The newest key wins** (the owner's kbtest2 report, 2026-11-21: holding A and tapping `=` typed a
+second A, because the ECS saw the held A turn into SHIFT+A). A key's SHIFT need is down for the PC
+keys above, else the PC's Shift. When a key is pressed (a new code with a switch) and a key held
+needs SHIFT the other way, that held key is dropped: it leaves the matrix at once and stays out until
+it is let go (it never comes back when SHIFT changes back, so it never types twice), as a PC types
+only the newest key. Then SHIFT changes and the new key joins, after the two waits above. So hold
+A, tap `=` types `A=`; hold `=`, tap A types `=A`; `-` then `3` rolled over types `-3` (not `-#`);
+`1` still held when `=` is pressed is dropped, and `=` finds the switch up for 18 ms (a new key). The
+PC's Shift pressed or let go over held keys drops nothing: SHIFT then changes under them, which is
+what the ECS itself does (hold A, press Shift: the ECS sees SHIFT+A, no new key). If keys pressed in
+the same round need both, SHIFT down wins. Keys without a switch (`[`, Shift+`-`, the numpad) drop
+nothing. A dropped key is marked in the 6-entry table of codes (`pc_x`).
 
 **The on-screen ECS keyboard** (1.0.4, docs/KEYPAD_NOTES.md 5): Start on player 1's controller
 opens it under the same condition (mode on, the computer keyboard); its key, SHIFT (Y) and CTL
@@ -385,10 +394,13 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   (2026-11-21) the PC keys written out by hand (every one with and without Shift, Ctrl and Alt,
   both modifier sides, the key-down latch, roll-overs, SHIFT going up) and every vector through
   the model's USB keyboard in order; tb_input.sv checks at every clk that no key closes with or
-  within 8 x KB_SEQ clk of a SHIFT change (11 planted faults); `sim/check/ecs_pc_keys_check.py`
+  within 8 x KB_SEQ clk of a SHIFT change (13 planted faults `pc_*`, among them pc_drop_rejoins: a
+  dropped key back once the new one is let go); `sim/check/ecs_pc_keys_check.py`
   (model, the owner's ECS ROM): an ECS BASIC program typed on the USB keyboard by PC legends (with
   roll-overs and Shift let go first) ends on the same screen as the same text typed on the ECS
-  keys, with its RUN's output;
+  keys, with its RUN's output; case held: A held over a tapped `=` (and 9 over Alt+5) types
+  `A=7` with no second A (with the first PC-keys rule, 640c587, which kept the held key, the same
+  reports typed `AA7` in the model: a second A, and the `=` lost under the held key);
   `sim/tb/tb_loader.py` the Auto rule on every image (ecsoffcfg, ecsoffrom: the incompatible tag);
   `sim/tb/tb_savestate.py` ecsbasic, ecssound, ecsavail, Atlantis (attached) and Super NFL Football
   (on) under Auto, the E runs (a state with the ECS into a core with it off) and the X runs (into a

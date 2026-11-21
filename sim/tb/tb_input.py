@@ -61,8 +61,10 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
      KEYPOS names), with the left and with the right modifiers: = + - / ? ' " ` with
      SHIFT down whatever the PC's Shift, _ and ~ nothing, Alt+5 / Alt+6 % and ^ (the
      plain 5 / 6 then not pressed), Ctrl combinations as before, the positional
-     keys unchanged, a key keeping its key-down's Shift / Alt / Ctrl, keys rolled
-     over a SHIFT-down key, SHIFT not left down; with the ECS attached, off and
+     keys unchanged, a key keeping its key-down's Shift / Alt / Ctrl, the newest
+     key winning (a key pressed drops each held key needing SHIFT the other way
+     until it is let go: hold A + tap =, hold = + tap A, A + Alt+5, chains,
+     release orders; the PC's Shift drops nothing), SHIFT not left down; with the ECS attached, off and
      with the synthesizer as before. Every vector of every class goes through the
      model's USB keyboard (tools/intv_input.py UsbKeys) in file order, as the RTL
      takes them, and tb_input.sv checks SHIFT's timing at every clk (no key meets
@@ -728,15 +730,38 @@ PC_SPEC = [
     ('Ctrl+= held, Ctrl let go: nothing', [((EQ,), 'C', ('CTL',)), ((EQ,), '', ())]),
     ('/ again after a release: then Shift+/', [((SLASH,), '', ('SHIFT', '7')), ((), '', ()),
                                                ((SLASH,), 'S', ('SHIFT', 'DOWN'))]),
-    ('- then 3 rolled over: 3 waits, then 3 alone', [((MINUS,), '', ('SHIFT', '6')), ((MINUS, 0x20), '', ('SHIFT', '6')),
-                                                    ((0x20,), '', ('3',)), ((), '', ())]),
-    ('3 then - rolled over: 3 stays, SHIFT+6', [((0x20,), '', ('3',)), ((0x20, MINUS), '', ('SHIFT', '3', '6')),
-                                               ((MINUS,), '', ('SHIFT', '6')), ((), '', ())]),
-    ('= then 1 rolled over: 1 after =', [((EQ,), '', ('SHIFT', '1')), ((EQ, 0x1E), '', ('SHIFT', '1')),
-                                         ((0x1E,), '', ('1',)), ((), '', ())]),
-    ('A then =: A stays', [((0x04,), '', ('A',)), ((0x04, EQ), '', ('SHIFT', 'A', '1')), ((EQ,), '', ('SHIFT', '1')),
-                           ((), '', ())]),
-    ('= then A: A waits for =', [((EQ,), '', ('SHIFT', '1')), ((EQ, 0x04), '', ('SHIFT', '1')), ((0x04,), '', ('A',))]),
+    # the newest key wins (the owner's kbtest2 report, 2026-11-21: hold A, tap = typed a second A): a key
+    # pressed that needs SHIFT the other way drops each held key that does not, for as long as it is held
+    ('- then 3 rolled over: - dropped, 3 alone', [((MINUS,), '', ('SHIFT', '6')), ((MINUS, 0x20), '', ('3',)),
+                                                 ((0x20,), '', ('3',)), ((), '', ())]),
+    ('3 then - rolled over: 3 dropped, not back (- again: -)', [((0x20,), '', ('3',)), ((0x20, MINUS), '', ('SHIFT', '6')),
+                                                  ((0x20,), '', ()), ((0x20, MINUS), '', ('SHIFT', '6')),
+                                                  ((MINUS,), '', ('SHIFT', '6')), ((), '', ())]),
+    ('= then 1 rolled over: = dropped, 1', [((EQ,), '', ('SHIFT', '1')), ((EQ, 0x1E), '', ('1',)),
+                                            ((0x1E,), '', ('1',)), ((), '', ())]),
+    ('1 then = (the same switch): 1 dropped, =', [((0x1E,), '', ('1',)), ((0x1E, EQ), '', ('SHIFT', '1')),
+                                                 ((0x1E,), '', ()), ((), '', ())]),
+    ('hold A, tap = twice: A dropped, no second A', [((0x04,), '', ('A',)), ((0x04, EQ), '', ('SHIFT', '1')),
+                                               ((0x04,), '', ()), ((0x04, EQ), '', ('SHIFT', '1')), ((0x04,), '', ()),
+                                               ((), '', ()), ((0x04,), '', ('A',))]),
+    ('hold A, tap =, A let go first', [((0x04,), '', ('A',)), ((0x04, EQ), '', ('SHIFT', '1')), ((EQ,), '', ('SHIFT', '1')),
+                                       ((), '', ())]),
+    ('hold =, tap A: = dropped', [((EQ,), '', ('SHIFT', '1')), ((EQ, 0x04), '', ('A',)), ((EQ,), '', ()),
+                                  ((EQ, 0x05), '', ('B',)), ((EQ,), '', ()), ((), '', ())]),
+    ('hold A, Alt+5: A dropped, %', [((0x04,), '', ('A',)), ((0x04, K5), 'A', ('SHIFT', 'LEFT')),
+                                     ((0x04, K5), '', ('SHIFT', 'LEFT')), ((0x04,), '', ()), ((), '', ())]),
+    ('chain A, =, B: each drops the one before', [((0x04,), '', ('A',)), ((0x04, EQ), '', ('SHIFT', '1')),
+                                                  ((0x04, EQ, 0x05), '', ('B',)), ((0x04, 0x05), '', ('B',)),
+                                                  ((0x05,), '', ('B',)), ((), '', ())]),
+    ('chain =, /, A: / joins =, A drops both', [((EQ,), '', ('SHIFT', '1')), ((EQ, SLASH), '', ('SHIFT', '1', '7')),
+                                                ((EQ, SLASH, 0x04), '', ('A',)), ((SLASH, 0x04), '', ('A',)),
+                                                ((0x04,), '', ('A',)), ((), '', ())]),
+    ('hold A, Shift (no drop), Shift+=, Shift let go', [((0x04,), '', ('A',)), ((0x04,), 'S', ('SHIFT', 'A')),
+                                                        ((0x04, EQ), 'S', ('SHIFT', 'A', '5')),
+                                                        ((0x04, EQ), '', ('SHIFT', 'A', '5')), ((0x04,), '', ('A',)),
+                                                        ((), '', ())]),
+    ('hold A, a key without a switch ([, Shift+-): no drop', [((0x04,), '', ('A',)), ((0x04, 0x2F), '', ('A',)),
+                                                              ((0x04, MINUS), 'S', ('SHIFT', 'A')), ((0x04,), '', ('A',))]),
     ('Shift, + then A: A with the Shift', [((EQ,), 'S', ('SHIFT', '5')), ((EQ, 0x04), 'S', ('SHIFT', '5', 'A'))]),
     ('/ and + together: both', [((SLASH,), '', ('SHIFT', '7')), ((SLASH, EQ), 'S', ('SHIFT', '7', '5'))]),
     ('2 * 3 + 1 typed with the Shift up between', [((0x1F,), '', ('2',)), ((), 'S', ('SHIFT',)),
@@ -945,9 +970,13 @@ PLANTS = [
     ('pc_alt_ignored', 'intv_input.sv', "8'h22: if (a) r = {1'b1, 7'd0};", "8'h22: if (1'b0) r = {1'b1, 7'd0};"),
     ('pc_alt_both_5', 'intv_input.sv', "8'h22: if (a) r = {1'b1, 7'd0};", "8'h22: r = {1'b1, 7'd0};"),
     ('pc_ctrl_kept', 'intv_input.sv', "        if (!t)\n            unique case (c)", "        if (1'b1)\n            unique case (c)"),
-    ('pc_no_latch', 'intv_input.sv', "if (pc_c[i] == hc) hm = pc_m[i];", "if (1'b0) hm = pc_m[i];"),
-    ('pc_join_under_shift', 'intv_input.sv', "                if (!cf)\n                    ukp_n = ek_acc;",
-     "                ukp_n = ek_acc;"),
+    ('pc_no_latch', 'intv_input.sv', "if (pc_c[i] == hc) begin hm = pc_m[i];", "if (pc_c[i] == hc) begin hm = {sh, ct, al};"),
+    # the newest key wins (kbtest2): a dropped key back once the new key is let go; no drop at all (hold
+    # A, tap = types A again); a drop without its wait (the new key joins with the old SHIFT)
+    ('pc_drop_rejoins', 'intv_input.sv', "            pc_x <= px;", "            pc_x <= '0;"),
+    ('pc_no_drop', 'intv_input.sv', "px = pn_x | ((|(pn_w & pn_k))", "px = pn_x | ((1'b0)"),
+    ('pc_drop_no_wait', 'intv_input.sv', "            if (mk)                                                 // keys dropped: they leave, wait",
+     "            if (1'b0)                                               // keys dropped: they leave, wait"),
     ('pc_shift_stuck', 'intv_input.sv', "ds = |ed_acc || sh;", "ds = |ed_acc || sh || us;"),
     ('pc_no_first_wait', 'intv_input.sv', "            end else if (us != ds)                                  // SHIFT is to change: wait first\n                tm_n = TW'(KB_SEQ);",
      "            end else if (us != ds) begin us_n = ds; tm_n = TW'(KB_SEQ); end"),

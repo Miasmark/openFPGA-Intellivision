@@ -148,7 +148,7 @@ HID_ECS = {0x58: "E", 0x63: "C",
 # The ECS computer keyboard, key by key (build step 9): HID usage -> (row, column) of the ECS
 # matrix (row = port A bit, column = port B bit; MAME ecs_ctrl.cpp ROW.n, the wiki's
 # Entertainment_Computer_System table). Backspace is the ECS's left arrow too. Modifiers
-# (cont3_key[7:0], the HID modifier byte): either Shift -> SHIFT (6, 7), either Ctrl -> CTL (5, 6).
+# (cont3_key[15:8], the HID modifier byte; on a Dock, 2026-11-21): either Shift -> SHIFT (6, 7), either Ctrl -> CTL (5, 6).
 ECS_HID = {
     0x28: (0, 6), 0x27: (0, 5), 0x29: (0, 4), 0x13: (0, 3), 0x33: (0, 2), 0x37: (0, 1), 0x50: (0, 0),
     0x2A: (0, 0),
@@ -316,7 +316,7 @@ def ecs_keys(v, kb=None):
         if c in ECS_HID:
             r, col = ECS_HID[c]
             bits |= 1 << (8 * r + col)
-    mods = v["key3"] & 0xFF
+    mods = (v["key3"] >> 8) & 0xFF
     if mods & 0x22:
         bits |= 1 << (8 * ECS_SHIFT[0] + ECS_SHIFT[1])
     if mods & 0x11:
@@ -480,8 +480,8 @@ def self_check():
     ok(set(pos) == want and all(len(v) == 1 for rc, v in pos.items() if rc != (0, 0)) and len(pos[(0, 0)]) == 2,
        "ECS keyboard: the 47 matrix keys of tools/ecs.py KEYPOS, one HID code each (+ Backspace)")
     base = dict(key1=0, joy1=0x80808080, key2=0, joy2=0x80808080, joy3=0, trig3=0, mode=LAYER, swap=0)
-    ok(ecs_keys(dict(base, key3=(4 << 28) | 0x02, ecs=1)) == 1 << 55 and
-       ecs_keys(dict(base, key3=(4 << 28) | 0x10, ecs=1)) == 1 << 46,
+    ok(ecs_keys(dict(base, key3=(4 << 28) | 0x0200, ecs=1)) == 1 << 55 and
+       ecs_keys(dict(base, key3=(4 << 28) | 0x1000, ecs=1)) == 1 << 46,
        "ECS keyboard: Shift -> row 6 column 7, Ctrl -> row 5 column 6")
     ok(ecs_keys(dict(base, key3=4 << 28, joy3=0x1A, ecs=0)) == 0 and
        ecs_keys(dict(base, key3=4 << 28, joy3=0x1A, ecs=2)) == 0, "ECS keyboard: nothing with the ECS off or attached")

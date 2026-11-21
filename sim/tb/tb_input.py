@@ -499,7 +499,7 @@ def generate(path):
             add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=1, ovr=pos % 3), (0xFF, 0xFF), 1 << (8 * r_ + c_))
             add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=0, swap=pos & 1), None, 0)
             add(10, vec(key3=kb, joy3=j3, trig3=t3, ecs=2, swap=pos & 1, synth=pos & 1), None, 0)
-    for mod, name in ((0x02, 'SHIFT'), (0x20, 'SHIFT'), (0x01, 'CTL'), (0x10, 'CTL')):
+    for mod, name in ((0x0200, 'SHIFT'), (0x2000, 'SHIFT'), (0x0100, 'CTL'), (0x1000, 'CTL')):
         r_, c_ = ecsm.KEYPOS[name]
         add(10, vec(key3=kb | mod, ecs=1), (0xFF, 0xFF), 1 << (8 * r_ + c_))
         add(10, vec(key3=kb | mod, ecs=1, synth=1), (0xFF, 0xFF), 0)
@@ -613,7 +613,7 @@ def generate(path):
         add(13, v)
     # random: four controllers of any type, any seat, mode, ECS mode, profile
     for i in range(1200):
-        k3 = rkey() if i % 5 else (4 << 28) | rng.getrandbits(8)
+        k3 = rkey() if i % 5 else (4 << 28) | rng.getrandbits(16)
         pr = rng.choice((None, None, tvp, b17))
         v = vec(key1=rkey(), joy1=rng.getrandbits(32), key2=rkey() if i % 3 else 0, joy2=rng.getrandbits(32),
                 key3=k3, joy3=rng.getrandbits(32), trig3=rng.getrandbits(16), key4=rkey() if i % 4 else 0,
@@ -810,17 +810,19 @@ PLANTS = [
     # step 9, the ECS keyboard: Shift on the wrong switch; Backspace not the left arrow; the number row
     # still the keypad with the ECS; the synthesizer an octave off; right Ctrl ignored; the keys sent
     # without the ECS; the ECS setting's bits swapped
-    ('ecs_shift_pos', 'intv_input.sv', "(k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)", "(k3[1] | k3[5]) ? 64'd1 << 54 : 64'd0)"),
+    ('ecs_shift_pos', 'intv_input.sv', "(k3[9] | k3[13]) ? 64'd1 << 55 : 64'd0)", "(k3[9] | k3[13]) ? 64'd1 << 54 : 64'd0)"),
+    # the modifier byte read from cont3_key[7:0] (1.0.9; the Dock sends it in [15:8])
+    ('mods_low_byte', 'intv_input.sv', "(k3[9] | k3[13]) ? 64'd1 << 55", "(k3[1] | k3[5]) ? 64'd1 << 55"),
     ('ecs_bs_none', 'intv_input.sv', "8'h50: p = 7'd0;   8'h2A: p = 7'd0;", "8'h50: p = 7'd0;"),
     ('ecs_numrow_keypad', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)",
      "ecs_full ? (ph == 3'd0 ? hid_code(hc) : hid_code_ecs(hc)) : hid_code(hc)"),
     ('synth_octave', 'intv_input.sv', "8'h1D: n = 7'd12;", "8'h1D: n = 7'd24;"),
-    ('ecs_rctrl', 'intv_input.sv', "&& (k3[0] | k3[4]) ?", "&& (k3[0]) ?"),
+    ('ecs_rctrl', 'intv_input.sv', "&& (k3[8] | k3[12]) ?", "&& (k3[8]) ?"),
     ('ecs_always', 'intv_input.sv', "(kbd && ecs_full && !sp[6]", "(kbd && !sp[6]"),
     # the step-9 review: with the ECS attached (or off) the keyboard is the 0.0.8 keypad; a core that
     # gives it the ECS's numpad-only mapping there loses the number row, Enter and Backspace
     ('attached_numpad_only', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)", "hid_code_ecs(hc)"),
-    ('ecs_mods_always', 'intv_input.sv', "(kbd && ecs_full && !sy && (k3[1] | k3[5])", "(kbd && !sy && (k3[1] | k3[5])"),
+    ('ecs_mods_always', 'intv_input.sv', "(kbd && ecs_full && !sy && (k3[9] | k3[13])", "(kbd && !sy && (k3[9] | k3[13])"),
     # the decode round: a word loaded at any step (the outputs mix two words: the tear check)
     ('round_any_load', 'intv_input.sv', "if (req_s[1] != ack && ph == 3'd7) begin", "if (req_s[1] != ack) begin"),
     ('ovr_swapped', 'intv_input.sv', "    assign ecs_ovr   = eo;", "    assign ecs_ovr   = {eo[0], eo[1]};"),

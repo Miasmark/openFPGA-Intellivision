@@ -61,7 +61,9 @@
 // - with the ECS fully on (ecs_full: mode on, build step 9): the USB
 //   keyboard is the ECS keyboard key by key (ecs_keys: bit 8 row + column
 //   of the ECS matrix; Shift and Ctrl from the HID modifier byte
-//   cont3_key[7:0]); only the numpad stays the keypad (numpad . = Clear).
+//   cont3_key[15:8], checked on a Dock with the input monitor core,
+//   2026-11-21; 1.0.9 read [7:0], which is always 0); only the numpad
+//   stays the keypad (numpad . = Clear).
 //   Setting synth: the music synthesizer on two tracker rows (Z-M = C3-B3,
 //   Q-I = C4-C5) instead. With the ECS attached (ROMs out, Auto's default)
 //   or off the keyboard is the keypad as in 0.0.8 and the matrix reads no
@@ -671,8 +673,8 @@ module intv_input #(
             ecs_pb <= ~s3;                      // (intv_ecs: attached or on; the keys: fully on)
             ecs_pa <= ~s4;
             ecs_keys <= ek_acc | kb_keys
-                      | (kbd && ecs_full && !sy && (k3[1] | k3[5]) ? 64'd1 << 55 : 64'd0)   // Shift: row 6, column 7
-                      | (kbd && ecs_full && !sy && (k3[0] | k3[4]) ? 64'd1 << 46 : 64'd0);  // Ctrl: row 5, column 6
+                      | (kbd && ecs_full && !sy && (k3[9] | k3[13]) ? 64'd1 << 55 : 64'd0)  // Shift: row 6, column 7
+                      | (kbd && ecs_full && !sy && (k3[8] | k3[12]) ? 64'd1 << 46 : 64'd0); // Ctrl: row 5, column 6
         end
     end
 

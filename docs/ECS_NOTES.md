@@ -165,7 +165,8 @@ two CPU cycles before any read.
 **The USB keyboard** (`intv_input.sv`, `tools/intv_input.py`; INPUT_NOTES plan item 2): while the
 ECS is fully on (mode on: ECS games under Auto, no cartridge, the menu's On) it is the ECS keyboard
 key by key (letters, digits, Enter = RTN, Esc, Space, `;` `,` `.`, the arrows, Backspace = left
-arrow; either Shift = SHIFT, either Ctrl = CTL from the HID modifier byte), and only the numpad
+arrow; either Shift = SHIFT, either Ctrl = CTL from the HID modifier byte, `cont3_key[15:8]`: 1.0.9
+read `[7:0]`, which the Dock leaves 0, so Shift and Ctrl did nothing), and only the numpad
 stays player 1's keypad (numpad `.` = Clear). With the ECS attached (Auto's mode for most games:
 no ECS ROM code runs to scan the keyboard) or off, the keyboard is player 1's keypad as in 0.0.8
 (number row and numpad, Enter, Backspace = Clear) and the matrix reads no key. The first cut sent

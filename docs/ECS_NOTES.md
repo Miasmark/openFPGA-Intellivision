@@ -185,7 +185,7 @@ Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5.
 only quote); SHIFT+`;` `,` `.` are `:` `<` `>`; letters are upper case either way. `tools/ecs.py`
 SHIFTED (used to type test text) agrees.
 
-**The PC keys** (2026-11-21, the owner's design): the positional map stays as above (PC Shift =
+**The PC keys** (1.0.10; 2026-11-21, the owner's design): the positional map stays as above (PC Shift =
 SHIFT, so PC Shift+1 .. 0 and Shift+arrows type the ECS legends), and the PC keys it leaves out type
 their PC legend with SHIFT down whatever the PC's Shift (`tools/intv_input.py` PC_KEYS, ALT_KEYS;
 `intv_input.sv` `pc_hid`):
@@ -217,7 +217,7 @@ after the last key that needed it is let go. A key pressed again on the switch a
 held (`1` rolled over `=`) is up for the two waits (18.3 ms), more than one frame, so a scan sees it
 up and the ECS takes it as a new key.
 
-**The newest key wins** (the owner's kbtest2 report, 2026-11-21: holding A and tapping `=` typed a
+**The newest key wins** (1.0.10; the owner's kbtest2 report, 2026-11-21: holding A and tapping `=` typed a
 second A, because the ECS saw the held A turn into SHIFT+A). A key's SHIFT need is down for the PC
 keys above, else the PC's Shift. When a key is pressed (a new code with a switch) and a key held
 needs SHIFT the other way, that held key is dropped: it leaves the matrix at once and stays out until

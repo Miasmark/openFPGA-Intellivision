@@ -56,6 +56,17 @@ Vector classes (one line each in sim/work/tb_input/vectors.txt):
      each of its 16 directions), either player, both Swap settings; the
      expected bytes are MAME's read_ctrl() of the inputs l_oracle() writes
      out from the mapping, not the model's, and the model must agree.
+  14 (2026-11-21) the PC keys, written out by hand (PC_SPEC): sequences of USB
+     reports from no key, each with the ECS keys it must leave pressed (tools/ecs.py
+     KEYPOS names), with the left and with the right modifiers: = + - / ? ' " ` with
+     SHIFT down whatever the PC's Shift, _ and ~ nothing, Alt+5 / Alt+6 % and ^ (the
+     plain 5 / 6 then not pressed), Ctrl combinations as before, the positional
+     keys unchanged, a key keeping its key-down's Shift / Alt / Ctrl, keys rolled
+     over a SHIFT-down key, SHIFT not left down; with the ECS attached, off and
+     with the synthesizer as before. Every vector of every class goes through the
+     model's USB keyboard (tools/intv_input.py UsbKeys) in file order, as the RTL
+     takes them, and tb_input.sv checks SHIFT's timing at every clk (no key meets
+     a changing SHIFT).
 For classes 1-7 the expected bytes are the model's, and the model with
 this core's code table must equal MAME's read_ctrl() for every vector.
 
@@ -354,15 +365,24 @@ def generate(path):
     lines = []
     problems = []
     counts = {}
+    usb = m.UsbKeys(seq=2)                      # the USB keyboard's state across the vectors (tb_input.sv: KB_SEQ 2)
+    last = [None]
 
     def add(cls, v, want=None, want_keys=None, want_e=None):
+        p = last[0]
+        if p is not None and p['key3'] >> 28 == 4 and (p.get('ecs') == 1) != (v.get('ecs') == 1):
+            # the bench changes ecs_full at once and the word a few clk later: a round of the old word with the
+            # new ecs_full may or may not run, so a word without the keyboard goes between
+            last[0] = None
+            add(cls, dict(p, key3=0, joy3=0, trig3=0))
+        last[0] = v
         r, l, ea, eb = m.ports4(v, prof=v.get('prof'))
         mr, ml, mea, meb = m.ports4(v, mame=True, prof=v.get('prof'))
         if (ea, eb) != (mea, meb):
             problems.append(f'class {cls}: model ECS ports {ea:02X} {eb:02X} != MAME read_ctrl {mea:02X} {meb:02X} for {v}')
         if want_e is not None and want_e != (ea, eb):
             problems.append(f'class {cls}: model ECS ports {ea:02X} {eb:02X} != expected {want_e[0]:02X} {want_e[1]:02X} for {v}')
-        k = m.ecs_keys(v)
+        k = m.ecs_keys(v, usb=usb)
         if (r, l) != (mr, ml):
             problems.append(f'class {cls}: model {r:02X} {l:02X} != MAME read_ctrl {mr:02X} {ml:02X} for {v}')
         if want is not None and want != (r, l):
@@ -535,7 +555,7 @@ def generate(path):
                             swap=c & 1, ovr=pos % 3))
     for i in range(20000):
         n = rng.randint(1, 6)
-        cs = [rng.choice(list(m.ECS_HID) + list(m.SYNTH_HID) + list(m.HID_ECS)) if rng.random() < 0.8
+        cs = [rng.choice(list(m.ECS_HID) + list(m.SYNTH_HID) + list(m.HID_ECS) + list(m.PC_KEYS) * 4) if rng.random() < 0.8
               else rng.getrandbits(8) for _ in range(n)] + [0] * (6 - n)
         rng.shuffle(cs)
         add(11, vec(key1=rkey() if i % 2 else 0, joy1=rng.getrandbits(32), key3=kb | rng.getrandbits(16),
@@ -586,6 +606,35 @@ def generate(path):
                     add(12, v, e)
                     if len(problems) > before:
                         problems[-1] = f'profile "{desc}" type {t} p{p2 + 1} swap {swap}: ' + problems[-1]
+    # 14 (2026-11-21) the PC keys, written out (PC_SPEC): each sequence from no key, every step's report and
+    # the ECS keys it leaves pressed; with the left modifiers, then with the right ones
+    for desc, steps in PC_SPEC:
+        for side in (0, 1):
+            for n, (codes, mods, want) in enumerate([((), '', ())] + steps):
+                bits = 0
+                for nm in mods:
+                    bits |= {'S': 0x02, 'C': 0x01, 'A': 0x04}[nm] << (4 * side)
+                cs = list(codes) + [0] * (6 - len(codes))
+                if side:
+                    cs = cs[::-1]
+                wk = 0
+                for nm in want:
+                    wk |= m.SHIFT_BIT if nm == 'SHIFT' else m.CTL_BIT if nm == 'CTL' else m.kpbit(nm)
+                v = vec(key3=kb | bits << 8, joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24,
+                        trig3=cs[4] | cs[5] << 8, ecs=1, swap=side)
+                before = len(problems)
+                add(14, v, (0xFF, 0xFF), wk)
+                if len(problems) > before:
+                    problems[-1] = f'PC keys "{desc}" step {n} side {side}: ' + problems[-1]
+    # the same codes with the ECS attached or off (the 0.0.8 keypad: 5 and 6 are keypad keys) and with the
+    # synthesizer (its notes only)
+    for code in list(m.PC_KEYS) + [0x22, 0x23]:
+        for mods in (0, 0x02, 0x04, 0x40):
+            for e in (0, 2):
+                add(14, vec(key3=kb | mods << 8, joy3=code, ecs=e),
+                    (0xFF, mame_read_ctrl([str(m.HID[code])]) if code in m.HID else 0xFF), 0)
+            add(14, vec(key3=kb | mods << 8, joy3=code, ecs=1, synth=1), (0xFF, 0xFF),
+                1 << m.SYNTH_HID[code] if code in m.SYNTH_HID else 0)
     # 13 (1.0.9): players 3 / 4 on the ECS's ports and Swap Controllers' four seats, written out:
     # each controller presses one button of its own, so its byte shows where it went
     one = {1: ['A'], 2: ['B'], 3: ['X'], 4: ['up']}
@@ -634,6 +683,68 @@ ECS_SPEC = dict(zip('ABCDEFGHIJKLMNOPQRSTUVWXYZ', range(0x04, 0x1E)))
 ECS_SPEC.update(zip('123456789', range(0x1E, 0x27)))
 ECS_SPEC.update({'0': 0x27, 'RTN': 0x28, 'ESC': 0x29, 'SPACE': 0x2C, ';': 0x33, ',': 0x36, '.': 0x37,
                  'RIGHT': 0x4F, 'LEFT': 0x50, 'DOWN': 0x51, 'UP': 0x52})
+# (2026-11-21) the PC keys, written out from the HID usage tables (- 0x2D, = 0x2E, ' 0x34, ` 0x35, / 0x38,
+# 5 0x22, 6 0x23) and the ECS's shifted legends measured on the owner's ECS (SHIFT+1 .. 0 = " # $ + - / * ( ),
+# SHIFT+LEFT / UP / DOWN / RIGHT = % ^ ? '): (description, [(codes, modifiers S C A, ECS keys left pressed)]),
+# each from no key
+EQ, MINUS, QUOTE, BTICK, SLASH, K5, K6 = 0x2E, 0x2D, 0x34, 0x35, 0x38, 0x22, 0x23
+PC_SPEC = [
+    ('= is SHIFT+1', [((EQ,), '', ('SHIFT', '1'))]),
+    ('Shift+= + is SHIFT+5', [((EQ,), 'S', ('SHIFT', '5'))]),
+    ('- is SHIFT+6', [((MINUS,), '', ('SHIFT', '6'))]),
+    ('Shift+- _: only the Shift', [((MINUS,), 'S', ('SHIFT',))]),
+    ('/ is SHIFT+7', [((SLASH,), '', ('SHIFT', '7'))]),
+    ('Shift+/ ? is SHIFT+DOWN', [((SLASH,), 'S', ('SHIFT', 'DOWN'))]),
+    ("' is SHIFT+RIGHT", [((QUOTE,), '', ('SHIFT', 'RIGHT'))]),
+    ('Shift+\' " is SHIFT+2', [((QUOTE,), 'S', ('SHIFT', '2'))]),
+    ('` is SHIFT+RIGHT', [((BTICK,), '', ('SHIFT', 'RIGHT'))]),
+    ('Shift+` ~: only the Shift', [((BTICK,), 'S', ('SHIFT',))]),
+    ('Alt with = changes nothing', [((EQ,), 'A', ('SHIFT', '1'))]),
+    ('Ctrl+=: only CTL', [((EQ,), 'C', ('CTL',))]),
+    ('Ctrl+Shift+/: CTL and SHIFT', [((SLASH,), 'SC', ('SHIFT', 'CTL'))]),
+    ("Ctrl+': only CTL", [((QUOTE,), 'C', ('CTL',))]),
+    ('Alt+5 % is SHIFT+LEFT', [((K5,), 'A', ('SHIFT', 'LEFT'))]),
+    ('Alt+6 ^ is SHIFT+UP', [((K6,), 'A', ('SHIFT', 'UP'))]),
+    ('Alt+Shift+5 is SHIFT+LEFT', [((K5,), 'SA', ('SHIFT', 'LEFT'))]),
+    ('5 alone is 5', [((K5,), '', ('5',))]),
+    ('Shift+5 is SHIFT+5 (positional +)', [((K5,), 'S', ('SHIFT', '5'))]),
+    ('Shift+6 is SHIFT+6 (positional -)', [((K6,), 'S', ('SHIFT', '6'))]),
+    ('Ctrl+Alt+5 is CTL+5', [((K5,), 'CA', ('CTL', '5'))]),
+    ('Alt+A is A, Alt+1 is 1, Alt alone nothing', [((0x04,), 'A', ('A',)), ((), 'A', ()), ((0x1E,), 'A', ('1',))]),
+    ('positional: Shift+8 SHIFT+8, Shift+1 SHIFT+1, Shift+left SHIFT+LEFT, Shift+up SHIFT+UP',
+     [((0x25,), 'S', ('SHIFT', '8')), ((), '', ()), ((0x1E,), 'S', ('SHIFT', '1')), ((), '', ()),
+      ((0x50,), 'S', ('SHIFT', 'LEFT')), ((), '', ()), ((0x52,), 'S', ('SHIFT', 'UP'))]),
+    ('Ctrl+H, J, K, L: CTL with the letter', [((0x0B,), 'C', ('CTL', 'H')), ((0x0D,), 'C', ('CTL', 'J')),
+                                              ((0x0E,), 'C', ('CTL', 'K')), ((0x0F,), 'C', ('CTL', 'L'))]),
+    ('Shift alone: SHIFT, and up again', [((), 'S', ('SHIFT',)), ((), '', ())]),
+    ('? held with Shift let go first stays ?', [((SLASH,), 'S', ('SHIFT', 'DOWN')), ((SLASH,), '', ('SHIFT', 'DOWN')),
+                                                ((), '', ())]),
+    ('+ held with Shift let go first stays +', [((EQ,), 'S', ('SHIFT', '5')), ((EQ,), '', ('SHIFT', '5')), ((), '', ())]),
+    ('= held, then Shift: stays =', [((EQ,), '', ('SHIFT', '1')), ((EQ,), 'S', ('SHIFT', '1')), ((), 'S', ('SHIFT',)),
+                                     ((), '', ())]),
+    ('Alt+5 held, Alt let go first: stays %', [((K5,), 'A', ('SHIFT', 'LEFT')), ((K5,), '', ('SHIFT', 'LEFT')),
+                                               ((), '', ())]),
+    ('5 held, then Alt: stays 5', [((K5,), '', ('5',)), ((K5,), 'A', ('5',)), ((), '', ())]),
+    ('Ctrl+= held, Ctrl let go: nothing', [((EQ,), 'C', ('CTL',)), ((EQ,), '', ())]),
+    ('/ again after a release: then Shift+/', [((SLASH,), '', ('SHIFT', '7')), ((), '', ()),
+                                               ((SLASH,), 'S', ('SHIFT', 'DOWN'))]),
+    ('- then 3 rolled over: 3 waits, then 3 alone', [((MINUS,), '', ('SHIFT', '6')), ((MINUS, 0x20), '', ('SHIFT', '6')),
+                                                    ((0x20,), '', ('3',)), ((), '', ())]),
+    ('3 then - rolled over: 3 stays, SHIFT+6', [((0x20,), '', ('3',)), ((0x20, MINUS), '', ('SHIFT', '3', '6')),
+                                               ((MINUS,), '', ('SHIFT', '6')), ((), '', ())]),
+    ('= then 1 rolled over: 1 after =', [((EQ,), '', ('SHIFT', '1')), ((EQ, 0x1E), '', ('SHIFT', '1')),
+                                         ((0x1E,), '', ('1',)), ((), '', ())]),
+    ('A then =: A stays', [((0x04,), '', ('A',)), ((0x04, EQ), '', ('SHIFT', 'A', '1')), ((EQ,), '', ('SHIFT', '1')),
+                           ((), '', ())]),
+    ('= then A: A waits for =', [((EQ,), '', ('SHIFT', '1')), ((EQ, 0x04), '', ('SHIFT', '1')), ((0x04,), '', ('A',))]),
+    ('Shift, + then A: A with the Shift', [((EQ,), 'S', ('SHIFT', '5')), ((EQ, 0x04), 'S', ('SHIFT', '5', 'A'))]),
+    ('/ and + together: both', [((SLASH,), '', ('SHIFT', '7')), ((SLASH, EQ), 'S', ('SHIFT', '7', '5'))]),
+    ('2 * 3 + 1 typed with the Shift up between', [((0x1F,), '', ('2',)), ((), 'S', ('SHIFT',)),
+                                                   ((0x25,), 'S', ('SHIFT', '8')), ((), '', ()), ((0x20,), '', ('3',)),
+                                                   ((), 'S', ('SHIFT',)), ((EQ,), 'S', ('SHIFT', '5')), ((), '', ()),
+                                                   ((0x1E,), '', ('1',)), ((), '', ())]),
+    ('released together: nothing, SHIFT up', [((EQ, MINUS, SLASH), '', ('SHIFT', '1', '6', '7')), ((), '', ())]),
+]
 # the synthesizer's tracker rows: (HID usage, note; 0 = C2): Z S X D C V G B H N J M = C3-B3,
 # Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5
 SYNTH_SPEC = list(zip((0x1D, 0x16, 0x1B, 0x07, 0x06, 0x19, 0x0A, 0x05, 0x0B, 0x11, 0x0D, 0x10), range(12, 24)))
@@ -810,19 +921,38 @@ PLANTS = [
     # step 9, the ECS keyboard: Shift on the wrong switch; Backspace not the left arrow; the number row
     # still the keypad with the ECS; the synthesizer an octave off; right Ctrl ignored; the keys sent
     # without the ECS; the ECS setting's bits swapped
-    ('ecs_shift_pos', 'intv_input.sv', "(k3[9] | k3[13]) ? 64'd1 << 55 : 64'd0)", "(k3[9] | k3[13]) ? 64'd1 << 54 : 64'd0)"),
+    ('ecs_shift_pos', 'intv_input.sv', "| (us_n ? 64'd1 << 55 : 64'd0)", "| (us_n ? 64'd1 << 54 : 64'd0)"),
     # the modifier byte read from cont3_key[7:0] (1.0.9; the Dock sends it in [15:8])
-    ('mods_low_byte', 'intv_input.sv', "(k3[9] | k3[13]) ? 64'd1 << 55", "(k3[1] | k3[5]) ? 64'd1 << 55"),
+    ('mods_low_byte', 'intv_input.sv', "wire  logic  sh = k3[9] | k3[13]", "wire  logic  sh = k3[1] | k3[5]"),
     ('ecs_bs_none', 'intv_input.sv', "8'h50: p = 7'd0;   8'h2A: p = 7'd0;", "8'h50: p = 7'd0;"),
     ('ecs_numrow_keypad', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)",
      "ecs_full ? (ph == 3'd0 ? hid_code(hc) : hid_code_ecs(hc)) : hid_code(hc)"),
     ('synth_octave', 'intv_input.sv', "8'h1D: n = 7'd12;", "8'h1D: n = 7'd24;"),
     ('ecs_rctrl', 'intv_input.sv', "&& (k3[8] | k3[12]) ?", "&& (k3[8]) ?"),
-    ('ecs_always', 'intv_input.sv', "(kbd && ecs_full && !sp[6]", "(kbd && !sp[6]"),
+    ('ecs_always', 'intv_input.sv', "(kbd && ef && (ecw ?", "(kbd && (ecw ?"),
     # the step-9 review: with the ECS attached (or off) the keyboard is the 0.0.8 keypad; a core that
     # gives it the ECS's numpad-only mapping there loses the number row, Enter and Backspace
     ('attached_numpad_only', 'intv_input.sv', "ecs_full ? hid_code_ecs(hc) : hid_code(hc)", "hid_code_ecs(hc)"),
-    ('ecs_mods_always', 'intv_input.sv', "(kbd && ecs_full && !sy && (k3[9] | k3[13])", "(kbd && !sy && (k3[9] | k3[13])"),
+    ('ecs_mods_always', 'intv_input.sv', "wire  logic  ecm = ecw && ef;", "wire  logic  ecm = ecw;"),
+    # 2026-11-21, the PC keys: a wrong table entry (= as SHIFT+3); Shift+/ as SHIFT+7 still; SHIFT not put
+    # down for them; Alt ignored; Alt+5 without Alt's latch on 5 alone; Ctrl not leaving them out; no
+    # key-down latch (? turns into / when Shift goes first); new keys joining under a SHIFT-down key (# for
+    # -3); SHIFT left down; SHIFT changing with the keys (no first wait); keys joining one round after
+    # SHIFT (no second wait)
+    ('pc_eq_entry', 'intv_input.sv', "8'h2E: r = s ? {1'b1, 7'd28} : {1'b1, 7'd44};", "8'h2E: r = s ? {1'b1, 7'd28} : {1'b1, 7'd36};"),
+    ('pc_qmark_slash', 'intv_input.sv', "8'h38: r = s ? {1'b1, 7'd41} : {1'b1, 7'd20};", "8'h38: r = {1'b1, 7'd20};"),
+    ('pc_shift_not_down', 'intv_input.sv', "ds = |ed_acc || sh;", "ds = sh;"),
+    ('pc_alt_ignored', 'intv_input.sv', "8'h22: if (a) r = {1'b1, 7'd0};", "8'h22: if (1'b0) r = {1'b1, 7'd0};"),
+    ('pc_alt_both_5', 'intv_input.sv', "8'h22: if (a) r = {1'b1, 7'd0};", "8'h22: r = {1'b1, 7'd0};"),
+    ('pc_ctrl_kept', 'intv_input.sv', "        if (!t)\n            unique case (c)", "        if (1'b1)\n            unique case (c)"),
+    ('pc_no_latch', 'intv_input.sv', "if (pc_c[i] == hc) hm = pc_m[i];", "if (1'b0) hm = pc_m[i];"),
+    ('pc_join_under_shift', 'intv_input.sv', "                if (!cf)\n                    ukp_n = ek_acc;",
+     "                ukp_n = ek_acc;"),
+    ('pc_shift_stuck', 'intv_input.sv', "ds = |ed_acc || sh;", "ds = |ed_acc || sh || us;"),
+    ('pc_no_first_wait', 'intv_input.sv', "            end else if (us != ds)                                  // SHIFT is to change: wait first\n                tm_n = TW'(KB_SEQ);",
+     "            end else if (us != ds) begin us_n = ds; tm_n = TW'(KB_SEQ); end"),
+    ('pc_no_second_wait', 'intv_input.sv', "                    us_n = ds;\n                    tm_n = TW'(KB_SEQ);",
+     "                    us_n = ds;\n                    tm_n = '0;"),
     # the decode round: a word loaded at any step (the outputs mix two words: the tear check)
     ('round_any_load', 'intv_input.sv', "if (req_s[1] != ack && ph == 3'd7) begin", "if (req_s[1] != ack) begin"),
     ('ovr_swapped', 'intv_input.sv', "    assign ecs_ovr   = eo;", "    assign ecs_ovr   = {eo[0], eo[1]};"),

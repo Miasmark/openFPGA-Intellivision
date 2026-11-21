@@ -163,6 +163,20 @@ ECS_HID = {
     0x04: (5, 7), 0x4F: (5, 5), 0x1E: (5, 4), 0x14: (5, 3), 0x52: (5, 2), 0x51: (5, 1), 0x2C: (5, 0),
 }
 ECS_SHIFT, ECS_CTL = (6, 7), (5, 6)
+# 2026-11-21, the PC keys: the PC keys ECS_HID leaves out type their PC legend with ECS SHIFT down,
+# whatever the PC's Shift (the ECS's shifted legends, measured on the owner's ECS: SHIFT+1 .. 0 =
+# = " # $ + - / * ( ), SHIFT+LEFT / UP / DOWN / RIGHT = % ^ ? ' (its one quote)). HID usage ->
+# (ECS key without the PC's Shift, with it); None: nothing (the ECS has no _ or ~). With Ctrl held
+# they press nothing (as ECS_HID: Ctrl combinations unchanged).
+PC_KEYS = {0x2E: ("1", "5"),            # =  +
+           0x2D: ("6", None),           # -  _
+           0x38: ("7", "DOWN"),         # /  ?
+           0x34: ("RIGHT", "2"),        # '  "
+           0x35: ("RIGHT", None)}       # `  ~
+# Alt (either; HID modifier bits 2 and 6) + 5 = % (SHIFT+LEFT), Alt + 6 = ^ (SHIFT+UP); the plain 5 / 6
+# are not pressed then (Ctrl held: the plain ones)
+ALT_KEYS = {0x22: "LEFT", 0x23: "UP"}
+KB_SEQ = 16384                          # intv_input.sv: each of SHIFT's two waits, in rounds of 8 clk_sys
 # The music synthesizer on two tracker rows: Z S X D C V G B H N J M = C3 .. B3 (notes 12-23),
 # Q 2 W 3 E R 5 T 6 Y 7 U I = C4 .. C5 (24-36); note n is matrix bit n (MAME ecs_ctrl.cpp SYNTH.n).
 SYNTH_HID = {0x1D: 12, 0x16: 13, 0x1B: 14, 0x07: 15, 0x06: 16, 0x19: 17, 0x0A: 18, 0x05: 19,
@@ -296,31 +310,134 @@ def keyboard(key3, joy3, trig3, hand, ecs=0):
     return hand
 
 
-def ecs_keys(v, kb=None):
+def kpbit(name):
+    import ecs as ecsm
+    r, c = ecsm.KEYPOS[name]
+    return 1 << (8 * r + c)
+
+
+SHIFT_BIT, CTL_BIT = 1 << (8 * ECS_SHIFT[0] + ECS_SHIFT[1]), 1 << (8 * ECS_CTL[0] + ECS_CTL[1])
+
+
+def pc_key(c, s, t, a):
+    """One HID usage code with the PC's Shift, Ctrl and Alt of its key-down -> (matrix bit or 0,
+    SHIFT down): the positional key (ECS_HID: SHIFT as the PC's Shift) or a PC key (PC_KEYS,
+    ALT_KEYS: SHIFT down)."""
+    if not t:
+        if c in PC_KEYS:
+            k = PC_KEYS[c][1 if s else 0]
+            return (kpbit(k), True) if k else (0, False)
+        if a and c in ALT_KEYS:
+            return kpbit(ALT_KEYS[c]), True
+    if c in ECS_HID:
+        r, col = ECS_HID[c]
+        return 1 << (8 * r + col), False
+    return 0, False
+
+
+class UsbKeys:
+    """intv_input.sv's USB keyboard into the ECS matrix, round by round (a round: 8 clk_sys): each
+    code keeps the {Shift, Ctrl, Alt} of its key-down while held (the codes of the last round's word
+    with the computer keyboard); SHIFT (us) changes only after a wait of `seq` + 1 rounds in which
+    keys only leave, and keys join after another such wait; while a SHIFT-down key is held without
+    the PC's Shift, keys shown already stay and new ones wait. step(v, ef) is one round of word v
+    with ecs_full ef; settle(v, ef) runs rounds until nothing changes; keys() the matrix bits (CTL
+    from the word: shown at once)."""
+
+    def __init__(self, seq=KB_SEQ):
+        self.seq = seq
+        self.tab = {}                       # code -> (s, t, a) at its key-down
+        self.ukp = self.ukd = 0
+        self.us = False
+        self.tm = 0
+        self.ctl = False
+
+    def state(self):
+        return (tuple(sorted(self.tab.items())), self.ukp, self.ukd, self.us, self.tm, self.ctl)
+
+    def step(self, v, ef):
+        kbd = v["key3"] >> 28 == 4
+        sy = v.get("synth") == 1
+        ecw = kbd and not sy
+        ecm = ecw and ef
+        mods = (v["key3"] >> 8) & 0xFF
+        now = (bool(mods & 0x22), bool(mods & 0x11), bool(mods & 0x44))
+        ep = ed = 0
+        tab = {}
+        for c in hid_codes(v["joy3"], v["trig3"]):
+            m = self.tab.get(c, now)
+            if ecw:
+                tab.setdefault(c, m)
+            if kbd and ef:
+                if sy:
+                    if c in SYNTH_HID:
+                        ep |= 1 << SYNTH_HID[c]
+                else:
+                    b, down = pc_key(c, *m)
+                    if down:
+                        ed |= b
+                    else:
+                        ep |= b
+        self.tab = tab
+        sh = now[0]
+        if not ecm:
+            self.ukp, self.ukd, self.us, self.tm = ep, 0, False, 0
+        else:
+            ds = bool(ed) or sh
+            cf = bool(ed) and not sh
+            ukp, ukd, us, tm = self.ukp & ep, self.ukd & ed, self.us, 0
+            if self.tm:
+                tm = self.tm - 1
+                if self.tm == 1 and self.us != ds:
+                    us, tm = ds, self.seq
+            elif self.us != ds:
+                tm = self.seq
+            else:
+                ukd = ed
+                if not cf:
+                    ukp = ep
+            self.ukp, self.ukd, self.us, self.tm = ukp, ukd, us, tm
+        self.ctl = ecm and now[1]
+
+    def advance(self, v, ef, n):
+        """n rounds of word v (fast over the waits and once nothing changes)."""
+        while n > 0:
+            before = self.state()
+            self.step(v, ef)
+            n -= 1
+            if self.tm == 0 and self.state() == before:
+                return
+            if self.tm > 1 and n > 0:
+                k = min(self.tm - 1, n)
+                self.tm -= k
+                n -= k
+
+    def settle(self, v, ef):
+        """Rounds of word v until nothing changes (a wait's rounds change only tm: skipped)."""
+        for _ in range(64):
+            before = self.state()
+            self.step(v, ef)
+            self.tm = min(self.tm, 1)
+            if self.state() == before:
+                return self.keys()
+        raise RuntimeError("UsbKeys: no settled state")
+
+    def keys(self):
+        return self.ukp | self.ukd | (SHIFT_BIT if self.us else 0) | (CTL_BIT if self.ctl else 0)
+
+
+def ecs_keys(v, kb=None, usb=None):
     """The ECS keyboard's pressed switches (bit 8 row + column) from the USB keyboard, while
-    the ECS is fully on (v["ecs"] == ECS_ON; attached or off: none); v["synth"]: the
+    the ECS is fully on (v["ecs"] == ECS_ON; attached or off: none), settled (UsbKeys: usb, the
+    keyboard's state from the words before, or none held before); v["synth"] == 1: the
     synthesizer instead (tracker rows). kb: the on-screen ECS keyboard (tools/osk.py
     Keyboard), its keys with the computer keyboard."""
+    usb = usb if usb is not None else UsbKeys()
+    bits = usb.settle(v, v.get("ecs") == ECS_ON)
     if v.get("ecs") != ECS_ON:
         return 0
-    bits = kb.keys() if kb is not None and not v.get("synth") else 0
-    if v["key3"] >> 28 != 4:
-        return bits
-    codes = hid_codes(v["joy3"], v["trig3"])
-    if v.get("synth"):
-        for c in codes:
-            if c in SYNTH_HID:
-                bits |= 1 << SYNTH_HID[c]
-        return bits
-    for c in codes:
-        if c in ECS_HID:
-            r, col = ECS_HID[c]
-            bits |= 1 << (8 * r + col)
-    mods = (v["key3"] >> 8) & 0xFF
-    if mods & 0x22:
-        bits |= 1 << (8 * ECS_SHIFT[0] + ECS_SHIFT[1])
-    if mods & 0x11:
-        bits |= 1 << (8 * ECS_CTL[0] + ECS_CTL[1])
+    if kb is not None and v.get("synth") != 1:
+        bits |= kb.keys()
     return bits
 
 
@@ -488,6 +605,35 @@ def self_check():
     ok(ports(dict(base, key3=4 << 28, joy3=0x1E, ecs=2)) == ports(dict(base, key3=4 << 28, joy3=0x1E, ecs=0)) != (0xFF, 0xFF),
        "ECS attached: the number row is the keypad, as with the ECS off")
     ok(sorted(SYNTH_HID.values()) == list(range(12, 37)), "synthesizer: 25 notes C3-C5")
+    # 2026-11-21, the PC keys: only on codes ECS_HID leaves out; each with SHIFT down
+    ok(not set(PC_KEYS) & set(ECS_HID) and set(ALT_KEYS) <= set(ECS_HID),
+       "PC keys: = - / ' ` are not ECS_HID keys; Alt's 5 and 6 are")
+
+    def kb(codes, mods=0, usb=None):
+        cs = list(codes) + [0] * (6 - len(codes))
+        return ecs_keys(dict(base, key3=(4 << 28) | mods << 8, joy3=cs[0] | cs[1] << 8 | cs[2] << 16 | cs[3] << 24,
+                             trig3=cs[4] | cs[5] << 8, ecs=1), usb=usb)
+    S = SHIFT_BIT
+    ok(kb([0x2E]) == S | kpbit("1") and kb([0x2E], 0x02) == S | kpbit("5") and kb([0x2D]) == S | kpbit("6")
+       and kb([0x2D], 0x20) == S and kb([0x38]) == S | kpbit("7") and kb([0x38], 0x02) == S | kpbit("DOWN")
+       and kb([0x34]) == S | kpbit("RIGHT") and kb([0x34], 0x02) == S | kpbit("2") and kb([0x35]) == S | kpbit("RIGHT")
+       and kb([0x35], 0x02) == S, "PC keys: = + - / ? ' \" `; Shift+- and Shift+` only the Shift")
+    ok(kb([0x22], 0x04) == S | kpbit("LEFT") and kb([0x23], 0x40) == S | kpbit("UP") and kb([0x22]) == kpbit("5")
+       and kb([0x22], 0x02) == S | kpbit("5") and kb([0x22], 0x05) == CTL_BIT | kpbit("5"),
+       "Alt+5 = %, Alt+6 = ^; 5 alone 5, Shift+5 positional, Ctrl+Alt+5 positional")
+    ok(kb([0x2E], 0x01) == CTL_BIT and kb([0x0B], 0x01) == CTL_BIT | kpbit("H"),
+       "Ctrl: the PC keys press nothing, Ctrl+H = CTL+H")
+    u = UsbKeys(seq=2)
+    kb([0x38], 0x02, u)                                     # Shift+/ = ?
+    ok(kb([0x38], 0, u) == S | kpbit("DOWN"), "a key keeps its key-down's Shift: ? stays ? when Shift goes first")
+    ok(kb([], 0, u) == 0, "released: SHIFT goes up")
+    u = UsbKeys(seq=2)
+    kb([0x2D], 0, u)                                        # - held, 3 pressed: 3 waits (no #)
+    ok(kb([0x2D, 0x20], 0, u) == S | kpbit("6") and kb([0x20], 0, u) == kpbit("3"),
+       "- then 3 rolled over: 3 waits while - is held, then 3 without SHIFT")
+    u = UsbKeys(seq=2)
+    kb([0x04], 0, u)                                        # A held, = pressed: A stays
+    ok(kb([0x04, 0x2E], 0, u) == S | kpbit("A") | kpbit("1"), "A held, = pressed: A stays, SHIFT+1")
     # 1.0.8: a profile's keypad keys on the face buttons (the TutorVision titles), in Auto only
     tv = dict(mode=LAYER, sides=("E", "C", "lr"))
 

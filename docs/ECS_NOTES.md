@@ -179,6 +179,48 @@ always come from one whole word. With the setting
 "ECS Keyboard" on Music synthesizer, two tracker rows play it: Z S X D C V G B H N J M = C3-B3,
 Q 2 W 3 E R 5 T 6 Y 7 U I = C4-C5.
 
+**The ECS's shifted legends** (photographed on the owner's ECS, 2026-11-21): SHIFT+1 .. 0 type
+`= " # $ + - / * ( )` (the ECS font draws `(` `)` much like `[` `]`), SHIFT+left `%`, SHIFT+up `^`
+(drawn as an up arrow), SHIFT+down `?`, SHIFT+right `'` (a single quote leaning right, the ECS's
+only quote); SHIFT+`;` `,` `.` are `:` `<` `>`; letters are upper case either way. `tools/ecs.py`
+SHIFTED (used to type test text) agrees.
+
+**The PC keys** (2026-11-21, the owner's design): the positional map stays as above (PC Shift =
+SHIFT, so PC Shift+1 .. 0 and Shift+arrows type the ECS legends), and the PC keys it leaves out type
+their PC legend with SHIFT down whatever the PC's Shift (`tools/intv_input.py` PC_KEYS, ALT_KEYS;
+`intv_input.sv` `pc_hid`):
+
+| PC key (HID) | Alone | With Shift |
+|---|---|---|
+| `=` (2E) | `=` SHIFT+1 | `+` SHIFT+5 |
+| `-` (2D) | `-` SHIFT+6 | `_`: nothing (SHIFT alone) |
+| `/` (38) | `/` SHIFT+7 | `?` SHIFT+down |
+| `'` (34) | `'` SHIFT+right | `"` SHIFT+2 |
+| `` ` `` (35) | `'` SHIFT+right | `~`: nothing |
+| Alt+5, Alt+6 (22, 23; either Alt, modifier bits 2 / 6) | `%` SHIFT+left, `^` SHIFT+up | the same |
+
+PC Shift+5 and Shift+6 stay positional (`+`, `-`); with Alt held, 5 and 6 press only `%` / `^`;
+Alt does nothing else (nothing else in the core reads it). With Ctrl held these keys are as the
+positional map has them (nothing; Ctrl combinations are unchanged: Ctrl+H/J/K/L move ECS BASIC's
+cursor). `! @ &` are on keys the positional map has (Shift+1, 2, 7 stay the ECS's `=` `"` `/`);
+`[ ] \` and their shifted `{ } |` have no ECS character: those keys press nothing, as before.
+
+How the keys meet SHIFT (`intv_input.sv`): every HID code keeps the Shift, Ctrl and Alt it went
+down with while it is held (so `?` stays `?` when Shift is let go before `/`, and holding `=` then
+pressing Shift does not make a `+`). SHIFT as the matrix shows it changes only between two waits
+of 16,384 rounds (8 clk_sys each, 9.2 ms): keys going away leave at the first, SHIFT changes after
+it, and keys join after the second. The ECS ROM's scan reads SHIFT's row first (rows 6 .. 0) and
+`$7BE0` takes a key as new on the first scan it shows in, so a key that joins together with a SHIFT
+change could be read with the old SHIFT when the change falls inside a scan; with the waits SHIFT
+is settled in the matrix before the key is, whatever order a program scans in, and goes up 9.2 ms
+after the last key that needed it is let go. A key pressed again on the switch another key just
+held (`1` rolled over `=`) is up for the two waits (18.3 ms), more than one frame, so a scan sees it
+up and the ECS takes it as a new key. While a SHIFT-down key is held without the PC's Shift, keys
+held before stay (SHIFT just goes down under them, as on the ECS) and keys pressed after wait until
+it is let go (so `-` then `3` rolled over types `-3`, not `-#`). Not covered: `1` still held when
+`=` is pressed (the same switch): it stays closed and only SHIFT goes down, so the ECS sees no new
+key and the `=` is lost.
+
 **The on-screen ECS keyboard** (1.0.4, docs/KEYPAD_NOTES.md 5): Start on player 1's controller
 opens it under the same condition (mode on, the computer keyboard); its key, SHIFT (Y) and CTL
 (X) go into the same matrix bits as the USB keyboard's, ORed with them, so the matrix rule above
@@ -339,7 +381,14 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   `sim/testroms/ecstest.asm`; ecsboot; ecsastro; the step-9 cartridges) with round trips, the
   keyboard scans against ECSKBD_WANT (the rule written out by hand); `--ecs-play` frame by frame
   over the MAME runs' keys.
-- `sim/tb/tb_input.py` classes 10-11 (the key mapping, in modes off, on and attached);
+- `sim/tb/tb_input.py` classes 10-11 (the key mapping, in modes off, on and attached); class 14
+  (2026-11-21) the PC keys written out by hand (every one with and without Shift, Ctrl and Alt,
+  both modifier sides, the key-down latch, roll-overs, SHIFT going up) and every vector through
+  the model's USB keyboard in order; tb_input.sv checks at every clk that no key closes with or
+  within 8 x KB_SEQ clk of a SHIFT change (11 planted faults); `sim/check/ecs_pc_keys_check.py`
+  (model, the owner's ECS ROM): an ECS BASIC program typed on the USB keyboard by PC legends (with
+  roll-overs and Shift let go first) ends on the same screen as the same text typed on the ECS
+  keys, with its RUN's output;
   `sim/tb/tb_loader.py` the Auto rule on every image (ecsoffcfg, ecsoffrom: the incompatible tag);
   `sim/tb/tb_savestate.py` ecsbasic, ecssound, ecsavail, Atlantis (attached) and Super NFL Football
   (on) under Auto, the E runs (a state with the ECS into a core with it off) and the X runs (into a

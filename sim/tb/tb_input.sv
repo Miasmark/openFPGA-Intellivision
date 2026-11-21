@@ -16,8 +16,16 @@
 // the inputs 1 ns after a clk_74a edge, waits 48 clocks (the crossing's
 // handshake takes at most about 7 clk + 4 clk_74a periods plus up to 8 clk
 // for the decode round's load step, twice when a transfer was in flight,
-// then the round's 7 clk) and compares both bytes. It prints the first 20
-// mismatches and a count per class.
+// then the round's 7 clk; 128 with the ECS on and the USB keyboard: SHIFT's
+// two waits, KB_SEQ = 2 rounds here) and compares both bytes. It prints the
+// first 20 mismatches and a count per class.
+//
+// The USB keyboard's SHIFT (2026-11-21): at every clk edge while intv_input
+// has the ECS's computer keyboard (dut.ecm), now and at the edge before,
+// SHIFT (row 6 column 7) must not change at an edge where another switch
+// (but CTL) changes, and no switch (but SHIFT and CTL) may close within
+// 8 x KB_SEQ clk after SHIFT changed: a key that needs SHIFT down or up never
+// meets the other SHIFT. It counts the SHIFT changes seen.
 //
 // Part 2, +tear=FILE (the crossing, DESIGN.md 7): groups of vectors, each
 // a line "n" and then n lines of key1 .. swap pad_r pad_l. For each group
@@ -174,6 +182,34 @@ module tb_input;
             nload++;
     end
 
+    // ------------------------------------------- the USB keyboard's SHIFT
+    int nshift = 0, nseq = 0, since = 1000000;
+    logic [63:0] kprev = '0;
+    logic        mprev = 1'b0;
+    always @(posedge clk) begin
+        #0.2;
+        if (dut.ecm && mprev) begin
+            automatic logic [63:0] ch = ecs_keys ^ kprev;
+            automatic logic [63:0] rise = ecs_keys & ~kprev & ~(64'd1 << 55) & ~(64'd1 << 46);
+            if (ch[55]) begin
+                nshift++;
+                if (ch & ~(64'd1 << 55) & ~(64'd1 << 46)) begin
+                    if (nseq < 10)
+                        $display("  FAIL  SHIFT at %0t: changed with other switches (%h -> %h)", $time, kprev, ecs_keys);
+                    nseq++;
+                end
+            end
+            if (rise != 64'd0 && since < 8 * KB_SEQ) begin
+                if (nseq < 10)
+                    $display("  FAIL  SHIFT at %0t: switches %h closed %0d clk after SHIFT changed", $time, rise, since);
+                nseq++;
+            end
+        end
+        since = (dut.ecm && mprev && ecs_keys[55] != kprev[55]) ? 1 : since + 1;
+        kprev = ecs_keys;
+        mprev = dut.ecm;
+    end
+
     // clk_74a: period 12.5 .. 14.5 ns, high for half of it
     real p74;
     initial begin
@@ -186,7 +222,8 @@ module tb_input;
         end
     end
 
-    intv_input #(.KBD_HEX(`OSK_KBD_HEX)) dut (
+    localparam int KB_SEQ = 2;
+    intv_input #(.KBD_HEX(`OSK_KBD_HEX), .KB_SEQ(KB_SEQ)) dut (
         .clk_74a    ( clk_74a ),
         .clk        ( clk ),
         .cont1_key  ( bus[278:247] ),
@@ -293,7 +330,7 @@ module tb_input;
                 #1 bus = pack(f);
                 ecs_full = f[12][1:0] == 2'd1;
                 {prof_ok, prof_mode, prof_sides} = f[17][14:0];   // (1.0.8) the profile
-                repeat (48) @(posedge clk);
+                repeat (ecs_full && f[5][31:28] == 4'd4 ? 128 : 48) @(posedge clk);
                 #1;
                 cnt[cls & 15]++;
                 if (pad_r !== f[13][7:0] || pad_l !== f[14][7:0] || ecs_keys !== {f[15], f[16]}
@@ -405,6 +442,12 @@ module tb_input;
                 ntear++;
             nbad += ntear;
         end
+
+        // the USB keyboard's SHIFT over the whole run
+        $display("  %s USB keyboard SHIFT: %0d changes, %0d keys meeting a changing SHIFT",
+                 (nseq == 0 && (nshift > 0 || nvec == 0)) ? "ok  " : "FAIL", nshift, nseq);
+        if (nseq != 0 || (nshift == 0 && nvec > 0))
+            nbad++;
 
         // the handshake rule over the whole run
         $display("  %s handshake: %0d copies, %0d loads, %0d copies changed in flight",

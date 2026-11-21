@@ -144,7 +144,26 @@ Layer.
 
 **USB keyboard (Dock):**
 - The number keys, Enter and Backspace (Clear) are player 1's keypad.
-- With the ECS on, the keyboard is the ECS computer keyboard. Only the numpad stays the keypad.
+- With the ECS on, the keyboard is the ECS computer keyboard, key by key: each key is the ECS key
+  in its place, and Shift is the ECS's SHIFT (so Shift+1 .. 0 type the ECS's `= " # $ + - / * ( )`,
+  Shift+arrows `% ^ ?` and `'`). Only the numpad stays the keypad.
+- The PC keys the ECS has no place for type their PC legend (the ECS's SHIFT is pressed for them,
+  whatever Shift does):
+
+  | PC key | Types (ECS keys) |
+  |---|---|
+  | `=` | `=` (SHIFT+1) |
+  | Shift+`=` | `+` (SHIFT+5) |
+  | `-` | `-` (SHIFT+6) |
+  | `/` | `/` (SHIFT+7) |
+  | Shift+`/` | `?` (SHIFT+down) |
+  | `'` or `` ` `` | `'` (SHIFT+right, the ECS's one quote) |
+  | Shift+`'` | `"` (SHIFT+2) |
+  | Alt+5 | `%` (SHIFT+left) |
+  | Alt+6 | `^` (SHIFT+up) |
+
+  Shift+5 and Shift+6 stay the ECS's `+` and `-`; `_` and `~` type nothing; with Ctrl these keys
+  do nothing. A character comes out as it was pressed even if Shift or Alt is let go first.
 
 ## Settings
 

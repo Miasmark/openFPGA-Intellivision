@@ -64,6 +64,22 @@
 //   cont3_key[15:8], checked on a Dock with the input monitor core,
 //   2026-11-21; 1.0.9 read [7:0], which is always 0); only the numpad
 //   stays the keypad (numpad . = Clear).
+//   2026-11-21, the PC keys (pc_hid below; docs/ECS_NOTES.md 4): the PC keys
+//   the map above leaves out type the character of their PC legend, with
+//   ECS SHIFT down whatever the PC's Shift: = SHIFT+1, Shift+= '+' SHIFT+5,
+//   - SHIFT+6, / SHIFT+7, Shift+/ '?' SHIFT+down, ' and ` SHIFT+right (the
+//   ECS's one quote), Shift+' '"' SHIFT+2 (Shift+- '_', Shift+` '~': none);
+//   Alt (either) + 5 = '%' (SHIFT+left), Alt + 6 = '^' (SHIFT+up). With Ctrl
+//   held they are as above (nothing). A key keeps the Shift, Ctrl and Alt of
+//   its key-down while held (pc_c / pc_m), so letting Shift go before / does
+//   not turn '?' into a new '/'. SHIFT shown (us) changes only between two
+//   waits of KB_SEQ rounds (9.2 ms each): keys that go away leave at the
+//   start, keys join only after the second wait, so SHIFT is in the matrix
+//   before a key that needs it is (the ECS ROM reads SHIFT's row first and
+//   takes a key as new on the first scan it shows in), and a key pressed again
+//   on the same switch (1 after =) is up for 18 ms, more than one frame's
+//   scan. While a SHIFT-down key is held without the PC's Shift, other keys
+//   held already stay and new ones wait for it to go (no "#" for "-3").
 //   Setting synth: the music synthesizer on two tracker rows (Z-M = C3-B3,
 //   Q-I = C4-C5) instead. With the ECS attached (ROMs out, Auto's default)
 //   or off the keyboard is the keypad as in 0.0.8 and the matrix reads no
@@ -107,7 +123,8 @@
 `default_nettype none
 
 module intv_input #(
-    parameter KBD_HEX = "core/tables/osk_kbd.hex"
+    parameter KBD_HEX = "core/tables/osk_kbd.hex",
+    parameter int KB_SEQ = 16384    // the USB keyboard's SHIFT: each wait, in rounds of 8 clk (9.2 ms)
 ) (
     input  wire logic        clk_74a,       // the words' and settings' clock
     input  wire logic        clk,           // clk_sys
@@ -394,6 +411,28 @@ module intv_input #(
         syn_hid = n;
     endfunction
 
+    // The PC keys: a HID usage code and the PC's {Shift, Ctrl, Alt} at its key-down -> {SHIFT down [7],
+    // the switch [6:0]} (bit 8 row + column; bit 6 set: none); SHIFT down 0: the positional key (ecs_hid),
+    // SHIFT as the PC's Shift. The ECS's shifted legends (the owner's ECS, 2026-11-21): SHIFT+1 .. 0
+    // = " # $ + - / * ( ), SHIFT+left / up / down / right = % ^ ? ' (the one quote)
+    localparam logic [7:0] PC_NONE = 8'h7F;
+    function automatic logic [7:0] pc_hid(input logic [7:0] c, input logic s, input logic t, input logic a);
+        logic [7:0] r;
+        r = {1'b0, ecs_hid(c)};
+        if (!t)
+            unique case (c)
+                8'h2E: r = s ? {1'b1, 7'd28} : {1'b1, 7'd44};           // = SHIFT+1, + SHIFT+5
+                8'h2D: r = s ? PC_NONE       : {1'b1, 7'd21};           // - SHIFT+6, _ none
+                8'h38: r = s ? {1'b1, 7'd41} : {1'b1, 7'd20};           // / SHIFT+7, ? SHIFT+down
+                8'h34: r = s ? {1'b1, 7'd37} : {1'b1, 7'd45};           // ' SHIFT+right, " SHIFT+2
+                8'h35: r = s ? PC_NONE       : {1'b1, 7'd45};           // ` SHIFT+right, ~ none
+                8'h22: if (a) r = {1'b1, 7'd0};                         // Alt+5: % SHIFT+left
+                8'h23: if (a) r = {1'b1, 7'd42};                        // Alt+6: ^ SHIFT+up
+                default: ;
+            endcase
+        pc_hid = r;
+    endfunction
+
     // -------------------------------------------------------------------
     // Crossing: clk_74a -> clk as one word (toggle handshake)
     // -------------------------------------------------------------------
@@ -458,6 +497,24 @@ module intv_input #(
     logic [6:0]  sp;
     logic [63:0] ek_acc;
     wire  logic  kbd = k3[31:28] == 4'd4;
+    // the HID modifier byte (cont3_key[15:8]): either Shift, Ctrl, Alt
+    wire  logic  sh = k3[9] | k3[13], ct = k3[8] | k3[12], al = k3[10] | k3[14];
+    // The PC keys. ef: ecs_full taken once a round (step 7, with the word), so a round sees one value.
+    // pc_c / pc_m: each code of the last round and the {Shift, Ctrl, Alt} it went down with (all 0
+    // without the computer keyboard's word); a code still held keeps them (pn_*: this round's).
+    // ecw: the word has the computer keyboard; ecm: and the ECS is fully on.
+    logic        ef;
+    logic [7:0]  pc_c [6], pn_c [6];
+    logic [2:0]  pc_m [6], pn_m [6];
+    logic [2:0]  hm;                        // the code's {Shift, Ctrl, Alt}: its key-down's or now
+    logic [7:0]  pt;                        // its switch, SHIFT down [7]
+    logic [63:0] ed_acc;                    // the keys that need SHIFT down (ek_acc: the others)
+    initial begin
+        ef = 1'b0;
+        for (int i = 0; i < 6; i++) begin pc_c[i] = 8'd0; pc_m[i] = 3'd0; pn_c[i] = 8'd0; pn_m[i] = 3'd0; end
+    end
+    wire  logic  ecw = kbd && !sy;
+    wire  logic  ecm = ecw && ef;
     always_comb begin
         unique case (ph)
             3'd0:    hc = j3[7:0];
@@ -469,6 +526,10 @@ module intv_input #(
         endcase
         kc = !kbd ? 8'h00 : ecs_full ? hid_code_ecs(hc) : hid_code(hc);
         sp = sy ? syn_hid(hc) : ecs_hid(hc);
+        hm = {sh, ct, al};
+        for (int i = 5; i >= 0; i--)
+            if (pc_c[i] == hc) hm = pc_m[i];
+        pt = pc_hid(hc, hm[2], hm[1], hm[0]);
     end
 
     // -------------------------------------------------------------------
@@ -659,22 +720,71 @@ module intv_input #(
         ecs_keys = 64'd0;
         kb_acc = 8'h00;
         ek_acc = 64'd0;
+        ed_acc = 64'd0;
     end
+
+    // The USB keyboard's keys as shown (ukp: SHIFT as the PC's Shift; ukd: SHIFT down), SHIFT as shown (us)
+    // and the wait (tm, rounds); *_n the next. The synthesizer shows its keys at once. The computer
+    // keyboard: SHIFT is to be ds (down for a SHIFT-down key or the PC's Shift); when it is not, keys
+    // only leave, SHIFT changes after a wait, and keys join after another.
+    localparam int TW = $clog2(KB_SEQ + 1);
+    logic [63:0] ukp, ukp_n, ukd, ukd_n;
+    logic        us, us_n, ds, cf;
+    logic [TW-1:0] tm, tm_n;
+    initial begin ukp = 64'd0; ukd = 64'd0; us = 1'b0; tm = '0; end
+    always_comb begin
+        ds = |ed_acc || sh;
+        cf = |ed_acc && !sh;                // SHIFT down for a key, not for the PC's Shift: new keys wait
+        ukp_n = ek_acc;
+        ukd_n = 64'd0;
+        us_n = 1'b0;
+        tm_n = '0;
+        if (ecm) begin
+            us_n = us;
+            ukp_n = ukp & ek_acc;
+            ukd_n = ukd & ed_acc;
+            if (tm != '0) begin                                     // waiting: keys may only leave
+                tm_n = tm - 1'b1;
+                if (tm == TW'(1) && us != ds) begin                 // the first wait over: SHIFT changes
+                    us_n = ds;
+                    tm_n = TW'(KB_SEQ);
+                end
+            end else if (us != ds)                                  // SHIFT is to change: wait first
+                tm_n = TW'(KB_SEQ);
+            else begin                                              // SHIFT right: the keys join
+                ukd_n = ed_acc;
+                if (!cf)
+                    ukp_n = ek_acc;
+            end
+        end
+    end
+
     always_ff @(posedge clk) begin
         ph <= ph + 3'd1;
+        if (ph == 3'd7)
+            ef <= ecs_full;
         if (ph < 3'd6) begin
             kb_acc <= (ph == 3'd0 ? 8'h00 : kb_acc) | kc;
             ek_acc <= (ph == 3'd0 ? 64'd0 : ek_acc)
-                    | (kbd && ecs_full && !sp[6] ? 64'd1 << sp[5:0] : 64'd0);
+                    | (kbd && ef && (ecw ? !pt[6] && !pt[7] : !sp[6]) ? 64'd1 << (ecw ? pt[5:0] : sp[5:0]) : 64'd0);
+            ed_acc <= (ph == 3'd0 ? 64'd0 : ed_acc) | (ecm && !pt[6] && pt[7] ? 64'd1 << pt[5:0] : 64'd0);
+            pn_c[ph] <= ecw ? hc : 8'd0;
+            pn_m[ph] <= ecw ? hm : 3'd0;
         end
         if (ph == 3'd6) begin
             pad_l <= ~s1;
             pad_r <= ~s2;
             ecs_pb <= ~s3;                      // (intv_ecs: attached or on; the keys: fully on)
             ecs_pa <= ~s4;
-            ecs_keys <= ek_acc | kb_keys
-                      | (kbd && ecs_full && !sy && (k3[9] | k3[13]) ? 64'd1 << 55 : 64'd0)  // Shift: row 6, column 7
-                      | (kbd && ecs_full && !sy && (k3[8] | k3[12]) ? 64'd1 << 46 : 64'd0); // Ctrl: row 5, column 6
+            pc_c <= pn_c;
+            pc_m <= pn_m;
+            ukp <= ukp_n;
+            ukd <= ukd_n;
+            us <= us_n;
+            tm <= tm_n;
+            ecs_keys <= ukp_n | ukd_n | kb_keys
+                      | (us_n ? 64'd1 << 55 : 64'd0)                                    // SHIFT: row 6, column 7
+                      | (kbd && ef && !sy && (k3[8] | k3[12]) ? 64'd1 << 46 : 64'd0);   // Ctrl: row 5, column 6
         end
     end
 

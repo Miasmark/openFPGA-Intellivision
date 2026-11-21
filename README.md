@@ -166,6 +166,8 @@ Layer.
   do nothing. A character comes out as it was pressed even if Shift or Alt is let go first. As on a
   PC the newest key wins: a key still held that needs the ECS's SHIFT the other way (hold A, tap `=`)
   stops until you let it go, so it never types twice.
+- Typing `+` very quickly can give `5` (most often straight after A, D, G, J or L); type it a little
+  slower.
 
 ## Settings
 

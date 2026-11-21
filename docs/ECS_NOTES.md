@@ -427,5 +427,19 @@ module `tape` ($22, 2 words): the head and the mode, the motor-off count; not th
   the 4.0M instructions and 4 snapshots of the same keys (`tools/refs/ecs_ref_compare.py`), and the
   RTL equals the model frame by frame.
 
+- Known limitation, not fixed (the owner's kbtest3 test, 2026-11-21, decision: document it): typed
+  fast enough, PC Shift+`=` (`+`, ECS SHIFT+5) can come out as `5`. The likeliest cause, found in
+  the model with the ECS ROM (`ecs_pc_keys_check.py`'s USB path, a letter held 4 frames into a
+  Shift+`=` pressed 1-2 frames after it): the letter typed just before is still down when SHIFT
+  goes down, and if it is A, D, G, J or L it shares column 7 with SHIFT (row 6 column 7), so on the
+  ROM's scan of row 6 the column reads 1 and SHIFT vanishes (section 4's masking: Shift cannot
+  upper-case those letters either). The ROM then reads SHIFT+5 as 5: A, D, J and L gave `A5`, `D5`,
+  `J5`, `5`; B, E and K gave `+` (or nothing, a 1-frame key). The newest-key rule does not drop the
+  letter here, because the PC's Shift is held and the letter needs SHIFT down too; a real ECS
+  does the same with SHIFT+5 pressed over a held A. Any PC-Shifted character can be hit (`?`
+  SHIFT+down, `"`, `*` ...); `+` is the one seen. A key let go before its SHIFT sequence ends (a
+  tap shorter than the two 9.2 ms waits) is lost rather than mistyped. Typing a little slower
+  (the letter up before the `+` goes down) avoids it.
+
 **What MAME cannot show and the documents decide:** the `$F` page value (ecssound's ROMS OUT line;
 REPORT 2), the masking and the ghost (DESIGN 7.3), the 8917's single envelope bit, the UART.
